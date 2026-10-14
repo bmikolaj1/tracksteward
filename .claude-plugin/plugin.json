@@ -1,0 +1,13 @@
+{
+  "name": "coordinate",
+  "version": "0.1.1",
+  "description": "A thin coordinator session for parallel Claude Code sessions: a daily ledger, scoped briefs, a findings protocol, and one verified merge at a time.",
+  "author": {
+    "name": "MIKA SOFT",
+    "url": "https://github.com/bmikolaj1"
+  },
+  "homepage": "https://github.com/bmikolaj1/tracksteward",
+  "repository": "https://github.com/bmikolaj1/tracksteward",
+  "license": "MIT",
+  "keywords": ["coordination", "parallel-sessions", "worktrees", "merge-order", "multi-agent"]
+}

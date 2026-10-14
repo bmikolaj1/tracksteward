@@ -1,0 +1,16 @@
+{
+  "name": "tracksteward",
+  "description": "The coordinator pattern for parallel Claude Code sessions.",
+  "owner": {
+    "name": "MIKA SOFT",
+    "url": "https://github.com/bmikolaj1"
+  },
+  "plugins": [
+    {
+      "name": "coordinate",
+      "source": "./",
+      "description": "A thin coordinator session for parallel Claude Code sessions: a daily ledger, scoped briefs, a findings protocol, and one verified merge at a time.",
+      "category": "workflow"
+    }
+  ]
+}

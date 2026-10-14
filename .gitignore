@@ -1,0 +1,12 @@
+# Local session state
+.claude/handovers/
+.claude/coordination/
+.claude/worktrees/
+.claude/settings.local.json
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
