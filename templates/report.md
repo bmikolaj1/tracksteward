@@ -1,7 +1,8 @@
 # REPORT BACK shape
 
 The track writes this into its PR body (no PR: a new handover file in its own worktree's
-`.claude/handovers/`), then sends the coordinator one pointer line:
+`.claude/handovers/`; also the place for a report on a live-exposure fix, with no PR opened until the
+user decides), then sends the coordinator one pointer line:
 `REPORT: PR #<n> body @<full head sha>` or `REPORT: <absolute path>`.
 
 ```
@@ -15,7 +16,7 @@ EVIDENCE:
   seen failing before the fix: <test or check>, then passing
 FINDINGS: <FINDING lines, or none>
 OPEN: <anything not done, or none>
-MODEL: <the session's model, so the user knows what produced this evidence>
+MODEL: <the session's model and effort (or unknown), and any switch you told the coordinator about, so the user knows what produced this evidence>
 ```
 
 Live-exposure findings never appear here, not even as a mention: they went to the coordinator

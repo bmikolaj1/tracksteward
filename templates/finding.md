@@ -22,7 +22,10 @@ The five next steps, which are also the five outcomes the coordinator records:
 | drop | not worth acting on | `drop: because ...` |
 
 **Live exposure** (a security hole or data leak that is reachable now) goes to the coordinator in
-a private message only, never into a PR body or any public file.
+a private message only, never into a PR body, a commit message, a report or any other file that is
+committed or posted, and never into a WIP line. A track sends it at once, not with its next
+status message. In a public repository a PR body is readable by anyone the moment it is posted. If
+one is to be fixed, the user decides how and when anything about it is pushed or posted.
 
 Example:
 

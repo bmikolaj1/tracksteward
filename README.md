@@ -3,8 +3,9 @@
 **One thin coordinator session over many parallel Claude Code sessions.** It covers a daily ledger,
 scoped briefs, a findings protocol, and one verified merge at a time.
 
-> **Status:** v0.1.1, 2026-10-14 snapshot of a pattern run for 10 coordination days: 57 merges
-> verified, 127 findings with recorded outcomes, up to 16 tracks in a day.
+> **Status:** v0.1.2, 2026-10-15. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
+> for 10 coordination days: 57 merges verified, 127 findings with recorded outcomes, up to 16 tracks in
+> a day.
 >
 > The numbers come from the author's own ledgers. This is a pattern and its templates, published
 > as they are, with no support promise. It is not affiliated with or endorsed by Anthropic.
@@ -66,6 +67,7 @@ and the order. The human stays in the loop for every decision and every merge.
 | **Track** | One unit of parallel work: one session, in its own worktree, on its own branch, with a declared file scope, ending in one PR. |
 | **Ledger** | One markdown file per day holding the coordination state of record: Baseline, Tracks, Merge slots, Owed checks, Decisions, Findings, Log. |
 | **Slot** | The coordinator's permission for one track to do one serialized thing: usually a merge, sometimes a write to a shared checkout. One slot is open at a time. |
+| **Brief** | The file that tells one track its task, baseline, scope, siblings and rules, announced to the track in one pointer line and acknowledged with an ACK. |
 | **Finding** | Something a track noticed outside its own scope. The track reports it in a fixed shape instead of fixing it, filing it or ignoring it. |
 | **Handover** | A markdown file a fresh session reads to resume: state, decisions, open items, and a paste-ready first message. |
 
@@ -87,9 +89,9 @@ and the order. The human stays in the loop for every decision and every merge.
 ## Requirements
 
 - Claude Code with cross-session messaging: v2.1.224 or later (v2.1.234 or later on native
-  Windows). Without it, the pattern still works: the coordinator writes each brief and you paste
-  it into the track's window, and you paste the track's messages (pointer lines, findings,
-  blockers) back.
+  Windows). Without it, the pattern still works: the coordinator saves each brief as a file and you
+  paste its pointer line into the track's window, and you paste the track's messages (ACKs, pointer
+  lines, findings, blockers) back.
 - `git`, and the GitHub CLI `gh` for the PR and merge checks.
 - Claude Code can hold a message from another session for your approval. Whether it does is set
   by "Messages from your other sessions" in `/config`. A message held by default is dropped after
@@ -129,9 +131,13 @@ In each repo you coordinate, gitignore the live ledger, the worktrees and the ha
 3. **Start each track** in its own worktree, from the main checkout:
    `claude -w <track> -n <track>` (`-n` names the session, so the coordinator can find it). Tell it
    its task in your own words, and to wait for the coordinator's brief before editing anything.
-4. **The coordinator briefs each track** with `SendMessage`, or prints the brief for you to paste.
-   The brief carries the baseline sha, what landed since the task was written, the sibling tracks
-   and their files, the track's scope, the merge order, and how to report back.
+4. **The coordinator briefs each track.** It saves the brief as a file in the main checkout and sends
+   the track one pointer line (`SendMessage`, or printed for you to paste); the track answers
+   `ACK <track>` once it has read the file. The brief carries the baseline sha, what landed
+   since the task was written, the sibling tracks and their files, the track's scope, the merge
+   order (wait for a slot message naming your sha), the WIP line to write after each review round
+   and before any external reviewer runs, and how to report back. Every brief gets an owed check on
+   the coordinator's ledger with a 15-minute ACK deadline.
 5. **Work happens in parallel.** Each track asks *you* for decisions in its own window. Anything a
    track notices outside its scope comes to the coordinator as a FINDING, and you decide what it
    becomes.
@@ -141,7 +147,7 @@ In each repo you coordinate, gitignore the live ledger, the worktrees and the ha
    bound to that sha, and the coordinator verifies it on origin before releasing the next track
    with the new main sha.
 7. **Close the day.** The coordinator writes a handover from the ledger, with tomorrow's first
-   message ready to paste, and archives the ledger next to it.
+   message ready to paste, and archives a copy of the ledger and the day's briefs next to it.
 
 When a named track session exits, Claude Code asks whether to keep its worktree (an unnamed,
 clean one is removed without asking). Keep it while anything in it is unmerged or uncommitted.
@@ -155,7 +161,7 @@ in [the skill](skills/coordinate/SKILL.md).
 |---|---|
 | [skills/coordinate/SKILL.md](skills/coordinate/SKILL.md) | The coordinator skill: the contract, the ledger, briefing, findings, merge, stop, handoff, day close |
 | [templates/ledger-template.md](templates/ledger-template.md) | The daily ledger: current state at the top, append-only history at the bottom |
-| [templates/brief-template.md](templates/brief-template.md) | The brief a coordinator sends each track |
+| [templates/brief-template.md](templates/brief-template.md) | The brief a coordinator saves as a file for each track |
 | [templates/finding.md](templates/finding.md) | The FINDING shape and its five outcomes, with an example |
 | [templates/report.md](templates/report.md) | The REPORT BACK shape a track leaves in its PR body |
 | [.claude-plugin/](.claude-plugin/) | The plugin and marketplace manifests |

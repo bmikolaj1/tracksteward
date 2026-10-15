@@ -1,6 +1,6 @@
 {
   "name": "coordinate",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A thin coordinator session for parallel Claude Code sessions: a daily ledger, scoped briefs, a findings protocol, and one verified merge at a time.",
   "author": {
     "name": "MIKA SOFT",

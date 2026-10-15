@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.1.2 - 2026-10-15
+
+Docs only: the skill, the brief, ledger, finding and report templates, and the README. No scripts.
+
+- **Briefs are files.**
+  - The coordinator saves each brief in its main checkout's `.claude/coordination/briefs/` and
+    sends the track one pointer line, `BRIEF: {absolute path}; reply "ACK {track}" when read`,
+    with the path and track name filled in. The file keeps the full text on disk. It does not
+    deliver itself or stay fresh, so a missing ACK shows a pointer line that went nowhere, and
+    every later message still carries the current sha.
+  - In the template, `{...}` slots are the coordinator's to fill before saving (the CROSS-REPO
+    block and the SUPERSEDES line are deleted when they do not apply) and `<...>` slots are
+    filled when the line is used.
+  - The ACK carries the track's model and effort. The coordinator stamps its time from its own
+    clock, records `briefed HH:MM, ACK HH:MM` in the Status cell and copies the model and
+    effort into the Model cell.
+  - Every brief, and every change to one, gets an owed check with a 15-minute ACK deadline, added
+    when it is sent. The user is told the deadline, because a session has no timer.
+  - A change is appended to the file under a `CHANGES <date> <time>` heading and sent as its own message;
+    the track ACKs again, and the change is in force once ACKed.
+  - The day's briefs are copied next to the ledger at day close.
+- **WIP line.** The brief asks the track for one line in its handover after every review round
+  and before any run of an external reviewer: branch, sha, the brief's path, uncommitted files,
+  open findings, next action. A session that stops can be resumed from it.
+- **Slot wait.** The brief lists the slot wait among its fixed lines (0.1.1 already had the wait).
+  - A PR that does not contain the current main now reads WAIT rather than HOLD, and the
+    coordinator tells the track at once to merge main and report a new head. BLOCKED while a check
+    is pending and none has failed also reads WAIT. Any WAIT standing after about 15 minutes goes
+    to the user.
+  - A go such as "merge #12 when green" covers the sha of the slot the user was shown, and the
+    merge is bound to that sha. The coordinator re-reads the head just before merging; if it
+    differs the go is void, and the slot check, a new slot and a fresh go come first. A go typed
+    before any slot waits for one. A vague go is no go.
+- **Owed checks.** A finding whose outcome leaves work open is ticked only on evidence: for a fix,
+  the track's report names it, the PR's file list holds the file and the merge is on origin; for an
+  investigation, the named track reports what it measured. If a track merges without the fix, the
+  coordinator re-opens the finding as PENDING to the user.
+- **Midnight.** The coordinator compares the date on each append to know when it has passed.
+  A carried Tracks row or owed check is marked `(from <date>)`, a finding keeps its number with
+  its date wherever a carried line names it, and a line carried twice keeps its first date. A
+  carried track's brief stays under the old date, and any change to it after midnight is a fresh
+  brief that names the one it supersedes. The carry is logged in the new ledger, and the old
+  ledger is not edited after it (0.1.1 put the Log line in the old one).
+- **Branch deletes.** The tip rule itself was in 0.1.1. New: a branch whose tip has moved past the
+  merged head is classified in flight or stale, not merged.
+- **Tracks table.** New Model column after Session (model and effort at start, then each switch,
+  which the track reports and the coordinator times). The Status cell leads with `MERGED` or
+  `DONE` only when the track is finished. Every row needs one cell per column, so a row carried
+  from a ledger without Model gets an empty one.
+- **Live exposure.** Findings of that severity go to the coordinator privately and at once, never
+  into a PR body, a commit message, a report, a WIP line or any other file that is committed or
+  posted. A track whose task is such a fix (the brief, the report template and the skill all say so) writes
+  its report to a handover file and opens no PR until the user decides. In a public repository a PR body is readable by anyone once it is posted. If one is to
+  be fixed, the user decides how and when anything about it is pushed or posted. The day-close
+  scrub now covers every section, each brief and each track's handover.
+- **README.** The first-day walkthrough and requirements describe the brief file and the ACK.
+
 ## 0.1.1 - 2026-10-14
 
 Fixes from three rounds of independent review of 0.1.0. The history was rewritten at this

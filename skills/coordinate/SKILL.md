@@ -16,9 +16,13 @@ description: Run ONE thin coordinator session over three or more parallel Claude
 - **Slot**: the coordinator's permission for one track to do one serialized thing: usually a
   merge, sometimes a write to a shared checkout. One slot is open at a time.
 - **Shared checkout**: a working tree no single track owns, usually the repo's main checkout.
+- **Brief**: the file that tells one track its task, baseline, scope, siblings and rules, saved by
+  the coordinator and announced to the track in one pointer line. The track answers with an
+  **ACK**, one line saying it has read it.
 - **Finding**: something a track noticed outside its own scope, reported in a fixed shape instead
   of being fixed, filed or ignored. **Live exposure**: a finding about a security hole or data
-  leak reachable now; it travels only in private messages.
+  leak reachable now; it travels only in private messages to the coordinator, and never into a PR
+  body, a commit message, a report or any other file that is committed or posted.
 - **Handover**: a markdown file a fresh session reads to resume: state, decisions, open items, and
   a **kickoff prompt** (a paste-ready first message for that session). Gitignored
   `.claude/handovers/`, unless the repo has its own place: the coordinator's in the main
@@ -57,21 +61,63 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
 - **Append before you reply.** Every event (a verification, a brief sent, a report, a slot, a
   merge, a decision, a finding and its outcome) goes into the ledger BEFORE the reply that
   mentions it. One line per event, time first, taken from the clock (`date +%H:%M`,
-  `Get-Date -Format HH:mm`), never typed: typed times drift.
+  `Get-Date -Format HH:mm`), never typed: typed times drift. Compare today's date (`date +%F`,
+  `Get-Date -Format yyyy-MM-dd`) with the ledger's each time you append: when they differ, it is
+  past midnight (below).
 - **Current state at the top, history at the bottom.** Baseline, Tracks, Merge slots and Owed
   checks (verifications or work someone still owes) are edited in place and kept short.
   Decisions, Findings and Log are append-only, oldest first. A finding's outcome is a new
   `F<n> outcome: ...` line, not an edit. The Tracks table and its glob syntax are in the template.
+- **Tracks table.** Its columns are Track, Repo, Session, Model, Cwd, Branch, Scope, PR and Status,
+  and every row needs exactly one cell per column, even an empty one: a ragged row makes the whole
+  table unreliable to read.
+  - **Status cell:** lead with `MERGED` or `DONE` (upper case, the first word) when the track is
+    finished, and never otherwise. A row is finished only by that first word, so `NOT MERGED ...`
+    or `running; round 1 DONE` stay live. Briefing and slot checks look at live rows only.
+  - **Model cell:** the track's model and effort at start, then each switch with its time
+    (`<model> <effort>; 14:10 <model> <effort>`). It is evidence, for a later day, of which model
+    and effort produced which result. Like the brief's other track-owned facts, it is asked for,
+    not guessed: the brief asks the track for its model and effort in the ACK (or "unknown"), and
+    to tell the coordinator when it switches. The coordinator stamps each switch with its own clock.
 - **Re-read it** at the start of every coordination window, after every compaction and after `/clear`. A
   SessionStart hook that prints the top of today's ledger can automate this; Claude Code replaces
   hook output over 10,000 characters with a file path, so keep the top well under that.
+- **Owed checks** are what someone still owes the day: a reply, a verification, a decision of the
+  user's. Tick one only when it is verified, never on a claim. Two kinds are always added:
+  - **An ACK for every brief, and for every change to one.** Add the line when it is sent, with
+    its deadline (`- [ ] T2 ACK by HH:MM`, 15 minutes on). A session has no timer, so the
+    coordinator notices a passed deadline only when it handles an event, which is why the user is
+    told the deadline when the brief goes out. When it passes, raise it with the user: the pointer
+    line may be held for their approval, queued behind a long turn, or waiting on a permission
+    prompt in the track's window.
+  - **Every finding whose outcome leaves work open** (`F5 fixed in #12`, `F6 reproduced by T3`).
+    Tick one without reading a diff: for a fix, the track's report names it, the PR's file list
+    (step 2 of the merge protocol reads it) holds the file, and the merge is on origin; for an
+    investigation, the named track's report says what it measured. If a track merges without the
+    fix, the coordinator re-opens the finding as PENDING to the user, so it cannot vanish with
+    that merge.
 - **Quotes are evidence, never approval.** Record a track's request as "track asked: ...", never
   as a bare instruction.
-- **Past midnight, roll over before anything else.** The new ledger names the previous one and
-  carries forward every Tracks row not MERGED or DONE, the Baseline (re-snapshot it, CI column
-  included), the slot queue (an open slot stays open), every unticked owed check and every PENDING
-  finding, keeping its number with its date: `F3 (YYYY-MM-DD)`. The old ledger gets a last Log
-  line: "carried forward to <new path>".
+- **Past midnight, roll over before anything else.** Nothing carries itself: a coordinator
+  (or a hook) that reads today's ledger finds only what is in it, so a live track missing from
+  the new Tracks table has no scope row and its PR cannot be slot-checked. The new ledger names
+  the previous one and carries forward:
+  - every Tracks row not MERGED or DONE, as it stands. Mark it `(from <date>)` at the end of its
+    Status cell; the first word of Status still decides whether it is live;
+  - the Baseline (re-snapshot it, CI column included);
+  - the slot queue (an open slot stays open);
+  - every unticked owed check, marked `(from <date>)` at the end of its line;
+  - every PENDING finding, keeping its number with its date: `F3 (YYYY-MM-DD)`. Finding numbers
+    restart each day, so a carried line that names one (an owed check, an outcome) writes it the
+    same way, and the new day's own `F3` never collides with it.
+
+  A line that is carried a second time keeps its first date. A carried track's brief stays in
+  the folder under the old date, already sent. Any change to it after midnight, or a track that
+  needs a brief again, is a fresh brief under the new date that names what was carried and says
+  which old brief it supersedes, with its own pointer line and ACK. A row carried from a ledger that lacks a column (such as Model) gets
+  an empty cell for it; so does a ledger still open from an earlier version, before the day
+  continues. Add one Log line to the new ledger saying what was carried and from where. The old
+  ledger is not edited after the carry; its open items live on in the new one.
 - **Archive at close.** The live ledger stays untracked (a tracked one means a commit per event).
 
 ## Start of a coordination window
@@ -88,16 +134,60 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
    (`gh pr view <n> --json headRefOid`): a branch can gain commits after its PR merged. For a
    branch the ledger does not know, `gh pr list --state merged --head <branch> --json
    number,headRefOid,mergedAt` may list several PRs (branch names get reused); confirm the newest
-   with the user before deleting anything.
+   with the user before deleting anything. A tip that has moved past the merged head holds
+   commits nobody merged: that branch is in flight or stale, not merged.
 5. Give the user one list: DONE since the last coordination window, OPEN by owner (user decision vs session
    work), a recommended order. Ask which to start. Start only those.
 
 ## Briefing a track
 
-Fill `${CLAUDE_PLUGIN_ROOT}/templates/brief-template.md` and send it with `SendMessage`, or give it
-to the user to paste. Before sending, check the session's working folder is the track's worktree:
-a session opened in the wrong folder loads the wrong project instructions and hooks. If it is
-wrong, have the user stop it before any edit and relaunch it.
+The brief is a FILE, and the message that announces it is one pointer line. The file keeps the full
+text on disk, so a track that compacts can re-read it instead of asking, provided it still has the
+path (the pointer line and ACK hold it at first, the WIP line below from the first review round). The file does not deliver itself or stay fresh: the pointer
+line can still be held in a queue or arrive late, and the brief's baseline is true only as of the
+time it was written. That is what the ACK is for (a pointer line that went nowhere shows up as a
+missing ACK), and why every later relay carries the current sha (below). If messaging between
+sessions is not available, the pointer line is what the user pastes.
+
+1. **Fill the track's ledger row first** (Repo, Session, Branch, Scope; Model if known). A brief
+   cannot name a scope the ledger does not hold.
+2. **Fill `${CLAUDE_PLUGIN_ROOT}/templates/brief-template.md`** and save it in the coordinator's
+   main checkout (where the ledger lives) as
+   `<main checkout>/.claude/coordination/briefs/<YYYY-MM-DD>-<track>.md`. Put the repo's name in
+   the file name when two repos have a track of the same name, and `-2` before `.md` for a second
+   brief to the same track on the same day. The template has two kinds of slot. A `{...}` slot is
+   the coordinator's: replace every one before saving, delete the CROSS-REPO block and the
+   SUPERSEDES line unless they apply, and never send a brief that still has one of the
+   template's own slots (braces inside the text you fill in are fine, such as a glob or a
+   command). A `<...>` slot is filled when that line
+   is used (a PR number, a sha, a time), by the coordinator or the track, and stays as written in
+   the file. Put the file's own absolute path inside it.
+3. **Check the session's working folder** is the track's worktree: a session opened in the wrong
+   folder loads the wrong project instructions and hooks. If it is wrong, have the user stop it
+   before any edit and relaunch it.
+4. **Record it, then send it.** Put `briefed <HH:MM>` in the row's Status cell (time from the
+   clock), add the ACK owed check with its deadline (see The ledger), and add a Log line.
+5. **Send the pointer line as the whole message**, with the path and the track name filled in
+   (`SendMessage`, or the user pastes it): `BRIEF: {absolute path}; reply "ACK {track}" when read`.
+   Tell the user the ACK deadline too, so they can ping you if it passes. The path is the main
+   checkout's. A
+   worktree may hold a stale copy of that folder (if your setup copies ignored files into new
+   worktrees), so the track reads the absolute path and never its own copy. Reading a path outside
+   its own worktree may ask the user for permission in the track's window; if it does, the user
+   allows it once.
+6. **When the ACK comes**, stamp it with the coordinator's clock at receipt (not a time the track
+   typed), make the Status cell `briefed 08:32, ACK 08:40`, copy the model and effort the ACK
+   names into the Model cell, and tick the owed check.
+
+Any later change to a brief (a widened scope, a new merge order) is appended to the file under a
+`CHANGES <YYYY-MM-DD> <HH:MM>` heading (time from the clock), never rewritten over the old text,
+so the day's copy still shows what the track was told and when. It is also sent as its own message that says what changed and carries the
+current sha, and asks for `ACK {track} changed`. Each such request gets its own owed check and
+deadline (and the user is told it), and the change is in force once it is ACKed. The Status cell
+keeps the latest brief time and ACK time after the track's lifecycle words, for example
+`PR open @abc1234; briefed 10:05 (changed), ACK 10:20`. After
+midnight a change is a fresh brief (see The ledger). A blocker or a question from the track is
+still sent in full in a message, never as a file.
 
 - **Every track works in its own worktree**, started by the user with `claude -w <track> -n <track>`
   (worktree `.claude/worktrees/<track>`, branch `worktree-<track>`, session named `<track>`), even
@@ -114,11 +204,25 @@ wrong, have the user stop it before any edit and relaunch it.
   5d6e7f8"), not only the change. A message to a busy session queues and can arrive after the
   state it describes has moved on. When a stale message made a track ask the user something
   already settled, tell the user to ignore that prompt and tell the track why.
+- **The fixed lines every brief carries** (they are in the template and stay as written, apart from their `{...}` slots): the
+  slot wait (the track waits for a `SLOT #<n> @<full sha>` message naming its head; a push or
+  another merge voids it); the FINDING shape and the live-exposure line; the BLOCKER line; the
+  ACK line; the WIP line; REPORT BACK; and what to do when its session ends.
+- **The WIP line.** At the end of every review round (each pass of an independent review of its
+  diff), and before any run of an external reviewer, the track writes one line into its handover,
+  creating the handover file at the first one and appending after that:
+  `WIP: <branch> @<sha>; brief: <path>; uncommitted: <files or none>; open findings: <ids or
+  none>; next: <one action>`. A session that stops (a usage limit, a crash) can then be resumed
+  from that line without reading its transcript. The track tells the coordinator the handover's
+  path in its next status message. A WIP line never carries a live-exposure detail: it says
+  "waiting for a ruling", not what the ruling is about.
 - **Write PRs as `#12`, not as links**, in briefs and kickoff prompts: the Claude desktop app
   titles and binds a session after the first PR link in its prompt.
 - **The report lives on disk**: the PR body, or a handover file in the track's own worktree. The
-  track sends one pointer line, `REPORT: PR #12 body @<full head sha>` or `REPORT: <absolute path>`. Reading a file is cheap;
-  searching a transcript is not.
+  track sends one pointer line, `REPORT: PR #12 body @<full head sha>` or `REPORT: <absolute path>`.
+  Reading a file is cheap; searching a transcript is not. The one exception is a track whose
+  task is the fix for a live exposure: its report is the handover file, and it opens or updates
+  no PR until the user has decided how and when.
 - **A brief never says "hand it to the user as a follow-up"**: tracks read that as "spawn
   something". Name the document where the line goes.
 
@@ -129,8 +233,12 @@ contradicts the code, a stale premise, a sibling of the defect it is fixing) doe
 not file it and does not ignore it. It reports it in the shape of
 `${CLAUDE_PLUGIN_ROOT}/templates/finding.md`. A file it needs outside its scope is a finding too
 (or a blocker); it may talk to the owning track, but it edits nothing until a `widen scope`
-outcome is recorded. A live-exposure finding goes to the coordinator in a private message only,
-never into a PR body or any public file. The coordinator:
+outcome is recorded. **A live-exposure finding goes to the coordinator in a private message only,
+never into a PR body, a commit message, a report or any other file that is committed or posted.**
+This matters most in a public repository, where a PR body is readable by anyone the moment it is
+posted, and an edit does not unpublish it. If a live exposure is to be fixed, the user decides
+how and when anything about it is pushed or posted, and the detail stays in private messages
+until then. The coordinator:
 
 1. **Reads the evidence line, not the conclusion.** A "reasoned, not measured" finding is a
    question, not a defect, until someone reproduces it.
@@ -141,8 +249,8 @@ never into a PR body or any public file. The coordinator:
    <track>, <globs>` (and updates that row's Scope) | `own track: <who>` | `backlog line: <where>`
    | `investigate first: <who>` | `drop: because ...`. Every outcome but `backlog line` and `drop`
    also adds an owed check ("F5 fixed in #12", "F6 reproduced by T3"), ticked only when that work
-   is verified, so it survives a merge and the night. A finding with no recorded outcome is the
-   failure.
+   is verified (see Owed checks in The ledger), so it survives a merge and the night. A finding
+   with no recorded outcome is the failure.
 4. **Tells the reporting track** what was decided, so it neither re-reports nor quietly fixes it.
 
 A **blocker** for the track's own task is not a finding. The track tells the user in its own
@@ -152,7 +260,8 @@ window and the coordinator, at once, and stops until answered.
 
 1. **Report.** The track has merged origin/main into its branch, rerun its suites, pushed, opened
    its PR ready for review (`gh pr ready <n>` if it was a draft), and sent its pointer line with
-   its final head sha. It then waits for a slot.
+   its final head sha. It then waits for a slot. (A live-exposure fix has no PR until the user
+   decides; its merge then starts here.)
 2. **Slot check**, by the coordinator, for that exact head:
    This section says `main`; if your integration branch has another name, use it everywhere.
    - `gh pr view <n> --json state,isDraft,baseRefName,headRefOid,mergeable,mergeStateStatus`
@@ -173,17 +282,29 @@ window and the coordinator, at once, and stops until answered.
    is in the pass or skipping bucket (no checks at all only when the ledger records that the repo
    has no CI). **WAIT** while a check is pending, while `mergeable` or `mergeStateStatus` is
    UNKNOWN, while the fetched ref still lags `headRefOid` (refetch), or while no checks have
-   appeared yet; after about 15 minutes with none, put it to the user, since path filters can
-   skip every workflow. **HOLD** on anything else: a check in fail or cancel, a conflict, a draft,
-   BLOCKED (branch protection not satisfied), a PR behind main or on another base, or a file out
-   of scope. An out-of-scope file goes to the user even when the track says the user
-   agreed in its window; only a recorded `widen scope` puts it in scope. Log the verdict, and on
-   HOLD tell the track why; it fixes, pushes, and reports a new head.
+   appeared yet. BLOCKED while a check is pending and none has failed most likely means a
+   required check is still running, so that waits too. A PR that does not yet contain the current
+   main also waits, but it will not clear on its own: tell the track now to merge origin/main,
+   rerun its suites, push and report a new head, so that CI runs again against the merged tree.
+   Any WAIT still standing after about 15 minutes goes to the user (path filters can skip every
+   workflow, and a check can hang). **HOLD** on anything else: a check in fail or cancel, a
+   conflict, a draft, BLOCKED with nothing pending (branch protection not satisfied: a failing
+   required check, a review missing, or another rule), a PR on another base, or a file out of
+   scope. An out-of-scope file goes to the user even when the track says the user agreed in its
+   window; only a recorded `widen scope` puts it in scope. Log the verdict, and on HOLD tell the
+   track why; it fixes, pushes, and reports a new head.
 3. **Grant the slot** to that track, naming the full sha: `SLOT #12 @<full sha>: ask the user to
    merge`. A push or a base change after the slot check voids the slot; step 2 reruns.
 4. **One merge.** The user merges in the track's window, or the coordinator merges on the user's
-   explicit typed go ("merge #12 when green" is a go for that head only). Bind the merge to the
-   head: `gh pr merge <n> --squash --match-head-commit <full 40-char sha>` (or `--merge` /
+   explicit typed go. A go covers one head: the sha of the slot, which you show the user when you
+   ask for it. Record that sha with the quote ("merge #12 when green" is a go for that head
+   only). A go typed before any slot exists waits for a slot; when it is granted, show the user
+   its sha and take the go against it. Immediately before merging, re-read the head with
+   `gh pr view <n> --json headRefOid`. If it differs from the recorded sha, the go is void
+   (the track pushed, so the slot is void too): log it, rerun step 2 on the new head, and only
+   on READY grant a new slot (step 3) and take a fresh go against its sha. A vague go such as
+   "tell it yourself" is no go. Bind the merge to the recorded sha, never to a freshly read head:
+   `gh pr merge <n> --squash --match-head-commit <full 40-char sha>` (or `--merge` /
    `--rebase`, as the repo does; outside an interactive terminal gh requires one of the three).
    With a merge queue, gh only enqueues: wait until `state` reads MERGED.
 5. **Verify on origin.** `gh pr view <n> --json state,mergeCommit` gives the merge sha. Then
@@ -235,12 +356,14 @@ write the day-close handover section by section:
 | Next, by owner | unticked Owed checks, plus open tracks from the Tracks table |
 
 Add a kickoff prompt for tomorrow that (a) re-verifies the baseline, (b) asks the user which item
-to start, (c) starts only that. Put the handover and a copy of the ledger in the handover folder;
-they stay local by default. If your repo commits them, first replace every line in every section
-that carries a live-exposure finding's details (Findings, Decisions, Log, Owed checks) with
-`F<n>: live exposure, held privately`, then land them through a short PR in its own slot like any
-other merge, never by a direct commit to main while tracks are live. Write a new day-close
-handover each day; never edit a previous one.
+to start, (c) starts only that. Put the handover, a copy of the ledger and copies of the day's
+briefs in the handover folder, so a later retrospective can hold a track's work against what it
+was told; they stay local by default. If your repo commits them, first replace every line, in
+every section and every file (the ledger's sections including Tracks and Merge slots, each brief,
+and each track's handover with its WIP lines), that carries a live-exposure finding's details
+with `F<n>: live exposure, held privately`, then land them through a short PR in its own slot
+like any other merge, never by a direct commit to main while tracks are live. Write a new
+day-close handover each day; never edit a previous one.
 
 ## Hygiene
 
