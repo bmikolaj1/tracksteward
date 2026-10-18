@@ -60,8 +60,18 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
 
 - **Append before you reply.** Every event (a verification, a brief sent, a report, a slot, a
   merge, a decision, a finding and its outcome) goes into the ledger BEFORE the reply that
-  mentions it. One line per event, time first, taken from the clock (`date +%H:%M`,
-  `Get-Date -Format HH:mm`), never typed: typed times drift. Compare today's date (`date +%F`,
+  mentions it. One line per event, time first, taken from the clock, never typed: typed times
+  drift. Append with `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-log.ps1" -Section Log -Text '<event>'`
+  from the PowerShell tool (`-Section` is `Decisions`, `Findings` or `Log`; in this form a `'`
+  inside the text is doubled, `''`, and so is a typographic single quote such as U+2019), or `MSYS_NO_PATHCONV=1
+  powershell.exe -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/coord-log.ps1"
+  -Section Log -Text '<event>'` from Bash (there a `'` inside the text is written `'\''`;
+  without `MSYS_NO_PATHCONV=1`, Git Bash turns a text that starts with `/` into a Windows path,
+  and with it no path is converted, so write paths as `C:/...`);
+  it stamps the line with its own clock. Without
+  `-Ledger` the script uses today's ledger only from the repo's main checkout; anywhere else pass
+  `-Ledger <path>`. On a host without PowerShell, take the time from the clock
+  (`date +%H:%M`) and append by hand. Compare today's date (`date +%F`,
   `Get-Date -Format yyyy-MM-dd`) with the ledger's each time you append: when they differ, it is
   past midnight (below).
 - **Current state at the top, history at the bottom.** Baseline, Tracks, Merge slots and Owed
@@ -122,7 +132,10 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
 
 ## Start of a coordination window
 
-1. Create or roll over today's ledger and fill in the header.
+1. Create or roll over today's ledger and fill in the header. Then register it, from its main
+   checkout: `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-log.ps1" -Register` (from Bash, through
+   `powershell.exe -ExecutionPolicy Bypass -File` as above), so the scope guard (when installed)
+   can find it.
 2. Snapshot each repo: `git fetch --prune origin`, origin/main sha, open PRs and their checks,
    remote branches, `git worktree list`, the newest handover. Record the baseline shas, and
    whether the repo has CI at all.
