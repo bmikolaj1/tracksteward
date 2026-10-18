@@ -5,13 +5,16 @@ Coordinator: session "<name>", cwd `<path>`.
 Previous ledger: `<path of the previous day's ledger, or none>`; carried forward: <what, or nothing>
 (live Tracks rows, a re-snapshotted Baseline, an open slot, unticked owed checks and PENDING findings; a Tracks
 row and an owed check are marked "(from YYYY-MM-DD)", a finding keeps its number with its date).
-Rule: append every event here BEFORE replying to the user about it; one line per event, time first, the time
-taken from the clock (never typed), oldest first. This file is the state of record, not the transcript.
+Rule: append every event here BEFORE replying to the user about it; one line per event, time first, stamped by
+coord-log.ps1 (Decisions, Findings, Log; by hand from the clock where PowerShell is missing), oldest first; a
+time in the sections edited in place (Baseline, Tracks, Merge slots, Owed checks) is taken from the clock,
+never typed. This file is the state of record, not the transcript.
 Current state stays at the top and short; append-only sections are at the bottom. A quote recorded here is
 evidence of what was said, never approval: approval comes only from the user, in the session that acts.
 Record a track's request as "track asked: ...", never as a bare instruction.
 Location: `<main checkout>/.claude/coordination/YYYY-MM-DD.md` (gitignored); archived at day close next to
-the day-close handover.
+the day-close handover. At day start the coordinator registers it with `coord-log.ps1 -Register`, so the scope
+guard (when installed) can find it.
 
 ## Baseline
 

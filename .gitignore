@@ -3,6 +3,12 @@
 .claude/coordination/
 .claude/worktrees/
 .claude/settings.local.json
+.claude/stats/
+
+# External reviewer scratch output (working artifacts, never committed)
+/CODE-REVIEW.md
+/REVIEW.md
+/PLAN.md
 
 # OS and editor noise
 .DS_Store
