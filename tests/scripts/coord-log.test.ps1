@@ -81,6 +81,11 @@
 #   L30 the real index folder is unchanged at the end of the run
 #   L31 git failing on a canonical-shaped ledger: exit 2, "cannot tell whether", ledger
 #       and index unchanged; control: a stale worktree copy is still appended
+#   L32 the Bash form shown in the script header and in SKILL.md (same text),
+#       run as written through Git Bash, plugin root in C:/... and /c/... form:
+#       exit 0 and a text starting with '/' written intact; controls: without
+#       cygpath -w a /c/... script path is not found, without MSYS_NO_PATHCONV=1
+#       the leading / is rewritten (UNCHECKED without a Git Bash)
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\coord-log.test.ps1 [-ScriptPath <mutant copy of coord-log.ps1>]
 #       (a mutant copy needs coord-common.ps1 next to it: it dot-sources it)
@@ -359,12 +364,33 @@ Assert-Coord 'L12 refused: exit 2' ($x.Code -eq 2 -and ([string]$x.Out) -match '
 # text in single quotes, an apostrophe written '\'' and double quotes inside.
 # The prefix is part of the documented form; the second Bash row checks that a
 # text starting with '/' reaches the ledger intact through it. What the route
-# does to such a text without the prefix is not tested here.
+# does to such a text without the prefix is tested by L32's no-prefix control row (needs a Git Bash).
 # The WSL launcher (System32 or WindowsApps bash.exe) is not used: it runs
 # the command in a Linux distribution, not the Git Bash the route is about.
-$bashExe = $null
-foreach ($cand in @(Get-Command bash.exe -CommandType Application -All -ErrorAction SilentlyContinue)) {
-    if ($cand.Source -notmatch '\\(System32|WindowsApps)\\') { $bashExe = [string]$cand.Source; break }
+# Git Bash: <Git>\bin\bash.exe, found from where git.exe sits (cmd\, bin\ or mingw64\bin\ under the Git root),
+# then the usual install folders. bash.exe on PATH may be the WSL launcher (System32, WindowsApps), which runs
+# a Linux distribution and is not Git Bash.
+function Find-GitBash {
+    $cands = New-Object System.Collections.Generic.List[string]
+    $g = (Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    if ($g) {
+        $d = Split-Path $g
+        for ($i = 0; $i -lt 4 -and $d; $i++) { $cands.Add((Join-Path $d 'bin\bash.exe')); $cands.Add((Join-Path $d 'usr\bin\bash.exe')); $d = Split-Path $d }
+    }
+    $ep = (& git --exec-path 2>$null | Select-Object -First 1)
+    if ($ep) { $d = ($ep -replace '/', '\'); for ($i = 0; $i -lt 5 -and $d; $i++) { $cands.Add((Join-Path $d 'bin\bash.exe')); $d = Split-Path $d } }
+    foreach ($r in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, (Join-Path $env:LOCALAPPDATA 'Programs'))) {
+        if ($r) { $cands.Add((Join-Path $r 'Git\bin\bash.exe')) }
+    }
+    foreach ($c in $cands) { if ($c -notmatch '\\(System32|WindowsApps)\\' -and (Test-Path -LiteralPath $c)) { return $c } }
+    return ''
+}
+$bashExe = Find-GitBash
+if (-not $bashExe) {
+    # Not silent when a bash is on PATH that the search above missed (a Git layout it does not know).
+    $pathBash = @(Get-Command bash.exe -CommandType Application -All -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch '\\(System32|WindowsApps)\\' })
+    Assert-Coord 'L12 no bash.exe is on PATH that Find-GitBash missed (else the Git Bash rows would be skipped on a host that has it)' ($pathBash.Count -eq 0) (($pathBash | ForEach-Object { $_.Source }) -join '; ')
+    $bashExe = $null
 }
 # Runs the documented Bash call with $ShText, already quoted for the shell, as
 # the -Text value. Returns { Code; Out; Before; After }.
@@ -748,6 +774,61 @@ Assert-Coord 'L31 control: with the real git, the stale worktree copy is appende
 $r = Invoke-Log 'Log' 'canonical after git is back' $canonLedger
 Assert-Coord 'L31 control: the canonical-shaped ledger itself is then written and registered' ($r.Code -eq 0 -and @((Read-Lines $canonLedger) -match ' canonical after git is back$').Count -eq 1 -and (Get-IdxText $idxFile) -ceq ($canonLedger + "`n")) "code=$($r.Code) out=$($r.Out)"
 
+Write-Host "(L32) the documented Bash form: MSYS_NO_PATHCONV=1 and the script path through cygpath -w"
+# Git Bash (MSYS) rewrites an argument that looks like a POSIX path before a native exe sees it:
+# '/review-code ...' arrives as 'C:/Program Files/Git/review-code ...', exit 0. The documented Bash
+# form (script header and SKILL.md) must (a) carry MSYS_NO_PATHCONV=1, (b) name the script in a way
+# whose path survives that setting (with the conversion off Bash hands powershell.exe a /c/... path
+# as it is, and that is not a path powershell.exe can open; cygpath -w makes the Windows path),
+# and (c) write the text intact. The form is READ from the header and from SKILL.md (the
+# ${CLAUDE_PLUGIN_ROOT} of SKILL.md read as <plugin root>) and RUN as written through Git Bash, with
+# <plugin root> set to a scratch copy of the scripts folder and a scratch -Ledger; only <event> is
+# filled in. Scratch index (set above); the real one is compared in L30.
+function Get-FlatText([string]$Text) { return ([regex]::Replace(($Text -replace '(?m)^\s*#', ' '), '\s+', ' ')) }
+$formRx = '(MSYS_NO_PATHCONV=1 powershell\.exe -ExecutionPolicy Bypass -File "\$\(cygpath -w "<plugin root>/scripts/coord-log\.ps1"\)" -Section Log -Text ''<event>'')'
+$hdrFlat = Get-FlatText ([System.IO.File]::ReadAllText($ScriptPath))
+$skillFlat = (Get-FlatText ([System.IO.File]::ReadAllText((Join-Path $coordScriptsDir '..\skills\coordinate\SKILL.md')))).Replace('${CLAUDE_PLUGIN_ROOT}', '<plugin root>')
+$hm = [regex]::Match($hdrFlat, $formRx)
+$sm = [regex]::Match($skillFlat, $formRx)
+Assert-Coord 'L32 the coord-log.ps1 header shows the Bash form: MSYS_NO_PATHCONV=1 and the script path through cygpath -w' $hm.Success
+Assert-Coord 'L32 SKILL.md shows the same Bash form' ($sm.Success -and $hm.Success -and $sm.Groups[1].Value -ceq $hm.Groups[1].Value) "header='$($hm.Groups[1].Value)' skill='$($sm.Groups[1].Value)'"
+if (-not $bashExe) {
+    Write-CoordUnchecked 'L32 Git Bash run' 'no Git Bash (bin\bash.exe under the Git root, or in an install folder) on this machine'
+}
+else {
+    $bashPlugin = Join-Path $root 'bashplugin'
+    [void][IO.Directory]::CreateDirectory($bashPlugin)
+    Copy-Item -LiteralPath (Split-Path $ScriptPath) -Destination (Join-Path $bashPlugin 'scripts') -Recurse -Force
+    $winRoot = $bashPlugin.Replace('\', '/')
+    $posixRoot = '/' + $winRoot.Substring(0, 1).ToLowerInvariant() + $winRoot.Substring(2)
+    function Invoke-BashForm([string]$Form, [string]$PluginRoot, [string]$Ledger) {
+        $cmd = $Form.Replace('<plugin root>', $PluginRoot).Replace('<event>', '/review-code panel') + ' -Ledger "' + $Ledger.Replace('\', '/') + '"'
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $bashExe
+        $psi.Arguments = '-c "' + $cmd.Replace('"', '\"') + '"'
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $o = $proc.StandardOutput.ReadToEndAsync(); $e = $proc.StandardError.ReadToEndAsync()
+        [void]$proc.WaitForExit(60000)
+        return [pscustomobject]@{ Code = $proc.ExitCode; Out = $o.Result; Err = $e.Result }
+    }
+    $form = $hm.Groups[1].Value
+    foreach ($rootForm in @(@('C:/... form', $winRoot), @('/c/... form', $posixRoot))) {
+        $p = New-Ledger $sample
+        $x = Invoke-BashForm $form $rootForm[1] $p
+        $lines = Read-Lines $p
+        Assert-Coord "L32 the documented Bash form, run as written through Git Bash with the plugin root in $($rootForm[0]): exit 0 and '/review-code panel' is written intact" ($form -and $x.Code -eq 0 -and @($lines -match '^\d\d:\d\d /review-code panel$').Count -eq 1) "bash=$bashExe form='$form' code=$($x.Code) out=$($x.Out) err=$($x.Err)"
+    }
+    $p = New-Ledger $sample
+    $x = Invoke-BashForm 'MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "<plugin root>/scripts/coord-log.ps1" -Section Log -Text ''<event>''' $posixRoot $p
+    Assert-Coord 'L32 control: a /c/... script path without cygpath -w and with MSYS_NO_PATHCONV=1 is not found (nothing written): why the form uses cygpath -w' ($x.Code -ne 0 -and @((Read-Lines $p) -match 'review-code panel').Count -eq 0) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
+    $p = New-Ledger $sample
+    $x = Invoke-BashForm ($form -replace '^MSYS_NO_PATHCONV=1 ', '') $winRoot $p
+    $lines = Read-Lines $p
+    Assert-Coord 'L32 control: without MSYS_NO_PATHCONV=1 MSYS rewrites the leading / (exit 0, a mangled line): why the form needs it' ($form -and $x.Code -eq 0 -and @($lines -match '^\d\d:\d\d /review-code panel$').Count -eq 0 -and @($lines -match '^\d\d:\d\d .*review-code panel$').Count -eq 1) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
+}
 Write-Host "(L30) the real index folder"
 Assert-Coord 'L30 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination: its listing and the SHA-256 of every file outside sessions/, or still absent) is unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
 Write-CoordUncheckedSummary

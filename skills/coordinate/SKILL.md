@@ -63,11 +63,12 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
   mentions it. One line per event, time first, taken from the clock, never typed: typed times
   drift. Append with `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-log.ps1" -Section Log -Text '<event>'`
   from the PowerShell tool (`-Section` is `Decisions`, `Findings` or `Log`; in this form a `'`
-  inside the text is doubled, `''`, and so is a typographic single quote such as U+2019), or `MSYS_NO_PATHCONV=1
-  powershell.exe -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/coord-log.ps1"
-  -Section Log -Text '<event>'` from Bash (there a `'` inside the text is written `'\''`;
-  without `MSYS_NO_PATHCONV=1`, Git Bash turns a text that starts with `/` into a Windows path,
-  and with it no path is converted, so write paths as `C:/...`);
+  inside the text is doubled, `''`, and so is a typographic single quote such as U+2019), or, from Bash,
+  `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/coord-log.ps1")" -Section Log -Text '<event>'`
+  (there a `'` inside the text is written `'\''`; never without the prefix: Git Bash turns a text
+  that starts with `/` into a Windows path and the run exits 0 with that line written; with the
+  prefix no path is converted, hence `cygpath -w` for the script, and `-Ledger` is written as
+  `C:/...`);
   it stamps the line with its own clock. Without
   `-Ledger` the script uses today's ledger only from the repo's main checkout; anywhere else pass
   `-Ledger <path>`. On a host without PowerShell, take the time from the clock
