@@ -364,7 +364,7 @@ Assert-Coord 'L12 refused: exit 2' ($x.Code -eq 2 -and ([string]$x.Out) -match '
 # text in single quotes, an apostrophe written '\'' and double quotes inside.
 # The prefix is part of the documented form; the second Bash row checks that a
 # text starting with '/' reaches the ledger intact through it. What the route
-# does to such a text without the prefix is tested in L32 (a control row; needs a Git Bash).
+# does to such a text without the prefix is tested by L32's no-prefix control row (needs a Git Bash).
 # The WSL launcher (System32 or WindowsApps bash.exe) is not used: it runs
 # the command in a Linux distribution, not the Git Bash the route is about.
 # Git Bash: <Git>\bin\bash.exe, found from where git.exe sits (cmd\, bin\ or mingw64\bin\ under the Git root),
