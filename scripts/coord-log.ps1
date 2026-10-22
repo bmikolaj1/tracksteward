@@ -64,14 +64,16 @@
 # one word or around the whole text vanish (written without them, exit 0), a
 # quoted span holding a space anywhere else splits the text (refused, as
 # leftover words), and a text ending in a backslash swallows the next
-# parameter (not detectable here). From the Bash tool (Git Bash),
-# `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "<plugin root>/scripts/coord-log.ps1" ...`
-# passes the text intact, a ' in it written '\''. Without MSYS_NO_PATHCONV=1,
-# Git Bash rewrites an argument that starts with / into a Windows path
-# ('/review-code done' arrives as 'C:/Program Files/Git/review-code done'),
-# and that is written, with exit 0. With the prefix Git Bash converts no path
-# either, so -Ledger and the script path are written in Windows form (C:/...,
-# or `cygpath -w` of a /c/... path): /c/x.md would be read as C:\c\x.md.
+# parameter (not detectable here). From the Bash tool (Git Bash), this form
+# passes the text intact, a ' in it written '\'':
+#   MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "<plugin root>/scripts/coord-log.ps1")" -Section Log -Text '<event>'
+# MSYS_NO_PATHCONV=1 is not optional: Git Bash rewrites an argument that starts
+# with / into a Windows path ('/review-code done' arrives as
+# 'C:/Program Files/Git/review-code done'), and that is written, with exit 0.
+# With the conversion off, a script path in /c/... form is not a path
+# powershell.exe can open, so the script path goes through cygpath -w, which
+# gives the Windows path (and leaves a C:/... one working). -Ledger is written
+# in Windows form too (C:/...): /c/x.md would be read as C:\c\x.md.
 # Without -Ledger: today's ledger, <main checkout>/.claude/coordination/
 # <yyyy-MM-dd>.md, and only when the current directory is in that repo's MAIN
 # checkout, where the coordinator sits. From a linked worktree or another repo,

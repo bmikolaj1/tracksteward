@@ -21,7 +21,9 @@
 #
 #   C1  globs: `*` stays in one folder, `**` crosses folders, `dir/` and
 #       `dir/**` cover everything below, `?` is one character, matching is
-#       case-sensitive, `!glob` excludes, comma/semicolon/space lists split
+#       case-sensitive, `!glob` excludes, comma/semicolon/space lists split;
+#       a path holding a control character (LF, CR) is never in scope, and the
+#       anchors are \z (a path, sha or date ending in LF is refused)
 #   C2  the Tracks table: columns by header name in any order, escaped pipes,
 #       backticks, comments before the table, a missing Scope column and a
 #       ragged row throw naming the ledger, no Tracks section -> no rows
@@ -114,6 +116,38 @@ foreach ($c in $cases) {
     Assert-Coord "C1 '$($c[0])' vs $($c[1] -join ',') -> $($c[2])" ($got -eq $c[2])
 }
 Assert-Coord "C1 './x/' becomes 'x/**'" ((Split-CoordScope @('./x/')) -join '' -ceq 'x/**')
+
+# Anchor and control characters (ported from the private toolkit): the anchor must
+# be \z. A '$' also matches before a final LF, so a path ending in LF used to pass a literal scope.
+# With \z alone, '*' and '?' (compiled to [^/]* and [^/]) match an LF while '.' in '.*' does not, so a
+# '!' exclusion failed OPEN for a path ending in LF, and an LF in the MIDDLE of a path was never
+# excluded. A path holding a control character (LF, CR, ...) is never in scope.
+$lf = [string][char]10
+$cr = [string][char]13
+foreach ($c in @(
+        @(('README.md' + $lf), @('README.md'), $false),
+        @(('docs/a.md' + $lf), @('docs/a.md'), $false),
+        @(('src/app.txt' + $lf), @('src/*.txt'), $false),
+        @(('docs/a.md' + $lf), @('docs/**'), $false),
+        @('README.md', @('README.md'), $true),
+        @(('docs/a.md' + $lf), @('docs/*', '!docs/a.md'), $false),
+        @(('src/private/a.md' + $lf), @('src/**/*', '!src/private/**'), $false),
+        @(('secret/x.md' + $lf), @('**/*', '!secret/**'), $false),
+        @(('secret/x' + $lf + 'y'), @('**/*', '!secret/**'), $false),
+        @(('docs/a.md' + $cr), @('docs/*', '!docs/a.md'), $false),
+        @(('docs/a' + $lf + '.md'), @('docs/*'), $false),
+        @('docs/b.md', @('docs/*', '!docs/a.md'), $true),
+        @('docs/a.md', @('docs/*', '!docs/a.md'), $false),
+        @('secret/x.md', @('**/*', '!secret/**'), $false)
+    )) {
+    Assert-Coord "C1 LF: $($c[0] -replace "`n",'<LF>') vs $($c[1] -join ',') -> $($c[2])" ((Test-CoordInScope $c[0] $c[1]) -eq $c[2])
+    Assert-Coord "C1 LF -IgnoreCase: $($c[0] -replace "`n",'<LF>') vs $($c[1] -join ',') -> $($c[2])" ((Test-CoordInScope $c[0] $c[1] -IgnoreCase) -eq $c[2])
+}
+Assert-Coord 'C1 LF: the converted regex ends in \z, not $' ((ConvertTo-CoordGlobRegex 'a.md').EndsWith('\z'))
+Assert-Coord 'C1 LF: Test-CoordSha40 refuses a sha ending in LF' (-not (Test-CoordSha40 (('a' * 40) + $lf)))
+Assert-Coord 'C1 LF: Test-CoordSha40 still accepts 40 hex' (Test-CoordSha40 ('a' * 40))
+$cl = Test-CoordLedgerCanonical -Path (Join-Path $root 'x.md') -Date ('2026-03-05' + $lf)
+Assert-Coord 'C1 LF: Test-CoordLedgerCanonical refuses a date ending in LF' (-not $cl.Ok -and "$($cl.Error)".Contains('not yyyy-MM-dd')) "$($cl.Error)"
 
 Write-Host "(C2) Tracks table"
 $ledger = Join-Path $root 'ledger.md'

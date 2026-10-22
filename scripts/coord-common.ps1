@@ -59,7 +59,7 @@ function Get-CoordToday {
 }
 
 function Test-CoordSha40([string]$Value) {
-    return ($Value -cmatch '^[0-9a-f]{40}$')
+    return ($Value -cmatch '^[0-9a-f]{40}\z')
 }
 
 # Runs `git -C $Repo <args>`; returns { Code; Out (string[]) }. stderr dropped.
@@ -325,7 +325,7 @@ function Get-CoordSessionToken([string]$Cell) {
 # Error }.
 function Test-CoordLedgerCanonical {
     param([string]$Path, [string]$Date = (Get-CoordToday), [scriptblock]$Git = $null)
-    if ($Date -notmatch '^\d{4}-\d{2}-\d{2}$') { return [pscustomobject]@{ Ok = $false; Canonical = $null; Undecided = $false; Error = "the date '$Date' is not yyyy-MM-dd" } }
+    if ($Date -notmatch '^\d{4}-\d{2}-\d{2}\z') { return [pscustomobject]@{ Ok = $false; Canonical = $null; Undecided = $false; Error = "the date '$Date' is not yyyy-MM-dd" } }
     try { $full = [System.IO.Path]::GetFullPath($Path) }
     catch { return [pscustomobject]@{ Ok = $false; Canonical = $null; Undecided = $false; Error = "'$Path' is not a usable path: $($_.Exception.Message)" } }
     if (Test-CoordWindows) {
@@ -849,7 +849,7 @@ function ConvertTo-CoordGlobRegex([string]$Glob) {
         else { [void]$sb.Append([regex]::Escape([string]$c)) }
         $i++
     }
-    [void]$sb.Append('$')
+    [void]$sb.Append('\z')   # not '$': that also matches before a final LF
     return $sb.ToString()
 }
 
@@ -864,6 +864,10 @@ function Test-CoordInScope {
     # Not verified off Windows. There a '\' may be a literal character of a
     # file name; it is folded to '/' here all the same.
     $p = $Path.Replace('\', '/')
+    # A path holding a control character (LF, CR, ...) is never in scope. '*' and '?' compile to [^/]* and
+    # [^/], which match an LF, while '.' in '.*' and a literal name do not: a positive '*' glob could match
+    # such a path that a '!' exclusion then misses, so an exclusion would fail open.
+    if ($p -match '[\x00-\x1f]') { return $false }
     $in = $false
     foreach ($g in $Globs) {
         if ($g.StartsWith('!')) { continue }
