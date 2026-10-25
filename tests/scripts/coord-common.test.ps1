@@ -67,6 +67,9 @@
 #   C23 Read-CoordStreamBounded on a pipe whose read never completes (TimedOut
 #       within the bound, no hang), on a stream with data, and each reader passing
 #       its -TimeoutMs on to it (a wrapper records the value)
+#   C24 (S2) Get-CoordLedgerDate (anchored with z), ConvertTo-CoordRootedPath,
+#       Test-CoordLocalFixedPath, ConvertTo-CoordArgLine (a backslash before a
+#       final LF is not doubled)
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\coord-common.test.ps1 [-ScriptPath <mutant copy of coord-common.ps1>]
 #       (-CommonPath is an alias of -ScriptPath)
@@ -1174,6 +1177,56 @@ try {
     Assert-Coord 'C23 Read-CoordLedgerTracksBounded passes its -TimeoutMs to Read-CoordStreamBounded (called, every time a positive value no larger than the bound, the first near it)' ($b.Ok -and $cv.Count -ge 1 -and @($cv | Where-Object { $_ -le 0 -or $_ -gt 7777 }).Count -eq 0 -and $cv[0] -ge 5000) "ok=$($b.Ok) calls=$($cv -join ',')"
 }
 finally { Set-Item -Path 'Function:\Read-CoordStreamBounded' -Value $global:origStreamReader }
+
+Write-Host "(C24) ledger date, rooted Repo path, local fixed path, argument quoting"
+# Get-CoordLedgerDate: the leaf when ALL of it is yyyy-MM-dd; \z, so a trailing LF is not a date.
+$todayC24 = Get-CoordToday
+foreach ($c in @(
+        @('2026-10-15', '2026-10-15'), @('2026-02-28', '2026-02-28'), @('2026-13-45', $todayC24), @('2026-02-30', $todayC24),
+        @((([char]0x0662).ToString() + '026-10-15'), $todayC24), @("2026-10-15`n", $todayC24), @('2026-10-1', $todayC24), @('x2026-10-15', $todayC24),
+        @('2026-10-15x', $todayC24), @('', $todayC24), @('not-a-date', $todayC24))) {
+    $got = Get-CoordLedgerDate $c[0]
+    Assert-Coord ("C24 Get-CoordLedgerDate '" + ($c[0] -replace "`n", '<LF>') + "' -> '" + ($c[1] -replace "`n", '<LF>') + "'") ($got -ceq $c[1]) $got
+}
+# ConvertTo-CoordRootedPath: one rooted full path, or $null.
+if (Test-CoordWindows) {
+    foreach ($c in @(
+            @('C:\a\b', 'C:\a\b'), @('C:/a/b', 'C:\a\b'), @('C:\a\b\', 'C:\a\b'), @('  C:\a  ', 'C:\a'), @('c:\a', 'c:\a'), @('\\host\share\', '\\host\share'), @('\\host\share\x', '\\host\share\x'))) {
+        $got = ConvertTo-CoordRootedPath $c[0]
+        Assert-Coord "C24 ConvertTo-CoordRootedPath '$($c[0])' -> '$($c[1])'" ($got -ceq $c[1]) "got '$got'"
+    }
+    foreach ($bad in @('', '   ', 'alpha', 'C:a', '/c/x', '\a', '.\x', 'Fx\x', '\\host', '\\?\C:\x', '\\.\C:\x', 'C:\', 'c:\', 'C:\.', 'C:\..', 'C:/', 'C:\a, C:\b', 'C:\a; C:\b', 'C:\a (main)')) {
+        $got = ConvertTo-CoordRootedPath $bad
+        Assert-Coord "C24 ConvertTo-CoordRootedPath '$bad' -> `$null" ($null -eq $got) "got '$got'"
+    }
+    # Test-CoordLocalFixedPath
+    $sysDrive = [System.IO.Path]::GetPathRoot($env:SystemRoot)
+    $fx = Test-CoordLocalFixedPath ($sysDrive + 'Windows')
+    Assert-Coord 'C24 Test-CoordLocalFixedPath: a path on the system drive is a local fixed path' ($fx.Ok -and $fx.Type -ceq 'Fixed') "Ok=$($fx.Ok) Type=$($fx.Type)"
+    $unc = Test-CoordLocalFixedPath '\\localhost\share\x'
+    Assert-Coord 'C24 Test-CoordLocalFixedPath: a UNC path is not' ((-not $unc.Ok) -and $unc.Type -ceq 'Network') "Ok=$($unc.Ok) Type=$($unc.Type)"
+    $used = @([System.IO.DriveInfo]::GetDrives() | ForEach-Object { $_.Name.Substring(0, 1).ToUpperInvariant() })
+    $free = @('Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z') | Where-Object { $used -cnotcontains $_ } | Select-Object -First 1
+    if ($free) {
+        $gone = Test-CoordLocalFixedPath ($free + ':\x')
+        Assert-Coord "C24 Test-CoordLocalFixedPath: a path on a drive that does not exist ($free`:) is not" (-not $gone.Ok) "Ok=$($gone.Ok) Type=$($gone.Type)"
+    }
+    else { Write-CoordUnchecked 'C24 Test-CoordLocalFixedPath on a missing drive' 'every drive letter from Q to Z is in use' }
+}
+else {
+    Write-CoordUnchecked 'C24 ConvertTo-CoordRootedPath and Test-CoordLocalFixedPath (Windows forms)' 'not Windows'
+    Assert-Coord 'C24 ConvertTo-CoordRootedPath: a path from / is rooted; //host and a drive letter are not' ((ConvertTo-CoordRootedPath '/a/b') -ceq '/a/b' -and $null -eq (ConvertTo-CoordRootedPath '//h/s') -and $null -eq (ConvertTo-CoordRootedPath 'C:\a'))
+}
+# ConvertTo-CoordArgLine: backslashes are doubled only in front of the closing quote.
+# '$' would also match before a final LF and double the backslash that sits before it.
+$lf = "`n"
+foreach ($c in @(
+        @(("a\" + $lf), ('"a\' + $lf + '"')), @(("a b\" + $lf), ('"a b\' + $lf + '"')), @(("a\\" + $lf), ('"a\\' + $lf + '"')),
+        @('a b\', '"a b\\"'), @('a b\\', '"a b\\\\"'), @('a\', 'a\'), @('a"b', '"a\"b"'), @('a\"b', '"a\\\"b"'), @('', '""'), @('x y', '"x y"'))) {
+    $got = ConvertTo-CoordArgLine @($c[0])
+    $show = { param($s) ($s -replace "`n", '<LF>') }
+    Assert-Coord ("C24 ConvertTo-CoordArgLine '" + (& $show $c[0]) + "' -> " + (& $show $c[1])) ($got -ceq $c[1]) ("got " + (& $show $got))
+}
 
 Write-Host "(C21-pre) what the real-index digest covers"
 # The digest function itself, pointed at a scratch folder through the fixture's

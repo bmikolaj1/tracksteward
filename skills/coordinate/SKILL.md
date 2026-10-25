@@ -173,9 +173,24 @@ sessions is not available, the pointer line is what the user pastes.
    the coordinator's: replace every one before saving, delete the CROSS-REPO block and the
    SUPERSEDES line unless they apply, and never send a brief that still has one of the
    template's own slots (braces inside the text you fill in are fine, such as a glob or a
-   command). A `<...>` slot is filled when that line
+   command, unless they spell one of the slots). A `<...>` slot is filled when that line
    is used (a PR number, a sha, a time), by the coordinator or the track, and stays as written in
    the file. Put the file's own absolute path inside it.
+
+   **With the script**, the same step is two calls from the PowerShell tool, in process, from the
+   main checkout:
+   `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-brief.ps1" -Track '<track>'` renders the template for
+   the track's live ledger row into `briefs/` (named `<date>-<repo>-<track>-<id>.md`, so two repos
+   never share a file) and fills every slot the ledger can answer: your name from the
+   Coordinator line, the track, repo, branch and session cells, the file's own path, the Baseline
+   row of the repo, the live sibling tracks, and the scope lines. It lists the slots it left;
+   replace those by hand, delete the SUPERSEDES line and the CROSS-REPO block unless they apply, then
+   run `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-brief.ps1" -Track '<track>' -Check`. Only a brief with no
+   template slot left and every fixed line of the template still in it (only SUPERSEDES and
+   CROSS-REPO may go), for a ledger the scope guard can read (today's, registered with
+   `coord-log.ps1 -Register`), makes it print the pointer line to send. Pass `-Repo <full path>`
+   when two repos have a track of that name, and `-Force` to render again (the old file is kept as
+   `.bak`).
 3. **Check the session's working folder** is the track's worktree: a session opened in the wrong
    folder loads the wrong project instructions and hooks. If it is wrong, have the user stop it
    before any edit and relaunch it.

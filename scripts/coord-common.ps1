@@ -58,6 +58,17 @@ function Get-CoordToday {
     return [DateTime]::Now.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
+# The date a ledger's file-name leaf (no extension) stands for: the leaf when
+# ALL of it is yyyy-MM-dd, else today. \z, not '$': '$' also matches before a
+# final line feed (a name Windows cannot hold, so this is latent there).
+function Get-CoordLedgerDate([string]$Leaf) {
+    # [0-9], not \d (which also matches other scripts' digits), and a real date.
+    $d = [DateTime]::MinValue
+    if ($Leaf -match '^[0-9]{4}-[0-9]{2}-[0-9]{2}\z' -and
+        [DateTime]::TryParseExact($Leaf, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$d)) { return $Leaf }
+    return (Get-CoordToday)
+}
+
 function Test-CoordSha40([string]$Value) {
     return ($Value -cmatch '^[0-9a-f]{40}\z')
 }
@@ -92,7 +103,9 @@ function ConvertTo-CoordArgLine([string[]]$Items) {
     $parts = foreach ($a in $Items) {
         $s = [string]$a
         if ($s.Length -gt 0 -and $s -notmatch '[\s"]') { $s }
-        else { '"' + (($s -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"' }
+        # \z, not '$': '$' also matches before a final line feed, which would
+        # double a backslash that is not in front of the closing quote.
+        else { '"' + (($s -replace '(\\*)"', '$1$1\"') -replace '(\\+)\z', '$1$1') + '"' }
     }
     return (@($parts) -join ' ')
 }
@@ -803,6 +816,44 @@ function Resolve-CoordLedgerRepo {
     $hits = @($Repos | Where-Object { [string]::Equals((Split-Path -Leaf (ConvertTo-CoordFullPath $_)), $cell, $cmp) })
     if ($hits.Count -eq 1) { return [pscustomobject]@{ Match = $hits[0]; Ambiguous = $false } }
     return [pscustomobject]@{ Match = $null; Ambiguous = ($hits.Count -gt 1) }
+}
+
+# A ledger Repo cell as one rooted full path, or $null. Windows: a drive letter
+# with a separator, or a UNC share. Elsewhere (not verified): a path that starts
+# with one '/' (a leading '//' is a network path). Either way no list separator
+# (, ;) and no annotation in parentheses. Anything else is $null and is never
+# resolved against the process directory (`Fx\x`, `C:x` or `/c/x` would each
+# name some folder, and the row would silently drop out of LIVE TRACKS and
+# NOT yours).
+function ConvertTo-CoordRootedPath([string]$Path) {
+    $p = ([string]$Path).Trim()
+    if (Test-CoordWindows) {
+        if ($p -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)') { return $null }
+    }
+    elseif ($p -notmatch '^/(?!/)') { return $null }
+    if ($p -match '[,;()]') { return $null }
+    # \\?\ and \\.\ (device paths) look like a UNC share to the test above but
+    # name no share; and a drive root alone would lose its separator below
+    # (C:\ -> C:, which is drive-relative).
+    if ($p -match '^\\\\[?.][\\/]') { return $null }
+    try { $full = ConvertTo-CoordFullPath $p } catch { return $null }
+    if ($full -match '^[A-Za-z]:\z' -or $full -match '^\\\\[?.][\\/]') { return $null }
+    return $full
+}
+
+# Whether a full path is on a local fixed disk, as { Ok; Type } (the guard binds
+# a row by its Repo path, so a network or removable one cannot be bound).
+# Windows: not UNC and a DriveInfo type of Fixed. Elsewhere (not verified): any
+# path that does not start with '//'.
+function Test-CoordLocalFixedPath([string]$FullPath) {
+    if (Test-CoordWindows) {
+        if ($FullPath.StartsWith('\\')) { return [pscustomobject]@{ Ok = $false; Type = 'Network' } }
+        $type = 'unknown'
+        try { $type = [string]([System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($FullPath))).DriveType } catch { }
+        return [pscustomobject]@{ Ok = ($type -eq 'Fixed'); Type = $type }
+    }
+    if ($FullPath.StartsWith('//')) { return [pscustomobject]@{ Ok = $false; Type = 'Network' } }
+    return [pscustomobject]@{ Ok = $true; Type = 'Local' }
 }
 
 # Scope cell or -Scope argument -> globs. Separators: comma, semicolon,
