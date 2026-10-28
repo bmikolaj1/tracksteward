@@ -46,6 +46,10 @@
 #   G9 runtime: four 78 KiB ledgers, 9-entry index, sleeping stubs, deadline,
 #      Get-CoordMainRoot bounded, a child holding stdout
 #   G10 midnight (COORD_TODAY)
+#   G11 fixes and stated limits found by the private toolkit's review rounds
+#   S6 plugin wiring: hooks.json shape and launcher (space, brackets, backtick; a
+#      sibling folder is not run), the ..\scripts layout, the off switch, the
+#      anchor policy and pruning, name-only Session cells, no registered ledger
 #   Z  the real index folder is byte-unchanged
 #
 # NOT here (other suites own them): Register-CoordLedger, Test-CoordLedgerTrusted
@@ -1564,6 +1568,15 @@ Invoke-Group 'S6 plugin wiring' {
     Report (-not (Test-Path -LiteralPath $oldA)) 'S6-27 an anchor not written for 8 days is pruned' ''
     Report (Test-Path -LiteralPath $freshA) 'S6-28 an anchor written 6 days ago stays' ''
     Report (Test-Path -LiteralPath $noteF) 'S6-29 a file that is not *.anchor stays, however old' ''
+    # a session that is still in use: a resume or compact refreshes its anchor's write time, so the prune keeps it
+    $null = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-keep' -Cwd $wtA1)
+    $keepA = Get-AnchorPath 'sa-keep'
+    [System.IO.File]::SetLastWriteTimeUtc($keepA, [DateTime]::UtcNow.AddDays(-9))
+    $null = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-keep' -Cwd $wtA2 -Source 'resume')
+    $keepAge = ([DateTime]::UtcNow - [System.IO.File]::GetLastWriteTimeUtc($keepA)).TotalMinutes
+    Report (([System.IO.File]::ReadAllText($keepA) -ceq ($wtA1 + "`n")) -and $keepAge -lt 5) 'S6-29b a resume of a session with an anchor refreshes its write time and keeps its content' ("age min: $keepAge")
+    $null = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-after' -Cwd $wtA1)
+    Report (Test-Path -LiteralPath $keepA) 'S6-29c the refreshed anchor survives the next session''s prune' ''
     Reset-State
     $sd = Join-Path $idxDir 'sessions'
     [void][IO.Directory]::CreateDirectory($sd)
@@ -1588,6 +1601,11 @@ Invoke-Group 'S6 plugin wiring' {
     $null = Use-Ledger -Rows @((New-LedgerRow 'A1' $repoA 'a1-branch' $wtA1 $scopeA1 $tokA1 'running'), (New-LedgerRow 'A1-B' $repoB 'b1-branch' $wtB1 'lib/**' $tokB1 'running'))
     $rd = Invoke-Edit -Cwd $wtA1 -Path $inB -Tool 'Write'
     Test-Block 'S6-35 two different ids do not bind across repos' $rd @('Track A1-B names that tree')
+    # no row names the target tree: the plain scope refusal, without the cross-row note
+    $null = Use-Ledger -Rows @((RowA1))
+    $rq = Invoke-Edit -Cwd $wtA1 -Path (Join-Path $wtA2 'src\a2\x.ps1') -Tool 'Write'
+    Test-Block 'S6-36 a write into a tree no row names is refused as out of scope' $rq @($stdScopeTail)
+    Report (([string]$rq.Err).IndexOf('names that tree') -lt 0) 'S6-36b the refusal carries no cross-row note when no row names the tree' (Get-Tail $rq.Err)
 }
 
 # ===========================================================================
