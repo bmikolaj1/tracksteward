@@ -193,6 +193,8 @@ library), each with a test that runs the script from the installed layout.
   as a wildcard and can run a sibling folder's copy, so `hooks.json` ships the exec form with
   `-Command`, the path read from `$env:CLAUDE_PLUGIN_ROOT`, wildcard-escaped and exit-forwarded;
   that form was probed from a plugin folder with a space, brackets and a backtick in its name.
+  A launcher that fails before the script runs (probed with the plugin root unset: exit 1) lets
+  the edit go ahead and shows the session no hook text, so the guard is silently off for that call.
 - **P2 (first slice):** `${CLAUDE_PLUGIN_ROOT}` expands in the skill's script lines the way it
   already does for the template paths, and the Bash and PowerShell tools both run them.
   *Docs, 2026-10-18:* the variable is substituted in a plugin skill's body before the model sees

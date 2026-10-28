@@ -3,9 +3,11 @@
 # name on 2026-10-28. hooks/hooks.json starts this one script for two events:
 # PreToolUse on Edit|Write|MultiEdit|NotebookEdit (guard mode) and SessionStart
 # (anchor mode). It does nothing until a coordinator has registered a ledger
-# (coord-log.ps1 -Register): with no index file for today or yesterday it allows
-# silently, apart from the warnings for an event it cannot read, a missing
-# coord-common.ps1 and a SessionStart event with no full cwd.
+# (coord-log.ps1 -Register): with no index file for today or yesterday it reads
+# no ledger and writes, refreshes and prunes no anchor, and allows silently,
+# apart from the warnings about its own input and setup (an event it cannot
+# read, a coord-common.ps1 that is missing or fails to load, a SessionStart
+# event with no full cwd, an internal error).
 # TRACKSTEWARD_GUARD=off in the environment turns it off without uninstalling
 # the plugin: the hook exits at once, reads nothing and writes nothing. That is
 # a convenience, not a lock: anything that can set the hook's environment (a
@@ -14,8 +16,9 @@
 # and clock) are honored the same way. hooks/hooks.json starts the script through
 # a -Command launcher; when the launcher fails before the script runs
 # (CLAUDE_PLUGIN_ROOT unset, the script missing, a policy overriding the
-# execution policy) the hook exits 1, which Claude Code treats as a non-blocking
-# error: the edit goes ahead.
+# execution policy) the hook exits 1. A probe (2026-10-28, plugin root unset, so
+# the script path was empty) showed the edit goes ahead and the session sees no
+# hook text: for that call the guard is silently off.
 #
 # WHAT IT GUARDS: the acting session, not the file's owner. A session bound to a
 # live Tracks row of a coordinator's ledger may write in its own worktree only
@@ -72,13 +75,14 @@
 # the event cwd (a resume or compact keeps it), and only when today's or
 # yesterday's index exists: a day with no registered coordinator leaves no
 # anchor. A write also prunes anchor files not written for 7 days (by their last
-# write time) from the same folder; a resume or compact refreshes the write time
-# of an existing anchor and changes nothing else, but a session that sees no
-# event for 7 days loses its anchor to the next session's write and binds by
-# cwd. A track that started before its coordinator registered the ledger has no
-# anchor and binds by cwd; so does the coordinator's own session when it started
-# before any index existed (it is then not recognized as the coordinator, see
-# LIMITS, Coordinator: register the ledger first thing). A PreToolUse call that finds the
+# write time) from the same folder; a SessionStart event (start, resume, compact,
+# clear) for a session that already has an anchor refreshes its write time and
+# changes nothing else, but a session with no SessionStart event for 7 days
+# loses its anchor to the next session's write and binds by cwd. A track that
+# started before its coordinator registered the ledger has no anchor and binds
+# by cwd; so does the coordinator's own session when it started on a day with no
+# index (it is then not recognized as the coordinator, see LIMITS, Coordinator:
+# the skill keeps that session in the main checkout). A PreToolUse call that finds the
 # file holding one line, which binds nothing, while the cwd or
 # CLAUDE_PROJECT_DIR binds a row, appends that worktree root as its second line
 # (two parallel calls may both append; harmless), except in a
@@ -118,8 +122,10 @@
 # timeout there gives the deadline warning; the anchor file read waits at most
 # the time left; the anchor append is
 # skipped, with a warning, under 200 ms left. Anchor mode has its own 1 s budget
-# and on a failure after the anchor policy check writes no anchor and warns (an
-# invalid session id, or losing the create race to another run, exits silently).
+# and exits silently for an unusable session id, with no index, for a session that
+# already has its anchor, and when it loses the create race to another run; any
+# other failure writes no anchor and warns (a prune failure after the anchor is
+# written is ignored).
 #
 # LIMITS: Bash and PowerShell writes (sed -i, Set-Content) are not covered, only
 # the four edit tools. A session opened on a main checkout that holds a listed
@@ -1092,17 +1098,18 @@ function Invoke-CsgAnchorMode {
         $full = ConvertTo-CsgFull $cwd
         $dir = [System.IO.Path]::Combine((Get-CoordIndexDir), 'sessions')
         $file = [System.IO.Path]::Combine($dir, $sid + '.anchor')
+        # Anchor policy: only a day with a registered coordinator (today's or
+        # yesterday's index exists) touches the sessions folder at all; otherwise
+        # nothing is written, refreshed or pruned, not even the sessions folder.
+        if (-not ([System.IO.File]::Exists((Get-CoordIndexPath -Date $script:csgToday)) -or [System.IO.File]::Exists((Get-CoordIndexPath -Date $script:csgYday)))) { Exit-Csg 0 }
         if ([System.IO.File]::Exists($file)) {
-            # A resume or compact of a session that already has its anchor keeps the
-            # file as it is; only its write time is refreshed, so the 7-day prune
-            # below does not take the anchor of a session that is still in use.
+            # A start, resume, compact or clear of a session that already has its
+            # anchor keeps the file as it is; only its write time is refreshed, so
+            # the 7-day prune below does not take the anchor of a session that
+            # started or resumed recently.
             try { [System.IO.File]::SetLastWriteTimeUtc($file, [DateTime]::UtcNow) } catch { }
             Exit-Csg 0
         }
-        # Anchor policy: only a day with a registered coordinator (today's or
-        # yesterday's index exists) leaves an anchor; otherwise nothing is
-        # written, not even the sessions folder.
-        if (-not ([System.IO.File]::Exists((Get-CoordIndexPath -Date $script:csgToday)) -or [System.IO.File]::Exists((Get-CoordIndexPath -Date $script:csgYday)))) { Exit-Csg 0 }
         if ($script:csgSw.ElapsedMilliseconds -ge $script:csgAnchorBudgetMs) {
             Add-CsgWarning ('session anchor not written (the ' + $script:csgAnchorBudgetMs + ' ms budget ran out)')
             Exit-CsgAllow

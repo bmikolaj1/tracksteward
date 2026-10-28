@@ -1576,7 +1576,7 @@ Invoke-Group 'S6 plugin wiring' {
     $keepAge = ([DateTime]::UtcNow - [System.IO.File]::GetLastWriteTimeUtc($keepA)).TotalMinutes
     Report (([System.IO.File]::ReadAllText($keepA) -ceq ($wtA1 + "`n")) -and $keepAge -lt 5) 'S6-29b a resume of a session with an anchor refreshes its write time and keeps its content' ("age min: $keepAge")
     $null = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-after' -Cwd $wtA1)
-    Report (Test-Path -LiteralPath $keepA) 'S6-29c the refreshed anchor survives the next session''s prune' ''
+    Report ((Test-Path -LiteralPath (Get-AnchorPath 'sa-after')) -and (Test-Path -LiteralPath $keepA)) 'S6-29c the next session writes its anchor (so its prune ran) and the refreshed anchor survives it' ''
     Reset-State
     $sd = Join-Path $idxDir 'sessions'
     [void][IO.Directory]::CreateDirectory($sd)
@@ -1585,6 +1585,9 @@ Invoke-Group 'S6 plugin wiring' {
     [System.IO.File]::SetLastWriteTimeUtc($oldB, [DateTime]::UtcNow.AddDays(-30))
     $null = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-noprune' -Cwd $wtA1)
     Report ((Test-Path -LiteralPath $oldB) -and -not (Test-Path -LiteralPath (Get-AnchorPath 'sa-noprune'))) 'S6-30 no index: nothing is written and nothing is pruned' ''
+    $null = Invoke-Guard -Json (New-SessionStartJson -Session 'q-old' -Cwd $wtA1 -Source 'resume')
+    $oldAge = ([DateTime]::UtcNow - [System.IO.File]::GetLastWriteTimeUtc($oldB)).TotalDays
+    Report ($oldAge -gt 29) 'S6-30b no index: a resume of a session that has an old anchor does not refresh it either' ("age days: $oldAge")
 
     # --- name-only Session cells never bind across repos (only an id-shaped cell is a token) ---
     $nameA = New-LedgerRow 'A1' $repoA 'a1-branch' $wtA1 $scopeA1 'track-a1' 'running'
