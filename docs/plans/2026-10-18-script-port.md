@@ -235,3 +235,16 @@ the default unless the coordinator opens a second.
 2. Version: 0.2.0 for the whole port, or 0.2.0 at S4 (scripts) and 0.3.0 with the guard?
 3. Guard default when the plugin is installed: on (inert until a ledger is registered), or off
    until the user sets the switch?
+
+Findings from S3, ruled 2026-10-28 (one line each; fix in S7 or 0.2.1):
+
+4. F1 (`scripts/repo-snapshot.ps1:144`, latent): a `-Repos` path that is not a git repo is skipped
+   and the snapshot prints `attention none`, so a typo reads as a clean repo. S7 or 0.2.1.
+5. F2 (`scripts/repo-snapshot.ps1:64`, latent): an explicit `-Ledger <missing file>` reads as
+   "no ledger" with `attention none` instead of an error. S7 or 0.2.1.
+6. F3 (`scripts/repo-snapshot.ps1:225`, cosmetic): a finished track whose branch is gone prints
+   `branch not found` and adds attention on every run. S7 or 0.2.1.
+7. F4 (`scripts/repo-snapshot.ps1`, cosmetic): the base is hard-coded to `origin/main`; there is no
+   `-Base` as `slot-check` has. S7 or 0.2.1.
+8. F5 (all scripts, latent): the git 2.38+ floor of section 3 is not enforced; no script refuses at
+   start (grep finds comments only). S7 or 0.2.1.

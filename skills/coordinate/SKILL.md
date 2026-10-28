@@ -396,6 +396,25 @@ window and the coordinator, at once, and stops until answered.
    report your new head." Every merge voids the heads that were waiting, so each re-reports.
    Update a shared checkout only when no session is writing there.
 
+   **With the script**, step 5, step 6 (only with `-DeleteBranch`; without it step 6 stays yours) and
+   the notification half of step 7 are one call, after the user's merge OK, from the coordinator's
+   main checkout: `& "${CLAUDE_PLUGIN_ROOT}/scripts/merge-verify.ps1" -Pr <n>` (from Bash, through
+   `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/merge-verify.ps1")" -Pr <n>`).
+   It checks that the merge commit is on `origin/<base>`, fast-forwards the launch checkout when
+   that is safe (`-NoFastForward` skips it), checks the git config, and prints one `NOTIFY` line
+   per other live track of the repo, ready to paste (it sends nothing). **It deletes no branch
+   unless you pass `-DeleteBranch`.** Without the flag it prints the delete command it would have
+   run (none for a branch name with characters a shell would act on); with it, it deletes only while the branch tip is still the merged head, and never a fork
+   PR's branch, the base, origin's default branch, `main`, `master` or a branch an open PR uses.
+   `-Repo <path>` and `-Ledger <path>` name another checkout or ledger. The last line is the verdict:
+
+   ```
+   MERGE-VERIFY #<n>: OK|PROBLEM|NOT MERGED - merge <sha12> on origin/<base>; branch <...>; checkout <...>; config <ok|WARN: ...>
+   MERGE-VERIFY #<n>: COULD NOT CHECK - <reason>
+   ```
+
+   Exit 0 is OK, 1 is PROBLEM or NOT MERGED, 2 is could not check.
+
 ## Stop protocol (the user is leaving, or something is going wrong)
 
 Send every live track the same order: start nothing new; commit a coherent green subset with the
