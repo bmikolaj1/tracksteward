@@ -1592,7 +1592,10 @@ Invoke-Group 'S6 plugin wiring' {
     $oldAge = ([DateTime]::UtcNow - [System.IO.File]::GetLastWriteTimeUtc($oldB)).TotalDays
     Report ($oldAge -gt 29) 'S6-30b no index: a resume of a session that has an old anchor does not refresh it either' ("age days: $oldAge")
     # a cwd that looks full but that GetFullPath rejects (Windows PowerShell 5.1 / .NET Framework): silent with no index
+    # (the hook always runs under powershell.exe, whose GetFullPath rejects the '|'; under another host these two rows would not discriminate)
     Test-Allow 'S6-30c no index: a SessionStart whose cwd GetFullPath rejects is still a silent allow' (Invoke-Guard -Json (New-SessionStartJson -Session 'sa-badcwd' -Cwd 'C:\a|b'))
+    $null = Use-Ledger -Rows @((RowA1))
+    Test-Warn 'S6-30d with an index and no anchor yet: the same cwd warns that the anchor was not written' (Invoke-Guard -Json (New-SessionStartJson -Session 'sa-badcwd2' -Cwd 'C:\a|b')) @('session anchor not written')
 
     # --- name-only Session cells never bind across repos (only an id-shaped cell is a token) ---
     $nameA = New-LedgerRow 'A1' $repoA 'a1-branch' $wtA1 $scopeA1 'track-a1' 'running'
