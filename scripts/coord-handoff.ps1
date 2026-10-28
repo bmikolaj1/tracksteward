@@ -13,9 +13,13 @@
 #   1. Inputs, before any read or git call. -NewSession is the new coordinator
 #      session's NAME or its id: trimmed, 1 to 80 characters, no control
 #      character (tab and line breaks included, checked before the trim), no
-#      invisible format character (zero-width space, BOM, bidi marks: Unicode
-#      category Cf) and no lone surrogate, no backtick, no |, no double quote,
-#      not a <placeholder>, and not holding
+#      character other than letters, digits, combining marks, punctuation,
+#      symbols and the plain space (so no zero-width space, BOM, soft hyphen,
+#      bidi mark or non-breaking space, and no character outside the Basic
+#      Multilingual Plane, an emoji included; letters and marks that draw
+#      nothing, such as a Hangul filler or a variation selector, are not
+#      recognized), no backtick, no |, no double quote, not a <placeholder>,
+#      and not holding
 #      "; before that: " (the text the Coordinator line is cut at). Any
 #      argument left over after the parameters (a loose word, or an unknown
 #      parameter such as -Time) is refused: the stamp is this script's. Then
@@ -36,7 +40,8 @@
 #      `Coordinator: session "<old name>"` (the shape the ledger template and
 #      this script write; the old name may be an id; it is trimmed, must not be
 #      a <placeholder> or hold "; before that: "; a -NewSession equal to it,
-#      ignoring case, is refused); `## Log` and `## Tracks` each exactly once
+#      ignoring case, is refused; look-alike spellings, such as a Cyrillic letter
+#      for a Latin one or a decomposed accent, are not recognized as equal); `## Log` and `## Tracks` each exactly once
 #      (case-insensitive); the Tracks section must hold a table (a header row; a
 #      header with no data rows is accepted), read by Read-CoordLedgerTracks'
 #      section scan and row parser. A -NewSession that is any row's Session
@@ -49,9 +54,11 @@
 #      (ConvertTo-CoordRootedPath); a relative cell (.\x, ..\x), a drive-relative
 #      one (C:x), a bare folder name, a drive root, or a path holding , ; ( or )
 #      is refused, "row <track>: Repo '<cell>' is not a full path". The cell
-#      must be an existing folder and the top level of a git working tree (a
-#      folder inside another repo, or its .git folder, would otherwise fetch
-#      the enclosing repo under the wrong name). The distinct
+#      must be an existing folder and the top level of a git working tree
+#      (git rev-parse --is-inside-work-tree is true and --show-prefix is empty,
+#      so the spelling does not matter: a junction or a subst drive is fine; a
+#      folder inside another repo, or its .git folder, would otherwise fetch the
+#      enclosing repo under the wrong name). The distinct
 #      full paths (a trailing separator dropped, compared as Get-CoordPath
 #      Comparison says) are kept in first-seen order; git runs on that full
 #      path, and the repo leaf in the Log line and the MESSAGE lines is its
@@ -97,8 +104,8 @@
 # is lost, as coord-log.ps1's header says. So: no hand edit of the ledger while
 # a ledger script is running.
 #
-# Limits: a Repo cell on a network share is checked for existence (step 3) and
-# fetched (step 4) with no timeout, so an unreachable server can stall the run
+# Limits: a Repo cell on a network share is checked for existence and probed
+# with git (step 3) and fetched (step 4) with no timeout, so an unreachable server can stall the run
 # there (no lock is held then). GIT_TERMINAL_PROMPT=0 stops git's own terminal
 # prompt only: an ssh passphrase prompt or a credential-manager window can
 # still wait for an answer. Step 6 keeps one "before that" level; the Log's
@@ -166,9 +173,12 @@ if ($Rest.Count) { Exit-NotWritten "unexpected arguments after the parameters ($
 $ctlRe = '[\x00-\x1F\x7F\x85' + [char]0x2028 + [char]0x2029 + ']'
 # Checked on the untrimmed value: Trim() would drop a leading or trailing one.
 if ($NewSession -match $ctlRe) { Exit-NotWritten '-NewSession holds a tab, a line break or another control character' }
-# Invisible format characters (zero-width space, BOM, bidi marks) and lone
-# surrogates would pass the trim and make a name that looks like another.
-if ($NewSession -match '[\p{Cf}\p{Cs}]') { Exit-NotWritten '-NewSession holds an invisible format character or a lone surrogate' }
+# Invisible characters (zero-width space, BOM, soft hyphen, bidi marks, no-break
+# space) pass the trim and make a name that looks like another; the regex sees
+# UTF-16 code units, so a surrogate pair (any non-BMP character) is refused too.
+# An allow-list, not a Cf test: .NET's \p{Cf} does not match every format character,
+# and it files the soft hyphen (U+00AD) under punctuation, so that one is named.
+if ($NewSession -match '[^\p{L}\p{N}\p{M}\p{P}\p{S} ]|\u00AD') { Exit-NotWritten '-NewSession holds a character other than letters, digits, combining marks, punctuation, symbols and the plain space (no invisible, no-break-space or non-BMP character)' }
 if ($NewSession.Contains('`')) { Exit-NotWritten '-NewSession holds a backtick' }
 if ($NewSession.Contains('|')) { Exit-NotWritten '-NewSession holds a |, which would break a Tracks or Log reader' }
 if ($NewSession.Contains('"')) { Exit-NotWritten '-NewSession holds a double quote; the ledger writes the name between double quotes' }
@@ -305,12 +315,18 @@ $rowRepo = New-Object System.Collections.Generic.List[int]
 foreach ($row in $live) {
     $cell = ([string]$row.Repo).Trim()
     $full = ConvertTo-CoordRootedPath $cell
-    if (-not $full) { Exit-NotWritten "row $(Get-TrackName $row): Repo '$cell' is not a full path (a rooted path, with no , ; ( or ))" }
+    if (-not $full) { Exit-NotWritten "row $(Get-TrackName $row): Repo '$cell' is not a full path (a rooted path below a drive root, with no , ; ( or ))" }
     if (-not (Test-Path -LiteralPath $full -PathType Container)) { Exit-NotWritten "row $(Get-TrackName $row): Repo '$cell' is not an existing folder; nothing can be fetched for it" }
     if (-not $repoIndex.ContainsKey($full)) {
         # git walks up from a folder that is no repo: only a working tree's own top level is that repo.
-        $tl = Invoke-CoordGit $full @('rev-parse', '--show-toplevel')
-        if ($tl.Code -ne 0 -or -not $tl.Out.Count -or -not [string]::Equals((ConvertTo-CoordFullPath $tl.Out[0].Trim()), $full, (Get-CoordPathComparison))) {
+        # Asked by property, not by comparing paths: git prints the resolved path, which differs from a
+        # cell spelled through a junction or a subst drive.
+        $iw = Invoke-CoordGit $full @('rev-parse', '--is-inside-work-tree')
+        if ($iw.Code -ne 0) { Exit-NotWritten "row $(Get-TrackName $row): git could not read Repo '$cell' as a working tree (exit $($iw.Code)); nothing can be fetched for it" }
+        $pf = Invoke-CoordGit $full @('rev-parse', '--show-prefix')
+        $inside = ($iw.Out.Count -and $iw.Out[0].Trim() -ceq 'true')
+        $atTop = ($pf.Code -eq 0 -and (-not $pf.Out.Count -or -not $pf.Out[0].Trim()))
+        if (-not $inside -or -not $atTop) {
             Exit-NotWritten "row $(Get-TrackName $row): Repo '$cell' is not the top level of a git working tree; the fetch would not be of that folder"
         }
         $repoIndex[$full] = $repos.Count; $repos.Add($full)

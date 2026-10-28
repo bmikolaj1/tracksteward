@@ -55,10 +55,12 @@
 #   H26 the ledger deleted during the swap retry: never recreated, temp kept
 #   H30 the snapshot is read under the coord-log lock, which waits up to 5 s
 #   H31 non-UTF-8 bytes written during the fetch are a change
-#   H34 the swap is one write: a watcher sampling the ledger during a run sees
-#       the original and the final text, and never a version holding only one
-#       of the two changes (a refused handoff leaves the ledger byte-unchanged:
-#       every Test-Refused row above)
+#   H34 the swap is one write: a watcher sampling the ledger during a run saw
+#       the original and never a version holding only one of the two changes.
+#       This is a sampling check: it catches a two-step write only when a
+#       sample lands between the steps. The structural guarantee is the single
+#       Write-CoordLedgerSwap call; a refused handoff leaves the ledger
+#       byte-unchanged (every Test-Refused row above)
 #   H17 no temp or lock files, no global functions left (runs last)
 #   H18 the real index folder is byte-unchanged
 #
@@ -546,6 +548,8 @@ $badNames = @(
     @('only a zero-width space (U+200B)', [string][char]0x200B), @('only a BOM character (U+FEFF)', [string][char]0xFEFF),
     @('a name ending in a zero-width space', ('Evening' + [char]0x200B)), @('a bidi override (U+202E)', ('a' + [char]0x202E + 'b')),
     @('a lone surrogate (U+D800)', ('a' + [char]0xD800 + 'b')),
+    @('an emoji (a surrogate pair, outside the BMP)', ('Night ' + [char]::ConvertFromUtf32(0x1F680))),
+    @('a soft hyphen (U+00AD)', ('Eve' + [char]0xAD + 'ning')), @('a no-break space (U+00A0)', ('Evening' + [char]0xA0 + 'shift')),
     @('81 characters', ('x' * 81)), @('81 characters after the trim', ('  ' + ('x' * 81) + '  ')),
     @('empty', ''), @('blank', '   '),
     @('a <placeholder>', '<name>'),
@@ -685,8 +689,8 @@ $badRepos = @(
     @('a bare folder name', 'bare13', 'some-repo'),
     @('a directory that does not exist', 'gone13', (Join-Path $root 'no\such\dir13')),
     @('a path holding parentheses', 'paren13', (Join-Path $root 'My (stuff)')),
-    @('a plain folder inside another repo', 'inner13', (Join-Path $fxR.Launch 'notarepo13')),
-    @('the .git folder of a repo', 'dotgit13', (Join-Path $fxR.Launch '.git'))
+    @('a plain folder inside another repo', 'inner13', (Join-Path $fxR.Launch 'notarepo13'), 'is not the top level of a git working tree'),
+    @('the .git folder of a repo', 'dotgit13', (Join-Path $fxR.Launch '.git'), 'is not the top level of a git working tree')
 )
 [void][IO.Directory]::CreateDirectory((Join-Path $root 'My (stuff)'))
 [void][IO.Directory]::CreateDirectory((Join-Path $fxR.Launch 'notarepo13'))
@@ -694,7 +698,9 @@ foreach ($c in $badRepos) {
     $p = New-HLedger @(Get-HLines (New-CoordLine 'Old coordinator') @($liveR, (New-Row $c[1] $c[2] 'sess-b' 'bb' '' 'running')))
     $b = Get-Bytes $p
     $r = Invoke-Handoff $newName $p
-    Test-RefusedNoFetch "H13 a live row whose Repo is $($c[0]) (the valid row's repo is not fetched either)" $r $p $b $fxR $staleR $c[1]
+    $why13r = $c[1]
+    if ($c.Count -gt 3) { $why13r = $c[3] }
+    Test-RefusedNoFetch "H13 a live row whose Repo is $($c[0]) (the valid row's repo is not fetched either)" $r $p $b $fxR $staleR $why13r
 }
 
 # =============================================================================
@@ -791,6 +797,18 @@ $fP = @(Get-Fetches $r)
 Assert-Coord 'H19 ... one fetch for the two spellings, and git ran on the full path, not on a cell as written' ($r.Code -eq 0 -and $fP.Count -eq 1 -and $fP[0] -ceq ('-C ' + $fxP.Launch + ' fetch --quiet origin main') -and @($r.Calls | Where-Object { $_.Contains($fwdCell) -or $_.Contains($twinCell) }).Count -eq 0) (($r.Calls) -join "`n")
 $mP = @($r.Lines | Where-Object { $_ -cmatch '^MESSAGE ' })
 Assert-Coord "H19 ... both MESSAGE lines name the repo by the full path's leaf (launch), each with the fetched sha12" ($r.Code -eq 0 -and ($mP -join "`n") -ceq ((Get-MsgLine 'r1fwd' 'sp1' $newName $shaP) + "`n" + (Get-MsgLine 'r1twin' 'sp2' $newName $shaP))) ($mP -join "`n")
+
+# A Repo cell spelled through a junction is the same working tree: accepted, fetched under that spelling.
+$juncP = Join-Path $root 'h19junc'
+if (New-CoordJunction $juncP $fxP.Launch) {
+    $shaP2 = Step-Origin $fxP
+    $linesJ = @(Get-HLines (New-CoordLine $oldName) @(New-Row 'r1junc' $juncP 'spj' 'b1' '' 'running'))
+    $p = New-HLedger $linesJ
+    $r = Invoke-Handoff $newName $p
+    $null = Test-Written 'H19 a Repo cell that is a junction to a repo is accepted (git prints the target path; the check is by property, not by spelling), the leaf is the cell''s own' $r $p $linesJ $oldName $newName ('; h19junc main ' + $shaP2.Substring(0, 12)) 1
+    Remove-CoordJunction $juncP
+}
+else { Write-CoordUnchecked 'H19 junction Repo cell (the machine refused to create a junction)' }
 
 # =============================================================================
 Write-Host "(H20) an unreadable Tracks section is refused before any fetch"
