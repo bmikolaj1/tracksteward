@@ -139,7 +139,27 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
    can find it.
 2. Snapshot each repo: `git fetch --prune origin`, origin/main sha, open PRs and their checks,
    remote branches, `git worktree list`, the newest handover. Record the baseline shas, and
-   whether the repo has CI at all.
+   whether the repo has CI at all (the Baseline's CI column, `yes` or `none`: the slot check
+   reads it).
+
+   **With the script**, one call from the PowerShell tool does the read for every repo you name:
+   `& "${CLAUDE_PLUGIN_ROOT}/scripts/repo-snapshot.ps1" -Repos '<repo>','<repo>'` (default: the
+   current directory; from Bash, through `powershell.exe -ExecutionPolicy Bypass -File` as above, with
+   the repos as one comma list). It runs `git fetch --prune`, then prints per repo: `origin/main`,
+   the local branch and dirty count, open PRs with their checks, a files, scope and conflict preview
+   for each ledger track and for each open PR that is in no row (`[not in ledger]`), remote
+   branches, worktrees with their lock state, local branches whose PR is already merged, the newest
+   handover and the latest CI run on `main`. `gh` is optional: without it the PR and CI sections
+   say so. A failed call prints `unknown (...)` or `preview failed`, never `(none)` or `no
+   conflicts`. The last line is the summary, which names what needs a look:
+
+   ```
+   SNAPSHOT: <n> repo(s); attention: <items | none>
+   ```
+
+   It does not list sessions (use `ListAgents`), and it edits no branch and no file in a working tree (git itself
+   updates remote-tracking refs with `git fetch --prune`, may refresh the index stat cache, and stores objects for
+   the conflict preview).
 3. List the live sessions (Claude Code: `ListAgents`) and the folder each one is in. A finished
    session still holds its worktree. Record each live track in the Tracks table.
 4. Classify every branch: merged, in flight (owner session), parked (leave it, say why), stale (the
@@ -305,10 +325,32 @@ window and the coordinator, at once, and stops until answered.
      the track's report is the only evidence its suites ran).
    - every file against the Scope in the ledger row. Scope creep shows up only here.
 
+   **With the script**, the five checks are one call from the PowerShell tool, in process, from the
+   coordinator's main checkout: `& "${CLAUDE_PLUGIN_ROOT}/scripts/slot-check.ps1" -Pr <n>` (from
+   Bash, through `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/slot-check.ps1")" -Pr <n>`).
+   It takes the scope from the ledger row whose Repo cell is this repo's full path and whose Branch is the PR's
+   head branch (live rows only), or from `-Scope "<globs>"`; `-Base <branch>` names an
+   integration branch other than `main`, `-Repo <path>` the PR's repo when you run it from
+   another checkout, `-Ledger <path>` another ledger. It fetches `origin/<base>` and the PR's
+   head, prints the PR, the files, the checks and GitHub's merge state, and ends with exactly one
+   line, so the last line is the verdict:
+
+   ```
+   SLOT-CHECK #<n> @<full sha>: READY|WAIT|HOLD - <reasons>
+   SLOT-CHECK #<n>: COULD NOT CHECK - <reason>
+   ```
+
+   Exit 0 is READY, 1 is WAIT or HOLD, 2 is "could not check" (a failed `gh` or `git`, invalid
+   `gh` output, no scope, a bad `-Ci`): treat that as no verdict, never as READY. The `@<full sha>`
+   is the head to grant the slot to. A PR with no checks at all is READY only when the repo has
+   no CI: the CI column of its Baseline row in the ledger reads `none` (`-Ci none` says so for
+   one call, `-Ci yes` the opposite); anything else, including a missing row, WAITs. The script
+   writes nothing but `origin/<base>`, the fetched objects and a private ref it deletes again at once, and reports; it is not a merge gate.
+
    **READY** only when the PR is open, not a draft, based on `main`, `headRefOid` equals the
    reported sha and `refs/coordinate/pr/<n>`, the PR contains the current main, `mergeable` is
-   MERGEABLE, `mergeStateStatus` is CLEAN or HAS_HOOKS, every file is in scope, and every check
-   is in the pass or skipping bucket (no checks at all only when the ledger records that the repo
+   MERGEABLE, `mergeStateStatus` is CLEAN or HAS_HOOKS (the script also lets UNSTABLE through, since it judges the checks itself), every file is in scope, and every check
+   is in the pass or skipping bucket (no checks at all only when the ledger records, or `-Ci none` says, that the repo
    has no CI). **WAIT** while a check is pending, while `mergeable` or `mergeStateStatus` is
    UNKNOWN, while the fetched ref still lags `headRefOid` (refetch), or while no checks have
    appeared yet. BLOCKED while a check is pending and none has failed most likely means a
