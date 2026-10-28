@@ -1,10 +1,10 @@
 # Ported from the private coordinate toolkit (coord-common.ps1), 2026-10-18.
 #
 # coord-common.ps1 - helpers shared by the coordinate scripts. Today
-# coord-log.ps1 dot-sources it, from the same folder:
-# `. (Join-Path $PSScriptRoot 'coord-common.ps1')`. repo-snapshot.ps1,
-# slot-check.ps1, merge-verify.ps1, coord-brief.ps1 and the scope guard hook
-# are to share it too (ported in a later slice).
+# coord-log.ps1, coord-brief.ps1, repo-snapshot.ps1 and slot-check.ps1
+# dot-source it, from the same folder:
+# `. (Join-Path $PSScriptRoot 'coord-common.ps1')`. merge-verify.ps1 and the
+# scope guard hook are to share it too (ported in a later slice).
 #
 # Runs under Windows PowerShell 5.1 and PowerShell 7. Windows is the verified
 # platform; every behaviour that differs elsewhere branches on
@@ -961,6 +961,79 @@ function Get-CoordCheckSummary {
         else { $fail.Add("$name=<unknown check shape>") }
     }
     return [pscustomobject]@{ Pass = $pass.ToArray(); Pending = $pending.ToArray(); Fail = $fail.ToArray() }
+}
+
+# Whether the repo $Repo (its main checkout) has CI, from the CI cell of the
+# ledger's `## Baseline` row. Returns { Ci = none | yes | unknown; Why }.
+# 'none' is the one answer that lets a PR with no checks be READY, so it must
+# be proven: exactly one Baseline row names this repo, no Baseline row has a
+# Repo cell that is doubtful (neither a clean folder name nor one rooted path,
+# or a folder name two known repos share, as coord-brief reads the Baseline),
+# the table has a CI column, and the cell is `none`, in any case. `yes` is the
+# same cell reading `yes`; every other outcome (no ledger, no row, two rows,
+# a doubtful row, an odd cell) is 'unknown', with the reason in Why, and
+# callers treat 'unknown' as 'yes'. A Repo cell is a folder name or a full
+# path; the known repos are $Repo and the rooted Repo cells of the Tracks
+# table (a Tracks table that cannot be read is 'unknown': it is the evidence
+# a shared folder name is told apart by). A header that repeats a column name,
+# in any case (blank names aside), is 'unknown'. Known limit: only a path in the
+# Tracks table tells two checkouts of one folder name apart, so with a Baseline
+# row written as a bare folder name, a second checkout of that name that has no
+# Tracks row cannot be seen. Write the Baseline Repo cell as a full path when
+# two checkouts share a folder name. Never throws.
+function Get-CoordBaselineCi {
+    param([string]$LedgerPath, [string]$Repo)
+    try {
+        if (-not $LedgerPath -or -not (Test-Path -LiteralPath $LedgerPath -PathType Leaf)) { return [pscustomobject]@{ Ci = 'unknown'; Why = 'no ledger' } }
+        $cmp = Get-CoordPathComparison
+        $known = New-Object System.Collections.Generic.List[string]
+        $known.Add((ConvertTo-CoordFullPath $Repo))
+        try {
+            foreach ($t in @(Read-CoordLedgerTracks $LedgerPath)) {
+                $p = ConvertTo-CoordRootedPath $t.Repo
+                if (-not $p) { continue }
+                $dup = $false
+                foreach ($k in $known) { if ([string]::Equals($k, $p, $cmp)) { $dup = $true; break } }
+                if (-not $dup) { $known.Add($p) }
+            }
+        }
+        catch { return [pscustomobject]@{ Ci = 'unknown'; Why = "the Tracks table could not be read: $($_.Exception.Message)" } }
+        $lines = [System.IO.File]::ReadAllText($LedgerPath, [System.Text.Encoding]::UTF8) -split '\r\n|\r|\n'
+        $inBase = $false
+        $head = $null
+        $mine = New-Object System.Collections.Generic.List[object]
+        $doubt = $null
+        foreach ($l in $lines) {
+            if (-not $inBase) { if ($l -match '^##\s+Baseline\s*$') { $inBase = $true }; continue }
+            if ($l -match '^#{1,2}\s') { break }
+            if (-not $l.TrimStart().StartsWith('|')) { if ($head) { break } else { continue } }
+            $cells = Split-CoordTableRow $l
+            if (-not $head) {
+                $head = $cells
+                $names = @($head | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() })
+                if (@($names | Select-Object -Unique).Count -ne $names.Count) { $doubt = 'the Baseline table repeats a column name' }
+                continue
+            }
+            if ($l -match '^[\s|:-]+$' -and $l.Contains('-')) { continue }
+            if ($cells.Length -ne $head.Length) { $doubt = 'a Baseline row does not have one cell per column'; continue }
+            $o = @{}
+            for ($k = 0; $k -lt $head.Length; $k++) { if (-not $o.ContainsKey($head[$k])) { $o[$head[$k]] = $cells[$k] } }
+            $cell = ([string]$o['Repo']).Trim()
+            if ($cell -notmatch '^[A-Za-z0-9._-]+$' -and -not (ConvertTo-CoordRootedPath $cell)) { $doubt = "a Baseline Repo cell is doubtful ('$cell')"; continue }
+            $res = Resolve-CoordLedgerRepo $cell $known.ToArray()
+            if ($res.Ambiguous) { $doubt = "the Baseline Repo cell '$cell' fits several repos"; continue }
+            if ($res.Match -and [string]::Equals((ConvertTo-CoordFullPath $res.Match), $known[0], $cmp)) { $mine.Add($o) }
+        }
+        if (-not $head) { return [pscustomobject]@{ Ci = 'unknown'; Why = 'no Baseline table' } }
+        if ($head -cnotcontains 'CI') { return [pscustomobject]@{ Ci = 'unknown'; Why = 'the Baseline table has no CI column' } }
+        if ($doubt) { return [pscustomobject]@{ Ci = 'unknown'; Why = $doubt } }
+        if ($mine.Count -ne 1) { return [pscustomobject]@{ Ci = 'unknown'; Why = "$($mine.Count) Baseline rows name this repo (one is needed)" } }
+        $v = ([string]$mine[0]['CI']).Trim()
+        if ($v -ieq 'none') { return [pscustomobject]@{ Ci = 'none'; Why = $null } }
+        if ($v -ieq 'yes') { return [pscustomobject]@{ Ci = 'yes'; Why = $null } }
+        return [pscustomobject]@{ Ci = 'unknown'; Why = "the Baseline CI cell is '$v', neither yes nor none" }
+    }
+    catch { return [pscustomobject]@{ Ci = 'unknown'; Why = "the Baseline could not be read: $($_.Exception.Message)" } }
 }
 
 # Files changed on $Head since its merge base with $Base. --no-renames lists a
