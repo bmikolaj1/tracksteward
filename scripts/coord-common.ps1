@@ -1,10 +1,10 @@
 # Ported from the private coordinate toolkit (coord-common.ps1), 2026-10-18.
 #
 # coord-common.ps1 - helpers shared by the coordinate scripts. Today
-# coord-log.ps1, coord-brief.ps1, repo-snapshot.ps1 and slot-check.ps1
-# dot-source it, from the same folder:
-# `. (Join-Path $PSScriptRoot 'coord-common.ps1')`. merge-verify.ps1 and the
-# scope guard hook are to share it too (ported in a later slice).
+# coord-log.ps1, coord-brief.ps1, repo-snapshot.ps1, slot-check.ps1 and
+# merge-verify.ps1 dot-source it, from the same folder:
+# `. (Join-Path $PSScriptRoot 'coord-common.ps1')`. The scope guard hook is to
+# share it too (ported in a later slice).
 #
 # Runs under Windows PowerShell 5.1 and PowerShell 7. Windows is the verified
 # platform; every behaviour that differs elsewhere branches on
