@@ -432,6 +432,19 @@ and tells each live track "report to <new> from now on". It reads and logs any r
 to the old coordinator. In the desktop app, a session started from inside another session nests
 under it; if any did, move it out before the user closes the old coordinator.
 
+**With the script**, the ledger half is one call from the new coordinator, in the main checkout:
+`& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-handoff.ps1" -NewSession '<your session name or id>'`
+(`-Ledger <path>` names another ledger). In one replacement it rewrites the Coordinator line
+(`took over HH:mm from "<old>"`, keeping one `before that` level) and adds a `HANDOFF` line to the Log.
+It first fetches `origin main` of every repo a live Tracks row names, and prints one `MESSAGE` line per
+live track with that repo's `main` sha, then six `CHECKLIST` lines. It sends nothing and does not
+register the ledger: send each `MESSAGE` line yourself, then run `coord-log.ps1 -Register`. It refuses
+(`COORD-HANDOFF: NOT WRITTEN - <reason>`; the ledger is byte-unchanged, except that a ledger which
+vanishes at the swap is not recreated and the temp file holding the new text is named) when the ledger
+changed during the fetch, when `-NewSession` is a track's session or the current coordinator, or when
+a live row's Repo is not the full path of a git working tree's top level. The fetches are not undone
+by a refusal. Run it in process (`&`), not through `powershell.exe -File`.
+
 ## Day close (built from the ledger)
 
 Resolve first: any finding still PENDING goes to the user before the handover is written. Then
