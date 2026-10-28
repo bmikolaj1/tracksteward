@@ -1575,8 +1575,11 @@ Invoke-Group 'S6 plugin wiring' {
     $null = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-keep' -Cwd $wtA2 -Source 'resume')
     $keepAge = ([DateTime]::UtcNow - [System.IO.File]::GetLastWriteTimeUtc($keepA)).TotalMinutes
     Report (([System.IO.File]::ReadAllText($keepA) -ceq ($wtA1 + "`n")) -and $keepAge -lt 5) 'S6-29b a resume of a session with an anchor refreshes its write time and keeps its content' ("age min: $keepAge")
+    $staleA = Join-Path $sd 'p-stale.anchor'
+    [System.IO.File]::WriteAllText($staleA, "x`n", $utf8)
+    [System.IO.File]::SetLastWriteTimeUtc($staleA, [DateTime]::UtcNow.AddDays(-9))
     $null = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-after' -Cwd $wtA1)
-    Report ((Test-Path -LiteralPath (Get-AnchorPath 'sa-after')) -and (Test-Path -LiteralPath $keepA)) 'S6-29c the next session writes its anchor (so its prune ran) and the refreshed anchor survives it' ''
+    Report ((Test-Path -LiteralPath (Get-AnchorPath 'sa-after')) -and -not (Test-Path -LiteralPath $staleA) -and (Test-Path -LiteralPath $keepA)) 'S6-29c the next session''s write prunes a 9-day-old anchor (so the prune ran) and the refreshed anchor survives it' ''
     Reset-State
     $sd = Join-Path $idxDir 'sessions'
     [void][IO.Directory]::CreateDirectory($sd)
@@ -1588,6 +1591,8 @@ Invoke-Group 'S6 plugin wiring' {
     $null = Invoke-Guard -Json (New-SessionStartJson -Session 'q-old' -Cwd $wtA1 -Source 'resume')
     $oldAge = ([DateTime]::UtcNow - [System.IO.File]::GetLastWriteTimeUtc($oldB)).TotalDays
     Report ($oldAge -gt 29) 'S6-30b no index: a resume of a session that has an old anchor does not refresh it either' ("age days: $oldAge")
+    # a cwd that looks full but that GetFullPath rejects (Windows PowerShell 5.1 / .NET Framework): silent with no index
+    Test-Allow 'S6-30c no index: a SessionStart whose cwd GetFullPath rejects is still a silent allow' (Invoke-Guard -Json (New-SessionStartJson -Session 'sa-badcwd' -Cwd 'C:\a|b'))
 
     # --- name-only Session cells never bind across repos (only an id-shaped cell is a token) ---
     $nameA = New-LedgerRow 'A1' $repoA 'a1-branch' $wtA1 $scopeA1 'track-a1' 'running'

@@ -148,8 +148,9 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
    `TRACKSTEWARD_GUARD=off` in the environment turns it off (anything that can set the hook's
    environment or write Claude's settings can do the same: it is not a lock). Register before
    the tracks start: a session that starts before the ledger is registered has no anchor and
-   binds by its cwd. That includes your own session on a day with no earlier ledger: keep the
-   coordinator in the main checkout and do not `cd` it into a track's worktree.
+   binds by its cwd (a later resume or compact writes it an anchor from wherever it is then).
+   That includes your own session on a day with no earlier ledger: keep the coordinator in the
+   main checkout and do not `cd` it into a track's worktree.
 2. Snapshot each repo: `git fetch --prune origin`, origin/main sha, open PRs and their checks,
    remote branches, `git worktree list`, the newest handover. Record the baseline shas, and
    whether the repo has CI at all (the Baseline's CI column, `yes` or `none`: the slot check

@@ -16,9 +16,10 @@
 # and clock) are honored the same way. hooks/hooks.json starts the script through
 # a -Command launcher; when the launcher fails before the script runs
 # (CLAUDE_PLUGIN_ROOT unset, the script missing, a policy overriding the
-# execution policy) the hook exits 1. A probe (2026-10-28, plugin root unset, so
-# the script path was empty) showed the edit goes ahead and the session sees no
-# hook text: for that call the guard is silently off.
+# execution policy) the hook exits 1. Probed once (2026-10-28, a nested
+# claude -p session, plugin root unset, so the launcher ran a missing file): the
+# edit went ahead and the model reported no hook text, so for that call the
+# guard is silently off. The other causes are listed from reading, not probed.
 #
 # WHAT IT GUARDS: the acting session, not the file's owner. A session bound to a
 # live Tracks row of a coordinator's ledger may write in its own worktree only
@@ -72,17 +73,20 @@
 # BINDING: the anchors are, in order, the lines of the session anchor file
 # `<index dir>\sessions\<session_id>.anchor`, the event `cwd`, and
 # CLAUDE_PROJECT_DIR. The SessionStart run writes the anchor file once, holding
-# the event cwd (a resume or compact keeps it), and only when today's or
-# yesterday's index exists: a day with no registered coordinator leaves no
-# anchor. A write also prunes anchor files not written for 7 days (by their last
-# write time) from the same folder; a SessionStart event (start, resume, compact,
-# clear) for a session that already has an anchor refreshes its write time and
-# changes nothing else, but a session with no SessionStart event for 7 days
-# loses its anchor to the next session's write and binds by cwd. A track that
-# started before its coordinator registered the ledger has no anchor and binds
-# by cwd; so does the coordinator's own session when it started on a day with no
-# index (it is then not recognized as the coordinator, see LIMITS, Coordinator:
-# the skill keeps that session in the main checkout). A PreToolUse call that finds the
+# the event cwd, and only when today's or yesterday's index exists: a day with
+# no registered coordinator leaves no anchor, and with no index nothing is
+# written, refreshed or pruned. A write also prunes the anchor files in the same
+# folder whose last write time is more than 7 days old. A later SessionStart
+# event of a session that already has an anchor (the hook cannot tell start,
+# resume, compact and clear apart), on a day with an index, only refreshes that
+# write time. The second-line append below also sets it, so an anchor is pruned
+# when 7 days pass with neither; its session then binds by cwd until its next
+# SessionStart event on a day with an index writes a new anchor from the cwd it
+# has at that moment. A track that started before its coordinator registered the
+# ledger has no anchor and binds by cwd in the same way; so does the coordinator's
+# own session when it started on a day with no index (it is then not recognized
+# as the coordinator, see LIMITS, Coordinator: the skill keeps that session in the
+# main checkout). A PreToolUse call that finds the
 # file holding one line, which binds nothing, while the cwd or
 # CLAUDE_PROJECT_DIR binds a row, appends that worktree root as its second line
 # (two parallel calls may both append; harmless), except in a
@@ -122,8 +126,9 @@
 # timeout there gives the deadline warning; the anchor file read waits at most
 # the time left; the anchor append is
 # skipped, with a warning, under 200 ms left. Anchor mode has its own 1 s budget
-# and exits silently for an unusable session id, with no index, for a session that
-# already has its anchor, and when it loses the create race to another run; any
+# and exits silently for an unusable session id, with no index (after the full-cwd
+# check, which warns first), for a session that already has its anchor (a failed
+# refresh is ignored), and when it loses the create race to another run; any
 # other failure writes no anchor and warns (a prune failure after the anchor is
 # written is ignored).
 #
@@ -1095,7 +1100,6 @@ function Invoke-CsgAnchorMode {
     $cwd = Get-CsgProp $script:csgEvt 'cwd'
     if (-not (Test-CsgDrivePath $cwd)) { Add-CsgWarning 'session anchor not written (the event has no full cwd)'; Exit-CsgAllow }
     try {
-        $full = ConvertTo-CsgFull $cwd
         $dir = [System.IO.Path]::Combine((Get-CoordIndexDir), 'sessions')
         $file = [System.IO.Path]::Combine($dir, $sid + '.anchor')
         # Anchor policy: only a day with a registered coordinator (today's or
@@ -1103,10 +1107,11 @@ function Invoke-CsgAnchorMode {
         # nothing is written, refreshed or pruned, not even the sessions folder.
         if (-not ([System.IO.File]::Exists((Get-CoordIndexPath -Date $script:csgToday)) -or [System.IO.File]::Exists((Get-CoordIndexPath -Date $script:csgYday)))) { Exit-Csg 0 }
         if ([System.IO.File]::Exists($file)) {
-            # A start, resume, compact or clear of a session that already has its
-            # anchor keeps the file as it is; only its write time is refreshed, so
-            # the 7-day prune below does not take the anchor of a session that
-            # started or resumed recently.
+            # A SessionStart event (the hook does not tell start, resume, compact
+            # and clear apart) for a session that already has its anchor, on a day
+            # with an index, keeps the file as it is; only its write time is
+            # refreshed, so the 7-day prune below does not take the anchor of a
+            # session that sent one lately. A refresh that fails is ignored.
             try { [System.IO.File]::SetLastWriteTimeUtc($file, [DateTime]::UtcNow) } catch { }
             Exit-Csg 0
         }
@@ -1114,6 +1119,9 @@ function Invoke-CsgAnchorMode {
             Add-CsgWarning ('session anchor not written (the ' + $script:csgAnchorBudgetMs + ' ms budget ran out)')
             Exit-CsgAllow
         }
+        # Resolved only here, after the index check: a cwd that GetFullPath rejects
+        # warns only on a day with an index.
+        $full = ConvertTo-CsgFull $cwd
         [void][System.IO.Directory]::CreateDirectory($dir)
         $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($full + "`n")
         $fs = $null
