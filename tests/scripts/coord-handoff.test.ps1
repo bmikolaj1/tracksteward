@@ -549,6 +549,7 @@ $badNames = @(
     @('a name ending in a zero-width space', ('Evening' + [char]0x200B)), @('a bidi override (U+202E)', ('a' + [char]0x202E + 'b')),
     @('a lone surrogate (U+D800)', ('a' + [char]0xD800 + 'b')),
     @('an emoji (a surrogate pair, outside the BMP)', ('Night ' + [char]::ConvertFromUtf32(0x1F680))),
+    @('a braille blank (U+2800)', ('Evening' + [char]0x2800)), @('an object replacement character (U+FFFC)', ('Evening' + [char]0xFFFC)),
     @('a soft hyphen (U+00AD)', ('Eve' + [char]0xAD + 'ning')), @('a no-break space (U+00A0)', ('Evening' + [char]0xA0 + 'shift')),
     @('81 characters', ('x' * 81)), @('81 characters after the trim', ('  ' + ('x' * 81) + '  ')),
     @('empty', ''), @('blank', '   '),
@@ -570,7 +571,9 @@ $accepted = @(
     @('80 characters', ('y' * 80), ('y' * 80)),
     @('80 characters padded with spaces (trimmed)', ('  ' + ('z' * 80) + '  '), ('z' * 80)),
     @('an id', $idName, $idName),
-    @('a name with spaces and non-ASCII', ('Caf' + $eAcute + ' night shift'), ('Caf' + $eAcute + ' night shift'))
+    @('a name with spaces and non-ASCII', ('Caf' + $eAcute + ' night shift'), ('Caf' + $eAcute + ' night shift')),
+    @('an apostrophe, parentheses, a hyphen and a colon', 'Sam''s coord (night-2): v2', 'Sam''s coord (night-2): v2'),
+    @('CJK, digits and a combining accent', ([string][char]0x65E5 + [char]0x672C + ' 42 e' + [char]0x0301), ([string][char]0x65E5 + [char]0x672C + ' 42 e' + [char]0x0301))
 )
 foreach ($c in $accepted) {
     $p = New-HLedger $linesV
@@ -690,9 +693,14 @@ $badRepos = @(
     @('a directory that does not exist', 'gone13', (Join-Path $root 'no\such\dir13')),
     @('a path holding parentheses', 'paren13', (Join-Path $root 'My (stuff)')),
     @('a plain folder inside another repo', 'inner13', (Join-Path $fxR.Launch 'notarepo13'), 'is not the top level of a git working tree'),
+    @('a bare repository', 'bare13r', (Join-Path $root 'bare13.git'), 'is not the top level of a git working tree'),
+    @('a folder in no repository', 'norepo13r', (Join-Path $root 'norepo13'), 'git could not read Repo'),
     @('the .git folder of a repo', 'dotgit13', (Join-Path $fxR.Launch '.git'), 'is not the top level of a git working tree')
 )
+$bare13 = Join-Path $root 'bare13.git'
+Invoke-HookTestGit $root @('init', '--bare', '--quiet', $bare13)
 [void][IO.Directory]::CreateDirectory((Join-Path $root 'My (stuff)'))
+[void][IO.Directory]::CreateDirectory((Join-Path $root 'norepo13'))
 [void][IO.Directory]::CreateDirectory((Join-Path $fxR.Launch 'notarepo13'))
 foreach ($c in $badRepos) {
     $p = New-HLedger @(Get-HLines (New-CoordLine 'Old coordinator') @($liveR, (New-Row $c[1] $c[2] 'sess-b' 'bb' '' 'running')))

@@ -16,10 +16,11 @@
 #      character other than letters, digits, combining marks, punctuation,
 #      symbols and the plain space (so no zero-width space, BOM, soft hyphen,
 #      bidi mark or non-breaking space, and no character outside the Basic
-#      Multilingual Plane, an emoji included; letters and marks that draw
-#      nothing, such as a Hangul filler or a variation selector, are not
-#      recognized), no backtick, no |, no double quote, not a <placeholder>,
-#      and not holding
+#      Multilingual Plane, an emoji included; some other letters and marks that
+#      draw nothing, such as a Hangul filler or a variation selector, are not
+#      recognized, and a code point the host's Unicode tables do not know yet,
+#      for example a recent letter on Windows PowerShell 5.1, is refused),
+#      no backtick, no |, no double quote, not a <placeholder>, and not holding
 #      "; before that: " (the text the Coordinator line is cut at). Any
 #      argument left over after the parameters (a loose word, or an unknown
 #      parameter such as -Time) is refused: the stamp is this script's. Then
@@ -56,9 +57,10 @@
 #      is refused, "row <track>: Repo '<cell>' is not a full path". The cell
 #      must be an existing folder and the top level of a git working tree
 #      (git rev-parse --is-inside-work-tree is true and --show-prefix is empty,
-#      so the spelling does not matter: a junction or a subst drive is fine; a
-#      folder inside another repo, or its .git folder, would otherwise fetch the
-#      enclosing repo under the wrong name). The distinct
+#      so the spelling does not matter: a junction is fine, and so is a subst
+#      drive whose repo is below its root; a folder inside another repo, or its
+#      .git folder, would otherwise fetch the enclosing repo under the wrong
+#      name). The distinct
 #      full paths (a trailing separator dropped, compared as Get-CoordPath
 #      Comparison says) are kept in first-seen order; git runs on that full
 #      path, and the repo leaf in the Log line and the MESSAGE lines is its
@@ -104,7 +106,9 @@
 # is lost, as coord-log.ps1's header says. So: no hand edit of the ledger while
 # a ledger script is running.
 #
-# Limits: a Repo cell on a network share is checked for existence and probed
+# Limits: GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE are not cleared; run the
+# script from a shell where they are unset (git run from a hook sets them), or
+# every Repo cell would be read through that one repository. A Repo cell on a network share is checked for existence and probed
 # with git (step 3) and fetched (step 4) with no timeout, so an unreachable server can stall the run
 # there (no lock is held then). GIT_TERMINAL_PROMPT=0 stops git's own terminal
 # prompt only: an ssh passphrase prompt or a credential-manager window can
@@ -177,8 +181,9 @@ if ($NewSession -match $ctlRe) { Exit-NotWritten '-NewSession holds a tab, a lin
 # space) pass the trim and make a name that looks like another; the regex sees
 # UTF-16 code units, so a surrogate pair (any non-BMP character) is refused too.
 # An allow-list, not a Cf test: .NET's \p{Cf} does not match every format character,
-# and it files the soft hyphen (U+00AD) under punctuation, so that one is named.
-if ($NewSession -match '[^\p{L}\p{N}\p{M}\p{P}\p{S} ]|\u00AD') { Exit-NotWritten '-NewSession holds a character other than letters, digits, combining marks, punctuation, symbols and the plain space (no invisible, no-break-space or non-BMP character)' }
+# and it files the soft hyphen (U+00AD) under punctuation, so that one is named,
+# as are the braille blank (U+2800) and the object replacement character (U+FFFC).
+if ($NewSession -match '[^\p{L}\p{N}\p{M}\p{P}\p{S} ]|[\u00AD\u2800\uFFFC]') { Exit-NotWritten '-NewSession holds a character other than letters, digits, combining marks, punctuation, symbols and the plain space (no invisible, no-break-space or non-BMP character)' }
 if ($NewSession.Contains('`')) { Exit-NotWritten '-NewSession holds a backtick' }
 if ($NewSession.Contains('|')) { Exit-NotWritten '-NewSession holds a |, which would break a Tracks or Log reader' }
 if ($NewSession.Contains('"')) { Exit-NotWritten '-NewSession holds a double quote; the ledger writes the name between double quotes' }
@@ -299,7 +304,7 @@ foreach ($row in $rows) {
     $cellText = Get-CellText ([string]$row.Session)
     $tok = Get-CoordSessionToken ([string]$row.Session)
     $same = ($cellText -and [string]::Equals($cellText, $new, [System.StringComparison]::OrdinalIgnoreCase))
-    # An id followed by a note ("local_1234abcd (opus)") names that id too.
+    # An id followed by a note (an id, a space, then "(opus)") names that id too.
     $firstTok = $null
     if ($cellText) { $firstTok = Get-CoordSessionToken ($cellText -split '\s+')[0] }
     if ($same -or ($tok -and $newToken -and $tok -ceq $newToken) -or ($firstTok -and $newToken -and $firstTok -ceq $newToken)) { Exit-NotWritten "-NewSession $new is a track's session (row $(Get-TrackName $row)), not a new coordinator" }
