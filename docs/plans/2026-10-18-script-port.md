@@ -184,6 +184,18 @@ library), each with a test that runs the script from the installed layout.
   shown, a plugin path with a space works. Run in a scratch session opened with
   `claude --plugin-dir <worktree>`; this needs one interactive session (the last nested `claude -p`
   attempt failed on an expired login), so it is the author's two minutes or a fixed login first.
+  **Result, 2026-10-28 (S6): passed, with one change to the form.** The login worked again, so
+  the probe ran as nested `claude -p --plugin-dir` sessions under Windows PowerShell 5.1: the
+  `"shell": "powershell"` entry ran, `${CLAUDE_PLUGIN_ROOT}` expanded (and the plugin root is
+  exported as an environment variable), a plugin path with a space worked, and exit 2 blocked
+  with the stderr text shown, but only after `; exit $LASTEXITCODE` was added to the command
+  (under `-Command` a script's `exit 2` is lost). `powershell -File` reads `[` `]` in the path
+  as a wildcard and can run a sibling folder's copy, so `hooks.json` ships the exec form with
+  `-Command`, the path read from `$env:CLAUDE_PLUGIN_ROOT`, wildcard-escaped and exit-forwarded;
+  that form was probed from a plugin folder with a space, brackets and a backtick in its name.
+  A launcher that fails before the script runs was probed once, in a nested `claude -p` session
+  with the plugin root unset (exit 1): the edit went ahead and the model reported no hook text,
+  so the guard is silently off for that call. What an interactive session shows was not probed.
 - **P2 (first slice):** `${CLAUDE_PLUGIN_ROOT}` expands in the skill's script lines the way it
   already does for the template paths, and the Bash and PowerShell tools both run them.
   *Docs, 2026-10-18:* the variable is substituted in a plugin skill's body before the model sees
@@ -231,10 +243,13 @@ the default unless the coordinator opens a second.
 ## 9. Open questions (beyond D1-D8)
 
 1. Accept the frozen-seam leftovers of the private handoff and guard as they are (they are stated
-   limits in the script headers), or fix any in the port?
+   limits in the script headers), or fix any in the port? **Ruled 2026-10-28 (the author: "Accept
+   all"):** accepted as they are, for the guard too (inherited `GIT_DIR` / `GIT_WORK_TREE` are not
+   cleared); any fix is 0.2.1.
 2. Version: 0.2.0 for the whole port, or 0.2.0 at S4 (scripts) and 0.3.0 with the guard?
 3. Guard default when the plugin is installed: on (inert until a ledger is registered), or off
-   until the user sets the switch?
+   until the user sets the switch? **Ruled 2026-10-28 (the author: "On, inert until registered"):**
+   on; `TRACKSTEWARD_GUARD=off` in the environment turns it off.
 
 Findings from S3, ruled 2026-10-28 (one line each; fix in S7 or 0.2.1):
 

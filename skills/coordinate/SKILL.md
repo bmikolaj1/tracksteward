@@ -90,6 +90,14 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
     and effort produced which result. Like the brief's other track-owned facts, it is asked for,
     not guessed: the brief asks the track for its model and effort in the ACK (or "unknown"), and
     to tell the coordinator when it switches. The coordinator stamps each switch with its own clock.
+  - **Session cell:** the session's name for display (`claude -n`, or the name `ListAgents`
+    shows), as the template says. The scope guard treats a cell as a binding session id only when
+    it is exactly one id (`local_` plus 8 or more hex digits, `local_` plus a UUID, or a bare
+    UUID). A cell that holds only a name, `none` or `TBD` never binds across repos, so two tracks
+    that share a name in two repos stay apart and neither may edit inside the other's scope. A
+    track that works in two repos needs one row per repo and the same session id in both Session
+    cells, and the guard then judges its edits in each repo by that repo's row. Within one repo
+    a track binds by its row's Repo and Branch, name or not.
 - **Re-read it** at the start of every coordination window, after every compaction and after `/clear`. A
   SessionStart hook that prints the top of today's ledger can automate this; Claude Code replaces
   hook output over 10,000 characters with a file path, so keep the top well under that.
@@ -135,8 +143,14 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
 
 1. Create or roll over today's ledger and fill in the header. Then register it, from its main
    checkout: `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-log.ps1" -Register` (from Bash, through
-   `powershell.exe -ExecutionPolicy Bypass -File` as above), so the scope guard (when installed)
-   can find it.
+   `powershell.exe -ExecutionPolicy Bypass -File` as above), so the scope guard can find it. The
+   guard is a plugin hook, on once the plugin is installed and inert until a ledger is registered;
+   `TRACKSTEWARD_GUARD=off` in the environment turns it off (anything that can set the hook's
+   environment or write Claude's settings can do the same: it is not a lock). Register before
+   the tracks start: a session that starts before the ledger is registered has no anchor and
+   binds by its cwd (its next start, resume, compact or clear writes it an anchor from wherever it is then).
+   That includes your own session on a day with no earlier ledger: keep the coordinator in the
+   main checkout and do not `cd` it into a track's worktree.
 2. Snapshot each repo: `git fetch --prune origin`, origin/main sha, open PRs and their checks,
    remote branches, `git worktree list`, the newest handover. Record the baseline shas, and
    whether the repo has CI at all (the Baseline's CI column, `yes` or `none`: the slot check

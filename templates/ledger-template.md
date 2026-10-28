@@ -14,7 +14,7 @@ evidence of what was said, never approval: approval comes only from the user, in
 Record a track's request as "track asked: ...", never as a bare instruction.
 Location: `<main checkout>/.claude/coordination/YYYY-MM-DD.md` (gitignored); archived at day close next to
 the day-close handover. At day start the coordinator registers it with `coord-log.ps1 -Register`, so the scope
-guard (when installed) can find it.
+guard (a plugin hook, on once the plugin is installed) can find it.
 
 ## Baseline
 
