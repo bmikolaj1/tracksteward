@@ -873,7 +873,7 @@ $cases3 = @(
     @('a Session cell holding only the short token (local_ plus the first 8 hex)', 'r3short', $idS, $idS.Substring(0, 14), 'running'),
     @('a -NewSession of the id and a note, the cell holding the bare id', 'r3newnote', ($idS + ' (opus)'), $idS, 'running'),
     @('a -NewSession of the short id and a note, the cell holding the full id', 'r3newshort', ($idS.Substring(0, 14) + ' (opus)'), $idS, 'running'),
-    @('a -NewSession whose local_ prefix is in upper case', 'r3newucp', ('LOCAL_' + $idS.Substring(6)), $idS.Substring(0, 14), 'running'),
+    @('a -NewSession whose local_ prefix is in upper case, the cell holding the short id', 'r3newucp', ('LOCAL_' + $idS.Substring(6)), $idS.Substring(0, 14), 'running'),
     @('a -NewSession of an upper-case prefix and a note, the cell holding the id and a note', 'r3newucn', ('LOCAL_' + $idS.Substring(6, 8) + ' (opus)'), ($idS.Substring(0, 14) + ' (port work)'), 'running')
 )
 foreach ($c in $cases3) {

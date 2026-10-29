@@ -16,8 +16,9 @@
 #      character other than letters, digits, combining marks, punctuation,
 #      symbols and the plain space (so no zero-width space, BOM, bidi mark or
 #      non-breaking space, and no character outside the Basic
-#      Multilingual Plane, an emoji included; the soft hyphen, braille blank and
-#      object replacement character are refused by name; some other letters and marks that
+#      Multilingual Plane, an emoji included; the braille blank and object
+#      replacement character are refused by name, and so is the soft hyphen on
+#      Windows PowerShell 5.1 (elsewhere the allow-list refuses it); some other letters and marks that
 #      draw nothing, such as a Hangul filler or a variation selector, are not
 #      recognized, and a code point the host's Unicode tables do not know yet,
 #      for example a recent letter on Windows PowerShell 5.1, is refused),
@@ -109,10 +110,10 @@
 # a ledger script is running.
 #
 # Limits: GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE are not cleared; run the
-# script from a shell where they are unset. An inherited absolute GIT_DIR (git
-# sets GIT_DIR when it runs a hook; from a linked worktree it is absolute, and a
-# relative one is resolved under each Repo cell instead) makes every Repo cell be
-# read through that one repository. A Repo cell on a network share is checked for existence and probed
+# script from a shell where they are unset. An inherited GIT_DIR (git sets
+# it when it runs a hook) breaks the run: an absolute one makes every Repo cell and
+# the ledger's folder be read through that one repository; a relative one is
+# resolved under each folder git is run in, where it usually names no repository. A Repo cell on a network share is checked for existence and probed
 # with git (step 3) and fetched (step 4) with no timeout, so an unreachable server can stall the run
 # there (no lock is held then). GIT_TERMINAL_PROMPT=0 stops git's own terminal
 # prompt only: an ssh passphrase prompt or a credential-manager window can
@@ -185,8 +186,9 @@ if ($NewSession -match $ctlRe) { Exit-NotWritten '-NewSession holds a tab, a lin
 # space) pass the trim and make a name that looks like another; the regex sees
 # UTF-16 code units, so a surrogate pair (any non-BMP character) is refused too.
 # An allow-list, not a Cf test: .NET's \p{Cf} does not match every format character,
-# and it files the soft hyphen (U+00AD) under punctuation, so that one is named,
-# as are the braille blank (U+2800) and the object replacement character (U+FFFC).
+# and char.GetUnicodeCategory files the soft hyphen (U+00AD) under punctuation on .NET
+# Framework (Windows PowerShell 5.1), so there it is named, as are the braille blank
+# (U+2800) and the object replacement character (U+FFFC), which are symbols everywhere.
 if ($NewSession -match '[^\p{L}\p{N}\p{M}\p{P}\p{S} ]') { Exit-NotWritten '-NewSession holds a character other than letters, digits, combining marks, punctuation, symbols and the plain space (no invisible, no-break-space or non-BMP character)' }
 if ($NewSession -match '[\u00AD\u2800\uFFFC]') { Exit-NotWritten '-NewSession holds U+00AD, U+2800 or U+FFFC, a character that can draw nothing or look like a space' }
 if ($NewSession.Contains('`')) { Exit-NotWritten '-NewSession holds a backtick' }

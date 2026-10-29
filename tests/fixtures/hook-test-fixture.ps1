@@ -19,7 +19,7 @@
 #      repo fails its case.
 #
 # Kept from the private fixture: everything the coord-common and coord-log
-# suites use, plus what the scope guard suite (a later slice) will need:
+# suites use, plus what the scope guard suite needs:
 # StdinText / RemoveEnv on Invoke-HookTestPowerShell, ConvertTo-HookTestAsciiJson
 # and Copy-HookTestScripts.
 # Dropped: ConvertTo-HookTestMsysPath (Git-Bash path spelling), New-HookTestToolEvent

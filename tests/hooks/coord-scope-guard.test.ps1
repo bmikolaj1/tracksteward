@@ -1595,7 +1595,7 @@ Invoke-Group 'S6 plugin wiring' {
     # (the hook always runs under powershell.exe, whose GetFullPath rejects the '|'; under another host, where GetFullPath accepts it, S6-30c and S6-30e pass trivially and S6-30d fails)
     Test-Allow 'S6-30c no index: a SessionStart whose cwd GetFullPath rejects is still a silent allow' (Invoke-Guard -Json (New-SessionStartJson -Session 'sa-badcwd' -Cwd 'C:\a|b'))
     $null = Use-Ledger -Rows @((RowA1))
-    # The GetFullPath branch's own warning: the other two anchor warnings (no full cwd, budget ran out) share the "session anchor not written" text.
+    # The warning of a cwd that GetFullPath rejects (its text names GetFullPath): the other two anchor warnings (no full cwd, budget ran out) share the "session anchor not written" text.
     $badR = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-badcwd2' -Cwd 'C:\a|b')
     $badV = Get-Verdict $badR
     Report ($badV.Kind -eq 'warn' -and $badV.Msg -match 'session anchor not written' -and $badV.Msg -match 'GetFullPath' -and $badV.Msg -notmatch 'no full cwd' -and $badV.Msg -notmatch 'budget ran out' -and -not (Test-Path -LiteralPath (Get-AnchorPath 'sa-badcwd2'))) 'S6-30d with an index and no anchor yet: the same cwd warns that the anchor was not written (the GetFullPath rejection, not the no-cwd or budget warning), and writes none' (Show-Run $badR $badV)
