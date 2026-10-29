@@ -65,7 +65,7 @@ and the order. The human stays in the loop for every decision and every merge.
 |---|---|
 | **Coordinator** | One ordinary Claude Code session that owns the *order* of work across parallel sessions. It writes no product code and reads no diffs. |
 | **Track** | One unit of parallel work: one session, in its own worktree, on its own branch, with a declared file scope, ending in one PR. |
-| **Ledger** | One markdown file per day holding the coordination state of record: Baseline, Tracks, Merge slots, Owed checks, Decisions, Findings, Log. |
+| **Ledger** | One markdown file per day holding the coordination state of record: Baseline, Tracks, Merge slots, Owed checks, Queue, Decisions, Findings, Log. |
 | **Slot** | The coordinator's permission for one track to do one serialized thing: usually a merge, sometimes a write to a shared checkout. One slot is open at a time. |
 | **Brief** | The file that tells one track its task, baseline, scope, siblings and rules, announced to the track in one pointer line and acknowledged with an ACK. |
 | **Finding** | Something a track noticed outside its own scope. The track reports it in a fixed shape instead of fixing it, filing it or ignoring it. |
@@ -206,6 +206,13 @@ calls these from the plugin folder (`${CLAUDE_PLUGIN_ROOT}/scripts/`):
 - `coord-brief.ps1`: renders a track's brief from the template and, with `-Check`, verifies it
   before the pointer line is printed.
 - `coord-handoff.ps1`: hands the coordinator role to a new session.
+- `coord-set.ps1`: changes one Tracks cell (Status or Model) with a time from the clock;
+  `-State <word>` writes a Status cell as one of ten state words (`QUEUED`, `BRIEFED`, `RUNNING`,
+  `PR-OPEN`, `WAIT-USER`, `WAIT-SLOT`, `WAIT-QUOTA`, `BLOCKED`, `MERGED`, `DONE`).
+- `coord-status.ps1`: the status board, one read-only pass over the structured ledger sections
+  (Tracks, Merge slots, Owed checks, Findings, Queue) grouped as running, waiting, queued,
+  blocked and done, each line ending in the ledger line it came from; `-Verify` checks the
+  claims it can against `gh`.
 
 Every script ends with one verdict line and prints text for you to send; none sends a message.
 

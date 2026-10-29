@@ -12,7 +12,10 @@
 # every file and folder in it except the sessions/ subfolder, which a live
 # scope guard on the host writes to at random.
 # Changed expectation: C7 no longer expects a "v2 field notes" section (the
-# public template has none).
+# public template has none) and expects a "## Queue" section between Owed
+# checks and Decisions.
+# New C1 rows: Get-CoordStamp, Expand-CoordNow, Test-CoordTypedTime (the {now}
+# helpers coord-set.ps1 uses).
 # New rows: C12 Test-CoordWindows; the session-token cases of the id rule (a
 # bare uuid, an upper-case id or uuid lower-cased, a 7-hex id, a uuid with a
 # wrong group length, every plain name -> none, two pairs of backticks, ...), and
@@ -152,6 +155,13 @@ Assert-Coord 'C1 LF: Test-CoordSha40 still accepts 40 hex' (Test-CoordSha40 ('a'
 $cl = Test-CoordLedgerCanonical -Path (Join-Path $root 'x.md') -Date ('2026-03-05' + $lf)
 Assert-Coord 'C1 LF: Test-CoordLedgerCanonical refuses a date ending in LF' (-not $cl.Ok -and "$($cl.Error)".Contains('not yyyy-MM-dd')) "$($cl.Error)"
 
+# The stamp and the {now} placeholder coord-set.ps1 writes a time with.
+$t0 = [datetime]::new(2026, 10, 22, 9, 5, 0)
+Assert-Coord 'C1 Get-CoordStamp: HH:mm, two digits, from the given time' ((Get-CoordStamp $t0) -ceq '09:05')
+Assert-Coord 'C1 Expand-CoordNow: every {now} becomes the stamp; other braces stay' ((Expand-CoordNow 'a {now} b {now} {x} {NOW}' $t0) -ceq 'a 09:05 b 09:05 {x} {NOW}')
+Assert-Coord 'C1 Test-CoordTypedTime: a typed H:mm / HH:mm is found, with or without {now} beside it, also glued to letters or seconds, and an id or port with a colon' ((Test-CoordTypedTime 'ACK 08:40') -and (Test-CoordTypedTime 'at 9:05.') -and (Test-CoordTypedTime '{now} then 14:10 Sonnet') -and (Test-CoordTypedTime '9:05pm') -and (Test-CoordTypedTime '09:12Z') -and (Test-CoordTypedTime 'T10:22') -and (Test-CoordTypedTime 'ACK08:40') -and (Test-CoordTypedTime '09:12:30') -and (Test-CoordTypedTime 'F3:12') -and (Test-CoordTypedTime '80:80'))
+Assert-Coord 'C1 Test-CoordTypedTime: no time in {now}, 1.5, v1:2, 10:420 or a file:line reference' (-not ((Test-CoordTypedTime 'merged {now}') -or (Test-CoordTypedTime '1.5 days') -or (Test-CoordTypedTime 'v1:2') -or (Test-CoordTypedTime '10:420 is no time') -or (Test-CoordTypedTime 'see coord-brief.ps1:96') -or (Test-CoordTypedTime 'x.ps1:80') -or (Test-CoordTypedTime 'at coord-log.ps1:217')))
+
 Write-Host "(C2) Tracks table"
 $ledger = Join-Path $root 'ledger.md'
 [System.IO.File]::WriteAllText($ledger, @"
@@ -265,7 +275,7 @@ $threw = $null
 try { $rows = @(Read-CoordLedgerTracks $tpl) } catch { $threw = "$_" }
 Assert-Coord 'C7 ledger-template.md parses with no rows' (-not $threw -and $rows.Count -eq 0) "$threw"
 $tplText = [System.IO.File]::ReadAllText($tpl)
-$order = @('## Baseline', '## Tracks', '## Merge slots', '## Owed checks', '## Decisions', '## Findings', '## Log') | ForEach-Object { $tplText.IndexOf($_) }
+$order = @('## Baseline', '## Tracks', '## Merge slots', '## Owed checks', '## Queue', '## Decisions', '## Findings', '## Log') | ForEach-Object { $tplText.IndexOf($_) }
 $sorted = $true
 for ($k = 0; $k -lt $order.Count; $k++) { if ($order[$k] -lt 0 -or ($k -gt 0 -and $order[$k] -le $order[$k - 1])) { $sorted = $false } }
 Assert-Coord 'C7 template sections present, current state before the append-only ones' $sorted ($order -join ',')

@@ -145,7 +145,7 @@ Grouped; every item is a code change with a test row, not a doc note.
 ## 4. Layout
 
 ```
-scripts/        coord-common.ps1 + the six scripts (dot-source a sibling coord-common.ps1)
+scripts/        coord-common.ps1 + the other scripts (dot-source a sibling coord-common.ps1)
 hooks/          hooks.json, coord-scope-guard.ps1 (dot-sources ../scripts/coord-common.ps1)
 templates/      as today; coord-brief reads ../templates/brief-template.md
 tests/          run.ps1, fixtures, stubs, one suite per script, the guard suite, the scrub suite
@@ -269,3 +269,49 @@ Finding from the S5 round-3 review (reviewed 2026-10-29, ruled: to the plan, for
 9. `scripts/coord-handoff.ps1` name check (latent): a `-NewSession` made only of characters the allow-list
    accepts but that draw nothing (U+3164, U+115F, U+1160, U+FFA0, U+034F, U+FE0F, U+17B5) is not
    refused, so a name can read as blank; the header says so. 0.2.1.
+
+Found while porting Phase D (2026-10-29), for 0.2.1:
+
+10. `scripts/coord-status.ps1` Queue gate (latent): the gate is anchored on the exact, case-sensitive
+    ` owner:`. A writer slip (`Owner:`, `owner :`, a tab, no owner part) falls back to searching the
+    whole line, so a gate-shaped bracket quoted in the source note can take the gate again (with
+    `-Verify`, OPEN or CLOSED for the quoted PR). The skill tells writers to write ` owner:` exactly.
+    Fix: match `\s+owner\s*:` ignoring case, or add a second anchor on ` source:`.
+11. The `coord-brief`, `coord-common`, `coord-handoff`, `coord-log`, `coord-set` and `coord-status` suites (latent): they fence the real
+    coordination index by digest before and after the run, so a live append by a coordinator during
+    a run can fail them. Fix: read a scratch index only, or tolerate appended lines.
+12. `scripts/coord-log.ps1` (cosmetic): it does not expand `{now}` (only `coord-set.ps1` does) and keeps
+    its inline `-Ledger` handling, which duplicates `Resolve-CoordLedgerArg` in `coord-common.ps1`.
+13. `scripts/coord-status.ps1`, the Findings patterns (live, from the source): a Findings line whose id carries a carry date
+    (`F3 (2026-10-28) from ...`, the form the carry rule writes) does not match the finding patterns, so a
+    carried PENDING finding is missing from the board and from `findings pending`. No test covers a carried id.
+14. `scripts/coord-status.ps1`, the PR-number fallback (latent, from the source): with an empty PR cell, the first `#<n>` in the
+    Status text is taken as the row's PR (the slot-open check, and `-Verify`'s `gh pr view`).
+15. `scripts/coord-status.ps1`, the `-Verify` paths (latent, from the source): under `-Verify`, a Repo cell that is a bare
+    name or a path not on this machine falls back to the current folder, and the Queue gate `[after #<n> merges]`
+    always asks the current folder's repository, so another repository's PR number can be read as this one's.
+    A UNC Repo cell is opened without a time limit, and `gh` has no timeout.
+16. `scripts/coord-status.ps1`, the `after Q<n>` gate (latent, from the source): an `[after Q<n>]` gate that names an id with no line,
+    or a cycle, reads CLOSED and is never flagged. Test T18b pins that behaviour.
+17. `scripts/coord-status.ps1`, the Owed-check match (cosmetic, from the source): an indented or oddly spaced unticked Owed check
+    is neither listed nor counted as unrecognised.
+18. `scripts/coord-status.ps1`, the two ledger reads (latent, from the source): the ledger is read twice without a lock, so a
+    `coord-set.ps1` or `coord-log.ps1` swap between the reads can end the board with `could not read`.
+19. `scripts/coord-set.ps1` (latent, from the source): `Test-CoordTypedTime` misses a fullwidth colon, `10h22` and
+    `10.22`; a Status cell can hold U+FEFF or a bidi mark; two rows with the same track name and bare-name Repo
+    cells cannot be told apart by `-Repo`.
+20. The port's `coord-set.ps1` `Get-RepoFull` differs from the source on purpose: it uses
+    `ConvertTo-CoordRootedPath` and the platform path comparison, so it rejects `, ; ( )`, device paths and a bare
+    drive root in a Repo cell, and accepts `/...` paths off Windows.
+
+## 10. Phase D (added 2026-10-29): the status board
+
+Ruled by the author on 2026-10-29: port the three coordinate changes of the private source since
+2026-10-22 into `port/0.2` as one more slice, before the release merge. They add `coord-status.ps1` (the
+status board), the ten state words with `WAIT-USER` (the neutral spelling) and `coord-set.ps1 -State`, and
+the status index with the `## Queue` ledger section. `coord-set.ps1` had never been ported, so it comes
+whole, with the helpers it needs (`Get-CoordStamp`, `Expand-CoordNow`, `Test-CoordTypedTime`,
+`Resolve-CoordLedgerArg`, `Get-CoordStateWords`). Tests port with them (`tests/scripts/coord-set.test.ps1`,
+`tests/scripts/coord-status.test.ps1`, and the changed rows of the `coord-common` and `coord-log` suites).
+Dropped from the source tests: one row that read a private archived ledger, and three that pinned private
+skill prose. The gate is the common one plus the history scrub of section 7.
