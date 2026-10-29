@@ -217,8 +217,8 @@ session under the index folder and prunes old ones. It is on when the plugin is 
 (`coord-log.ps1 -Register`). To turn it off, set `TRACKSTEWARD_GUARD=off` in the environment of the
 session; that is a convenience, not a lock, since anything that can set the environment or write
 Claude's settings can do the same. It does not cover edits made through a shell command, and a
-path outside every git working tree is allowed. If the hook's launcher fails to start, the edit goes
-ahead without a warning. It is Windows-only as shipped, and its stated limits are in the header of
+path outside every git working tree is allowed. If the hook's launcher fails before the script runs
+(probed once, with the plugin root unset), the edit goes ahead and the model is not told. It is Windows-only as shipped, and its stated limits are in the header of
 `hooks/coord-scope-guard.ps1`.
 
 ## What is not done
