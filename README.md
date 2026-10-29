@@ -92,13 +92,13 @@ and the order. The human stays in the loop for every decision and every merge.
   Windows). Without it, the pattern still works: the coordinator saves each brief as a file and you
   paste its pointer line into the track's window, and you paste the track's messages (ACKs, pointer
   lines, findings, blockers) back.
-- `git` 2.38 or later (the slot check uses `git merge-tree --write-tree`), and the GitHub CLI `gh`
-  for the PR and merge checks. `repo-snapshot` runs without `gh`.
+- `git` 2.38 or later (the repo snapshot's conflict preview uses `git merge-tree --write-tree`), and
+  the GitHub CLI `gh` for the PR and merge checks. `repo-snapshot` runs without `gh`.
 - PowerShell for the scripts and the guard hook. **Verified: Windows 11 with Windows PowerShell
-  5.1.** PowerShell 7 is **not verified**: the code is written to run on it, but no suite has been
-  run under it. macOS and Linux are not verified either, and the scope guard is Windows-only as
-  shipped. The scripts do not check the git version at start; an older git fails inside the slot
-  check.
+  5.1.** PowerShell 7 is **not verified**: the scripts are written to run on it, but no suite has been
+  run under it, and the guard hook always starts `powershell.exe`. macOS and Linux are not verified
+  either, and the scope guard is Windows-only as shipped. The scripts do not check the git version at
+  start; with an older git the snapshot's conflict preview reads `preview failed`.
 - Claude Code can hold a message from another session for your approval. Whether it does is set
   by "Messages from your other sessions" in `/config`. A message held by default is dropped after
   five minutes unless `dialogExpiry` says otherwise; one held by an explicit `hold` setting is
@@ -211,11 +211,15 @@ Every script ends with one verdict line and prints text for you to send; none se
 
 **The scope guard.** `hooks/hooks.json` registers a `PreToolUse` hook that blocks an `Edit`,
 `Write`, `MultiEdit` or `NotebookEdit` outside the file scope of the ledger row for the session's
-branch. It is on when the plugin is installed and **inert until a coordinator registers a ledger**
+branch, and a `SessionStart` hook that, once a ledger is registered, writes a small anchor file per
+session under the index folder and prunes old ones. It is on when the plugin is installed and
+**inert until a coordinator registers a ledger**
 (`coord-log.ps1 -Register`). To turn it off, set `TRACKSTEWARD_GUARD=off` in the environment of the
 session; that is a convenience, not a lock, since anything that can set the environment or write
-Claude's settings can do the same. It does not cover edits made through a shell command. It is
-Windows-only as shipped, and its stated limits are in the header of `hooks/coord-scope-guard.ps1`.
+Claude's settings can do the same. It does not cover edits made through a shell command, and a
+path outside every git working tree is allowed. If the hook's launcher fails to start, the edit goes
+ahead without a warning. It is Windows-only as shipped, and its stated limits are in the header of
+`hooks/coord-scope-guard.ps1`.
 
 ## What is not done
 
@@ -223,6 +227,10 @@ Windows-only as shipped, and its stated limits are in the header of `hooks/coord
 - The scripts do not enforce the git 2.38 floor at start.
 - The `-NewSession` name check does not refuse every character that draws nothing (a Hangul
   filler or a variation selector passes); the script header says so.
+- `repo-snapshot`: a `-Repos` path that is not a git repo is skipped and the snapshot can print
+  `attention none`, so a typo reads as a clean repo; an explicit `-Ledger` that does not exist reads
+  as "no ledger" with `attention none`; a finished track whose branch is gone prints `branch not
+  found` on every run; the base is always `origin/main`. All four are for 0.2.1.
 - No CI workflow ships: the tests run locally with `tests\run.ps1`.
 
 ## License

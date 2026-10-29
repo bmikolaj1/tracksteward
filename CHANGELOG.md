@@ -3,7 +3,8 @@
 ## 0.2.0 - 2026-10-29
 
 The mechanical checks are code now. Adds PowerShell scripts and an edit-time scope guard hook, with
-tests; the skill calls the scripts instead of describing the commands.
+tests; the skill calls the scripts for each check, and keeps the manual commands as the fallback
+where PowerShell is missing.
 
 - **Scripts** (`scripts/`, run from the plugin folder by the skill):
   - `repo-snapshot.ps1`: a start-of-window snapshot per repo, with each ledger track's files
@@ -22,14 +23,16 @@ tests; the skill calls the scripts instead of describing the commands.
   session's ledger row. On when the plugin is installed, inert until a ledger is registered;
   `TRACKSTEWARD_GUARD=off` in the environment turns it off (a convenience, not a lock). Windows-only
   as shipped; its limits are in the hook header.
-- **Skill and templates**: the skill's recipes are script calls; the ledger template names
-  `coord-log.ps1` for appends and registration.
+- **Skill and templates**: the skill names the script for each check next to the manual commands;
+  the ledger template names `coord-log.ps1` for appends and registration.
 - **Tests** (`tests/`): one suite per script and for the guard, a scrub suite for private content,
   and `run.ps1`. They run under Windows PowerShell 5.1.
 - **Requirements**: git 2.38 or later; PowerShell. Verified on Windows 11 with Windows PowerShell
   5.1 only. **PowerShell 7, macOS and Linux are unverified.** The git floor is not checked at start.
 - **Known and left**: a `-NewSession` name made only of characters that draw nothing (a Hangul
-  filler, a variation selector) is not refused.
+  filler, a variation selector) is not refused. `repo-snapshot` can read a clean repo when a
+  `-Repos` path is a typo or an explicit `-Ledger` is missing (`attention none`); a finished track
+  whose branch is gone prints `branch not found` on every run; its base is always `origin/main`.
 
 ## 0.1.2 - 2026-10-15
 

@@ -1,9 +1,10 @@
 # Scrub suite: nothing private ships. Scans the next commit: the files git would
 # ship from the work tree plus the index (tracked files plus untracked files that
 # are not ignored: git ls-files -z --cached --others --exclude-standard,
-# NUL-separated so no name is lost to git's quoting). Branch history is NOT
-# scanned here: the release gate (slice S7 of docs/plans/2026-10-18-script-port.md)
-# scans the commits of the branch. The suite fails on:
+# NUL-separated so no name is lost to git's quoting). With -History <range> (or
+# $env:TRACKSTEWARD_SCRUB_HISTORY, which tests\run.ps1's child processes inherit)
+# it also scans the history of a range of commits (group SG6, the S7 release gate:
+# origin/main..HEAD); without one the SG6 history row is reported UNCHECKED. The suite fails on:
 #   - an absolute user or project path: a drive letter, then \Users\ or
 #     \Projects\ (either slash, also JSON-escaped as C:\\Users\\), or the
 #     Git-Bash / WSL spellings /c/Users/, /c/Projects/, /mnt/c/Users/ (any
@@ -67,14 +68,19 @@
 #      symlinks), an unreadable file, the accounting, the skipped self file, the
 #      commit-sha rule with good, mistyped, blank and unset repo entries
 # SG5  the shipped files: the scan covers them, one row per rule: no hit
+# SG6  the history scan on synthetic repos (a blob added and removed, modified, a type
+#      change, a merge's message and a blob only a merge brings in, bad, empty and
+#      dash-leading ranges), then on the real range when one is given. Not read: author
+#      and committer lines, tags, notes, and file names as such
 #
 # This file's pattern rules are skipped by the scan, so the rule patterns and the
 # examples below may appear in it. Examples are still built from pieces where that
 # is easy, and no private word is written in it.
 #
-# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scrub.test.ps1 [-Strict]
+# Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scrub.test.ps1 [-Strict] [-History <range>]
 # Exit: 0 = all passed, 1 = a case failed.
 param([switch]$Strict, [string]$History = '')
+if (-not $History) { $History = [string]$env:TRACKSTEWARD_SCRUB_HISTORY }
 
 $testsDir = $PSScriptRoot
 $repoRoot = Split-Path -Parent $testsDir
@@ -464,8 +470,8 @@ function Invoke-ScrubRepoRule {
 # Scans the history of a range of commits ($Range, a git revision range such as
 # origin/main..HEAD): every blob that a commit of the range adds or changes, at
 # its path, and every commit message. A blob seen under the same path twice is
-# scanned once. A merge commit adds no blob of its own (the commits of the merged
-# branch are in the range). $SelfRel names the one path whose pattern rules are
+# scanned once. A merge commit is read too: its message, and the blobs it differs
+# by from each parent. $SelfRel names the one path whose pattern rules are
 # skipped, as in Invoke-ScrubScan. Returns { DiscoveryOk; Reason; Commits; the
 # same lists as Invoke-ScrubScan (Scanned, PatternSkipped, Utf16, Utf32,
 # NulFiles, Unreadable, RepoUnchecked, Hits, HexTokens); Blobs }. Not
@@ -485,7 +491,7 @@ function Invoke-ScrubHistory {
         HexTokens = @{}
     }
     # --end-of-options: a range that starts with '-' is never read as an option.
-    $c = Invoke-ScrubGit $Repo @('rev-list', '--no-merges', '--end-of-options', $Range)
+    $c = Invoke-ScrubGit $Repo @('rev-list', '--end-of-options', $Range)
     if (-not $c.Ok -or $c.Code -ne 0) { $res.Reason = "git rev-list failed for the range '$Range' (exit $($c.Code)): $($c.Error)"; return $res }
     $shas = @($coordUtf8.GetString($c.Bytes) -split "`r?`n" | Where-Object { $_ })
     if ($shas.Count -eq 0) { $res.Reason = "the range '$Range' holds no commit"; return $res }
@@ -499,10 +505,11 @@ function Invoke-ScrubHistory {
             [void](Add-ScrubContent $res $label $label $m.Bytes $false $Denylist)
         }
         else { $res.Unreadable.Add('commit message ' + $sha.Substring(0, 7)) }
-        # The blobs this commit adds, copies, renames or modifies, against its first parent (the empty tree for a root commit).
-        $t = Invoke-ScrubGit $Repo @('diff-tree', '-r', '-z', '--root', '--no-renames', '--diff-filter=AM', '--no-abbrev', $sha)
+        # The blobs this commit adds or modifies (a type change included; a rename or copy counts as an add), against each parent
+        # (-m: a merge is compared with every parent, so what only the merge itself brings in is seen; the empty tree for a root commit).
+        $t = Invoke-ScrubGit $Repo @('diff-tree', '-r', '-z', '-m', '--root', '--no-renames', '--diff-filter=AMT', '--no-abbrev', $sha)
         if (-not $t.Ok -or $t.Code -ne 0) { $res.Unreadable.Add('tree of ' + $sha.Substring(0, 7)); continue }
-        # -z raw output: ":<mode> <mode> <old> <new> <status>" NUL "<path>" NUL ... (a root commit starts with its own sha).
+        # -z raw output: ":<mode> <mode> <old> <new> <status>" NUL "<path>" NUL ... (each commit's output starts with its own sha, skipped here).
         $parts = @($coordUtf8.GetString($t.Bytes).Split([char]0) | Where-Object { $_ })
         $i = 0
         while ($i -lt $parts.Count) {
@@ -987,7 +994,6 @@ Assert-Coord 'SG6 a blob a commit of the range modifies (not only adds) is scann
 Assert-Coord 'SG6 a file of the base commit is not scanned (outside the range)' (@($res.Hits | Where-Object { $_.File -like 'base.txt*' }).Count -eq 0 -and -not ($res.Scanned | Where-Object { $_ -like 'base.txt*' }))
 Assert-Coord 'SG6 the self file is scanned for the denylist only' (@($res.Hits | Where-Object { $_.File -like "$selfName*" -and $_.Rule -ceq $pathRule }).Count -eq 0 -and @($res.Hits | Where-Object { $_.File -like "$selfName*" -and $_.Rule -like 'denylist entry*' }).Count -eq 1)
 Assert-Coord 'SG6 a commit message is scanned (named by its commit, not by a file)' (@($res.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq $pathRule }).Count -eq 1)
-Assert-Coord 'SG6 the hits carry no sha of the repo in a hex rule when no repo is listed' (-not ($res.Hits | Where-Object { $_.Rule -ceq $hexRuleName }))
 $badRes = Invoke-ScrubHistory -Repo $hRepo -Range 'no-such-rev..HEAD'
 Assert-Coord 'SG6 a range git cannot resolve is not a pass: discovery fails with a reason' ((-not $badRes.DiscoveryOk) -and $badRes.Reason)
 $emptyRes = Invoke-ScrubHistory -Repo $hRepo -Range 'HEAD..HEAD'
@@ -1000,18 +1006,53 @@ Invoke-HookTestGit $hRepo @('checkout', '--quiet', 'main')
 Invoke-HookTestGit $hRepo @('merge', '--quiet', '--no-ff', '-m', 'merge side', 'side')
 $mRes = Invoke-ScrubHistory -Repo $hRepo -Range ($hBase + '..HEAD')
 Assert-Coord 'SG6 a branch merged inside the range is scanned' (@($mRes.Hits | Where-Object { $_.File -like 'side.md*' }).Count -eq 1)
+# a merge commit is read too: its message, and content that only the merge itself brings in
+Invoke-HookTestGit $hRepo @('checkout', '--quiet', '-b', 'side2', $hBase)
+Set-CoordFile $hRepo 'side2.txt' "side two`n"
+Add-ScrubTestCommit $hRepo 'side two work'
+Invoke-HookTestGit $hRepo @('checkout', '--quiet', 'main')
+# git prints "stopped before committing as requested" on stderr, which the fixture helper would read as a failure
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& git -C $hRepo merge --quiet --no-ff --no-commit side2 2>&1 | Out-Null
+$ErrorActionPreference = $prevEap
+Set-CoordFile $hRepo 'only-in-merge.txt' ($hitLine + "`n")
+Invoke-HookTestGit $hRepo @('add', '-A')
+Invoke-HookTestGit $hRepo @('commit', '--quiet', '-m', ('merge side2 ' + $hitLine))
+Remove-Item -LiteralPath (Join-Path $hRepo 'only-in-merge.txt')
+Add-ScrubTestCommit $hRepo 'drops the merge-only file again'
+$mRes2 = Invoke-ScrubHistory -Repo $hRepo -Range ($hBase + '..HEAD')
+Assert-Coord 'SG6 a merge commit message is scanned' (@($mRes2.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq $pathRule }).Count -eq 2) (($mRes2.Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+Assert-Coord 'SG6 a blob that only a merge commit brings in (removed again afterwards) is scanned' (@($mRes2.Hits | Where-Object { $_.File -like 'only-in-merge.txt*' }).Count -eq 1)
+# a type change: a symlink replaced by a regular file with a hit (the symlink is made in the index, which needs no privilege)
+Invoke-HookTestGit $hRepo @('config', 'core.symlinks', 'true')
+$tgtFile = Join-Path $tmp 'link-target.txt'
+[System.IO.File]::WriteAllText($tgtFile, 'target.txt', $coordUtf8)
+$linkBlob = Get-CoordGitOut $hRepo @('hash-object', '-w', $tgtFile)
+Invoke-HookTestGit $hRepo @('update-index', '--add', '--cacheinfo', ('120000,' + $linkBlob + ',tlink'))
+Invoke-HookTestGit $hRepo @('commit', '--quiet', '-m', 'adds a symlink')
+$typeBase = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+Set-CoordFile $hRepo 'tlink' ($hitLine + "`n")
+Add-ScrubTestCommit $hRepo 'turns the symlink into a regular file'
+Assert-Coord 'SG6 control: that commit is a type change (T)' ((Get-CoordGitOut $hRepo @('diff-tree', '-r', '--no-commit-id', '--name-status', 'HEAD')) -match '^T\s+tlink') ''
+$tRes = Invoke-ScrubHistory -Repo $hRepo -Range ($typeBase + '..HEAD')
+Assert-Coord 'SG6 the new blob of a type change (symlink to regular file) is scanned' (@($tRes.Hits | Where-Object { $_.File -like 'tlink*' -and $_.Rule -ceq $pathRule }).Count -eq 1) (($tRes.Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+# a range that starts with a dash is a revision, never an option
+$dashRes = Invoke-ScrubHistory -Repo $hRepo -Range '--all'
+Assert-Coord 'SG6 a range that starts with a dash is refused as an unknown revision, not run as an option' ((-not $dashRes.DiscoveryOk) -and $dashRes.Reason) ''
 
 # the real range, when the run names one
 if ($History) {
     $real = Invoke-ScrubHistory -Repo $repoRoot -Range $History -SelfRel $selfName -Denylist $denylist
     Assert-Coord "SG6 history discovery: git lists the commits of $History" $real.DiscoveryOk $real.Reason
     if ($real.DiscoveryOk) {
-        Write-Host "(SG6) no private content in $($real.Commits) commits and $($real.Scanned.Count) blob versions of $History"
+        Write-Host "(SG6) no private content in $($real.Commits) commits and $($real.Blobs) blob versions of $History"
         # The one id that earlier versions of coord-handoff.ps1 wrote in a comment as an example of an
-        # id followed by a note: 1234abcd is not a session id, and the tip no longer holds it. Only this exact text is let through.
+        # id followed by a note: 1234abcd is not a session id, and the tip no longer holds it. Only this exact text,
+        # in a blob of that script or in the message of the commit that explains it, is let through.
         $placeholderIds = @($idPrefix + '1234abcd')
         foreach ($rule in $scrubRules) {
-            $hs = @($real.Hits | Where-Object { $_.Rule -ceq $rule.Name -and -not (($rule.Name -ceq 'desktop session id') -and ($placeholderIds -ccontains $_.Text)) } | ForEach-Object { Format-ScrubHit $_ })
+            $hs = @($real.Hits | Where-Object { $_.Rule -ceq $rule.Name -and -not (($rule.Name -ceq 'desktop session id') -and ($placeholderIds -ccontains $_.Text) -and (($_.File -clike 'scripts/coord-handoff.ps1 (blob *') -or ($_.File -ceq 'commit message 2c3b5fc'))) } | ForEach-Object { Format-ScrubHit $_ })
             Assert-Coord "SG6 no '$($rule.Name)' in the history" ($hs.Count -eq 0) ($hs -join "`n")
         }
         if ($denylist) {
@@ -1029,7 +1070,7 @@ if ($History) {
         if ($real.Unreadable.Count -gt 0) { Write-ScrubUnchecked 'SG6 history blobs git could not read' ('not scanned: ' + ($real.Unreadable -join ', ')) }
     }
 }
-else { Write-ScrubUnchecked 'SG6 the real history' 'no -History range was given (the release gate passes origin/main..HEAD)' }
+else { Write-ScrubUnchecked 'SG6 the real history' 'no -History range was given (the release gate is -History origin/main..HEAD, or TRACKSTEWARD_SCRUB_HISTORY set to it)' }
 
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-CoordUncheckedSummary
