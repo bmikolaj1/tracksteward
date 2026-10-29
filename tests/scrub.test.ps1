@@ -1004,8 +1004,11 @@ if ($History) {
     Assert-Coord "SG6 history discovery: git lists the commits of $History" $real.DiscoveryOk $real.Reason
     if ($real.DiscoveryOk) {
         Write-Host "(SG6) no private content in $($real.Commits) commits and $($real.Scanned.Count) blob versions of $History"
+        # The one id that earlier versions of coord-handoff.ps1 wrote in a comment as an example of an
+        # id followed by a note: 1234abcd is not a session id, and the tip no longer holds it. Only this exact text is let through.
+        $placeholderIds = @($idPrefix + '1234abcd')
         foreach ($rule in $scrubRules) {
-            $hs = @($real.Hits | Where-Object { $_.Rule -ceq $rule.Name } | ForEach-Object { Format-ScrubHit $_ })
+            $hs = @($real.Hits | Where-Object { $_.Rule -ceq $rule.Name -and -not (($rule.Name -ceq 'desktop session id') -and ($placeholderIds -ccontains $_.Text)) } | ForEach-Object { Format-ScrubHit $_ })
             Assert-Coord "SG6 no '$($rule.Name)' in the history" ($hs.Count -eq 0) ($hs -join "`n")
         }
         if ($denylist) {
