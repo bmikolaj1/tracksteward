@@ -111,8 +111,8 @@
 #
 # Limits: GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE are not cleared; run the
 # script from a shell where they are unset. An inherited GIT_DIR (git sets
-# it when it runs a hook) breaks the run: an absolute one makes every Repo cell and
-# the ledger's folder be read through that one repository; a relative one is
+# it when it runs a hook) breaks the run: an absolute one makes every Repo cell and,
+# when -Ledger is omitted, the current folder be read through that one repository; a relative one is
 # resolved under each folder git is run in, where it usually names no repository. A Repo cell on a network share is checked for existence and probed
 # with git (step 3) and fetched (step 4) with no timeout, so an unreachable server can stall the run
 # there (no lock is held then). GIT_TERMINAL_PROMPT=0 stops git's own terminal
