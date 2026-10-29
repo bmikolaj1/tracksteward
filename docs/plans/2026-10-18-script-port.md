@@ -251,7 +251,7 @@ the default unless the coordinator opens a second.
    until the user sets the switch? **Ruled 2026-10-28 (the author: "On, inert until registered"):**
    on; `TRACKSTEWARD_GUARD=off` in the environment turns it off.
 
-Findings from S3, ruled 2026-10-28 (one line each; fix in S7 or 0.2.1):
+Findings from S3, ruled 2026-10-28 (one line each; fix in S7 or 0.2.1). **Ruled 2026-10-29 (the author: "All to 0.2.1"):** items 4-8 are all 0.2.1; none is fixed in 0.2.0, and the git floor (item 8) is stated as not enforced in the README and CHANGELOG.
 
 4. F1 (`scripts/repo-snapshot.ps1:144`, latent): a `-Repos` path that is not a git repo is skipped
    and the snapshot prints `attention none`, so a typo reads as a clean repo. S7 or 0.2.1.
