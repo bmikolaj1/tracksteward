@@ -1592,13 +1592,13 @@ Invoke-Group 'S6 plugin wiring' {
     $oldAge = ([DateTime]::UtcNow - [System.IO.File]::GetLastWriteTimeUtc($oldB)).TotalDays
     Report ($oldAge -gt 29) 'S6-30b no index: a resume of a session that has an old anchor does not refresh it either' ("age days: $oldAge")
     # a cwd that looks full but that GetFullPath rejects (Windows PowerShell 5.1 / .NET Framework): silent with no index
-    # (the hook always runs under powershell.exe, whose GetFullPath rejects the '|'; under another host, where GetFullPath accepts it, S6-30c passes trivially and S6-30d and S6-30e fail)
+    # (the hook always runs under powershell.exe, whose GetFullPath rejects the '|'; under another host, where GetFullPath accepts it, S6-30c and S6-30e pass trivially and S6-30d fails)
     Test-Allow 'S6-30c no index: a SessionStart whose cwd GetFullPath rejects is still a silent allow' (Invoke-Guard -Json (New-SessionStartJson -Session 'sa-badcwd' -Cwd 'C:\a|b'))
     $null = Use-Ledger -Rows @((RowA1))
     # The GetFullPath branch's own warning: the other two anchor warnings (no full cwd, budget ran out) share the "session anchor not written" text.
     $badR = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-badcwd2' -Cwd 'C:\a|b')
     $badV = Get-Verdict $badR
-    Report ($badV.Kind -eq 'warn' -and $badV.Msg -match 'session anchor not written' -and $badV.Msg -notmatch 'no full cwd' -and $badV.Msg -notmatch 'budget ran out' -and -not (Test-Path -LiteralPath (Get-AnchorPath 'sa-badcwd2'))) 'S6-30d with an index and no anchor yet: the same cwd warns that the anchor was not written (the GetFullPath rejection, not the no-cwd or budget warning), and writes none' (Show-Run $badR $badV)
+    Report ($badV.Kind -eq 'warn' -and $badV.Msg -match 'session anchor not written' -and $badV.Msg -match 'GetFullPath' -and $badV.Msg -notmatch 'no full cwd' -and $badV.Msg -notmatch 'budget ran out' -and -not (Test-Path -LiteralPath (Get-AnchorPath 'sa-badcwd2'))) 'S6-30d with an index and no anchor yet: the same cwd warns that the anchor was not written (the GetFullPath rejection, not the no-cwd or budget warning), and writes none' (Show-Run $badR $badV)
     # an anchored session: the refresh comes before the cwd is resolved, so the same cwd is a silent refresh
     $null = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-badcwd3' -Cwd $wtA1)
     $badA = Get-AnchorPath 'sa-badcwd3'

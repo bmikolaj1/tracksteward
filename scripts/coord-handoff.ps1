@@ -14,10 +14,10 @@
 #      session's NAME or its id: trimmed, 1 to 80 characters, no control
 #      character (tab and line breaks included, checked before the trim), no
 #      character other than letters, digits, combining marks, punctuation,
-#      symbols and the plain space (so no zero-width space, BOM, soft hyphen,
-#      bidi mark, braille blank, object replacement character or
+#      symbols and the plain space (so no zero-width space, BOM, bidi mark or
 #      non-breaking space, and no character outside the Basic
-#      Multilingual Plane, an emoji included; some other letters and marks that
+#      Multilingual Plane, an emoji included; the soft hyphen, braille blank and
+#      object replacement character are refused by name; some other letters and marks that
 #      draw nothing, such as a Hangul filler or a variation selector, are not
 #      recognized, and a code point the host's Unicode tables do not know yet,
 #      for example a recent letter on Windows PowerShell 5.1, is refused),
@@ -48,9 +48,10 @@
 #      header with no data rows is accepted), read by Read-CoordLedgerTracks'
 #      section scan and row parser. A -NewSession that is any row's Session
 #      cell (finished rows included; the cell with one pair of quotes or
-#      backticks removed, ignoring case) or whose session token
-#      (Get-CoordSessionToken) is the token of any row's cell, or of the first
-#      word of one (an id followed by a note), is refused: it is a track, not
+#      backticks removed, ignoring case) or whose first word, read as a session
+#      token (Get-CoordSessionToken, a local_ prefix in any case taken as
+#      local_), is the token of any row's cell, or of the first word of one (an
+#      id followed by a note), is refused: it is a track, not
 #      a new coordinator. A row is live unless Test-CoordRowTerminal says it
 #      is finished. Every live row's Repo cell must be a rooted full path
 #      (ConvertTo-CoordRootedPath); a relative cell (.\x, ..\x), a drive-relative
@@ -109,8 +110,9 @@
 #
 # Limits: GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE are not cleared; run the
 # script from a shell where they are unset. An inherited absolute GIT_DIR (git
-# sets it when it runs a hook) makes every Repo cell be read through that one
-# repository. A Repo cell on a network share is checked for existence and probed
+# sets GIT_DIR when it runs a hook; from a linked worktree it is absolute, and a
+# relative one is resolved under each Repo cell instead) makes every Repo cell be
+# read through that one repository. A Repo cell on a network share is checked for existence and probed
 # with git (step 3) and fetched (step 4) with no timeout, so an unreachable server can stall the run
 # there (no lock is held then). GIT_TERMINAL_PROMPT=0 stops git's own terminal
 # prompt only: an ssh passphrase prompt or a credential-manager window can
@@ -302,8 +304,9 @@ function Get-CellText([string]$Cell) {
 
 # A -NewSession that is a track's Session cell (its text, or its id token as the
 # scope guard binds rows; any row, finished or live) is refused.
-# -NewSession is read the same way as a cell: its first word, with a local_ prefix in any case
-# (the token reader is case-sensitive there, so a refusal would be missed).
+# -NewSession is read by its first word, as a cell's first word is, but with a local_ prefix in
+# any case taken as local_ (the token reader is case-sensitive there, so a refusal would be missed);
+# a cell's own prefix is not folded, as the scope guard does not bind it either.
 $newFirst = ($new -split '\s+')[0] -replace '\A(?i:local_)', 'local_'
 $newToken = Get-CoordSessionToken $newFirst
 foreach ($row in $rows) {

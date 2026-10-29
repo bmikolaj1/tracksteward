@@ -549,7 +549,7 @@ $badNames = @(
     @('a name ending in a zero-width space', ('Evening' + [char]0x200B)), @('a bidi override (U+202E)', ('a' + [char]0x202E + 'b')),
     @('a lone surrogate (U+D800)', ('a' + [char]0xD800 + 'b')),
     @('an emoji (a surrogate pair, outside the BMP)', ('Night ' + [char]::ConvertFromUtf32(0x1F680))),
-    @('a braille blank (U+2800)', ('Evening' + [char]0x2800)), @('an object replacement character (U+FFFC)', ('Evening' + [char]0xFFFC)),
+    @('a braille blank (U+2800)', ('Evening' + [char]0x2800), 'U\+00AD, U\+2800 or U\+FFFC'), @('an object replacement character (U+FFFC)', ('Evening' + [char]0xFFFC), 'U\+00AD, U\+2800 or U\+FFFC'),
     @('a soft hyphen (U+00AD)', ('Eve' + [char]0xAD + 'ning')), @('a no-break space (U+00A0)', ('Evening' + [char]0xA0 + 'shift')),
     @('81 characters', ('x' * 81)), @('81 characters after the trim', ('  ' + ('x' * 81) + '  ')),
     @('empty', ''), @('blank', '   '),
@@ -561,7 +561,9 @@ foreach ($c in $badNames) {
     $p = New-HLedger $linesV
     $b = Get-Bytes $p
     $r = Invoke-Handoff $c[1] $p
-    Test-RefusedNoFetch "H10 -NewSession $($c[0])" $r $p $b $fxV $staleV
+    $why10 = ''
+    if ($c.Count -gt 2) { $why10 = $c[2] }
+    Test-RefusedNoFetch "H10 -NewSession $($c[0])" $r $p $b $fxV $staleV $why10
 }
 # Accepted (these fetch, so they run after every refusal above).
 $shaV = Get-OriginMain $fxV
@@ -871,7 +873,7 @@ $cases3 = @(
     @('a Session cell holding only the short token (local_ plus the first 8 hex)', 'r3short', $idS, $idS.Substring(0, 14), 'running'),
     @('a -NewSession of the id and a note, the cell holding the bare id', 'r3newnote', ($idS + ' (opus)'), $idS, 'running'),
     @('a -NewSession of the short id and a note, the cell holding the full id', 'r3newshort', ($idS.Substring(0, 14) + ' (opus)'), $idS, 'running'),
-    @('a -NewSession whose local_ prefix is in upper case', 'r3newucp', ('LOCAL_' + $idS.Substring(6)), $idS, 'running'),
+    @('a -NewSession whose local_ prefix is in upper case', 'r3newucp', ('LOCAL_' + $idS.Substring(6)), $idS.Substring(0, 14), 'running'),
     @('a -NewSession of an upper-case prefix and a note, the cell holding the id and a note', 'r3newucn', ('LOCAL_' + $idS.Substring(6, 8) + ' (opus)'), ($idS.Substring(0, 14) + ' (port work)'), 'running')
 )
 foreach ($c in $cases3) {

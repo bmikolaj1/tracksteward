@@ -1,8 +1,8 @@
 # Ported from the private coordinate toolkit (coord-common.ps1), 2026-10-18.
 #
 # coord-common.ps1 - helpers shared by the coordinate scripts. Today
-# coord-log.ps1, coord-brief.ps1, repo-snapshot.ps1, slot-check.ps1 and
-# merge-verify.ps1 dot-source it, from the same folder:
+# coord-log.ps1, coord-brief.ps1, coord-handoff.ps1, repo-snapshot.ps1,
+# slot-check.ps1 and merge-verify.ps1 dot-source it, from the same folder:
 # `. (Join-Path $PSScriptRoot 'coord-common.ps1')`. The scope guard hook
 # (hooks/coord-scope-guard.ps1) shares it too.
 #
@@ -129,8 +129,8 @@ function Step-CoordGitReads($S) {
     }
 }
 
-# Runs `git -C $Repo <args>` with a time bound, for the scope guard (ported
-# in a later slice), whose whole run is to have a 3 s budget. Returns { Code; Out (string[]); TimedOut }.
+# Runs `git -C $Repo <args>` with a time bound, for the scope guard,
+# whose whole run has a 3 s budget. Returns { Code; Out (string[]); TimedOut }.
 # git is the first git application on PATH (as `& git` in Invoke-CoordGit
 # finds it; a .cmd there runs too). Both streams are read asynchronously into
 # buffers, never to their end: stdout is decoded as UTF-8 (whatever the
