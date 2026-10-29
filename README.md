@@ -3,7 +3,7 @@
 **One thin coordinator session over many parallel Claude Code sessions.** It covers a daily ledger,
 scoped briefs, a findings protocol, and one verified merge at a time.
 
-> **Status:** v0.1.2, 2026-10-15. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
+> **Status:** v0.2.0, 2026-10-29. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
 > for 10 coordination days: 57 merges verified, 127 findings with recorded outcomes, up to 16 tracks in
 > a day.
 >
@@ -57,7 +57,7 @@ and the order. The human stays in the loop for every decision and every merge.
 - a merge bot. Nothing merges without the user's typed go.
 - Claude Code's agent teams. A team is a lead with teammates inside one session's lifetime. This
   pattern coordinates independent sessions, across repos, with its state in a file.
-- software. v0.1 ships no scripts: it is a skill, four templates, and a set of rules.
+- a service. It is a skill, four templates, a set of PowerShell scripts that do the mechanical checks, and an edit-time scope guard hook. Nothing runs in the background.
 
 ### Terms
 
@@ -92,7 +92,13 @@ and the order. The human stays in the loop for every decision and every merge.
   Windows). Without it, the pattern still works: the coordinator saves each brief as a file and you
   paste its pointer line into the track's window, and you paste the track's messages (ACKs, pointer
   lines, findings, blockers) back.
-- `git`, and the GitHub CLI `gh` for the PR and merge checks.
+- `git` 2.38 or later (the slot check uses `git merge-tree --write-tree`), and the GitHub CLI `gh`
+  for the PR and merge checks. `repo-snapshot` runs without `gh`.
+- PowerShell for the scripts and the guard hook. **Verified: Windows 11 with Windows PowerShell
+  5.1.** PowerShell 7 is **not verified**: the code is written to run on it, but no suite has been
+  run under it. macOS and Linux are not verified either, and the scope guard is Windows-only as
+  shipped. The scripts do not check the git version at start; an older git fails inside the slot
+  check.
 - Claude Code can hold a message from another session for your approval. Whether it does is set
   by "Messages from your other sessions" in `/config`. A message held by default is dropped after
   five minutes unless `dialogExpiry` says otherwise; one held by an explicit `hold` setting is
@@ -164,6 +170,9 @@ in [the skill](skills/coordinate/SKILL.md).
 | [templates/brief-template.md](templates/brief-template.md) | The brief a coordinator saves as a file for each track |
 | [templates/finding.md](templates/finding.md) | The FINDING shape and its five outcomes, with an example |
 | [templates/report.md](templates/report.md) | The REPORT BACK shape a track leaves in its PR body |
+| [scripts/](scripts/) | The verdict scripts, the ledger appender, the brief renderer, the handoff, and their shared library |
+| [hooks/](hooks/) | The edit-time scope guard (`hooks.json` and `coord-scope-guard.ps1`) |
+| [tests/](tests/) | The suites for the scripts and the guard, and `run.ps1` to run them all |
 | [.claude-plugin/](.claude-plugin/) | The plugin and marketplace manifests |
 | [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
 
@@ -180,26 +189,41 @@ The version lives in `.claude-plugin/plugin.json`, and every change bumps it. In
 stay on their version until you update: `claude plugin update coordinate@tracksteward`, or turn on
 auto-update for this marketplace in `/plugin`. Releases are tagged `vX.Y.Z`.
 
-## Roadmap
+## Scripts and the scope guard
 
-v0.1 is the prose. The merge check in the skill is a recipe of `git` and `gh` commands that a
-coordinator follows by hand, and prose is the wrong place for that many details: it was the part
-every review round found more to fix in. In the private version, four scripts and a shared helper
-library already do these mechanical checks, with tests. They come later, ported:
+The merge check used to be a recipe of `git` and `gh` commands that a coordinator followed by hand;
+it was the part every review round found more to fix in, so it is code now, with tests. The skill
+calls these from the plugin folder (`${CLAUDE_PLUGIN_ROOT}/scripts/`):
 
-- **Verdict scripts.** One call, one last line each:
-  - a start-of-window snapshot per repo, with each ledger track's files checked against its scope
-    and a conflict preview;
-  - a slot check that prints a PR's full head sha, its files outside scope and its checks, ending
-    `READY | WAIT | HOLD`;
-  - a post-merge verify that confirms the merge commit on origin, deletes the branch only when its
-    tip is still the merged head, and checks the shared checkout and git config;
-  - a ledger appender that stamps the time from the clock and refuses typed times.
-- **A portable port.** The scripts were written for Windows PowerShell. The public version targets
-  PowerShell 7 or POSIX shell, with tests, and uses only documented session tools.
-- **An edit-time scope guard.** A `PreToolUse` hook that blocks an edit outside the track's
-  declared scope while the work is happening. Today, scope is checked only at the slot, after the
-  work is done.
+- `repo-snapshot.ps1`: a start-of-window snapshot per repo, with each ledger track's files checked
+  against its scope and a conflict preview.
+- `slot-check.ps1`: prints a PR's full head sha, its files outside scope and its checks, ending
+  `READY | WAIT | HOLD`.
+- `merge-verify.ps1`: confirms the merge commit on origin, deletes the branch only when its tip is
+  still the merged head, and checks the shared checkout and git config.
+- `coord-log.ps1`: appends to the ledger, stamping the time from the clock and refusing typed
+  times; `-Register` records the day's ledger for the guard.
+- `coord-brief.ps1`: renders a track's brief from the template and, with `-Check`, verifies it
+  before the pointer line is printed.
+- `coord-handoff.ps1`: hands the coordinator role to a new session.
+
+Every script ends with one verdict line and prints text for you to send; none sends a message.
+
+**The scope guard.** `hooks/hooks.json` registers a `PreToolUse` hook that blocks an `Edit`,
+`Write`, `MultiEdit` or `NotebookEdit` outside the file scope of the ledger row for the session's
+branch. It is on when the plugin is installed and **inert until a coordinator registers a ledger**
+(`coord-log.ps1 -Register`). To turn it off, set `TRACKSTEWARD_GUARD=off` in the environment of the
+session; that is a convenience, not a lock, since anything that can set the environment or write
+Claude's settings can do the same. It does not cover edits made through a shell command. It is
+Windows-only as shipped, and its stated limits are in the header of `hooks/coord-scope-guard.ps1`.
+
+## What is not done
+
+- PowerShell 7, macOS and Linux are not verified (see Requirements).
+- The scripts do not enforce the git 2.38 floor at start.
+- The `-NewSession` name check does not refuse every character that draws nothing (a Hangul
+  filler or a variation selector passes); the script header says so.
+- No CI workflow ships: the tests run locally with `tests\run.ps1`.
 
 ## License
 

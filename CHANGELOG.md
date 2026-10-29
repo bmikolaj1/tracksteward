@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.2.0 - 2026-10-29
+
+The mechanical checks are code now. Adds PowerShell scripts and an edit-time scope guard hook, with
+tests; the skill calls the scripts instead of describing the commands.
+
+- **Scripts** (`scripts/`, run from the plugin folder by the skill):
+  - `repo-snapshot.ps1`: a start-of-window snapshot per repo, with each ledger track's files
+    checked against its scope and a conflict preview.
+  - `slot-check.ps1`: a PR's full head sha, its files outside scope and its checks, ending
+    `READY | WAIT | HOLD`.
+  - `merge-verify.ps1`: confirms the merge commit on origin, deletes the branch only when its tip
+    is still the merged head, and checks the shared checkout and git config.
+  - `coord-log.ps1`: appends to the ledger with the clock's time and refuses typed times;
+    `-Register` records the day's ledger for the guard.
+  - `coord-brief.ps1`: renders a track's brief from the template; `-Check` verifies it before the
+    pointer line is printed.
+  - `coord-handoff.ps1`: hands the coordinator role to a new session.
+  - `coord-common.ps1`: the shared library.
+- **Scope guard** (`hooks/`): a `PreToolUse` hook that blocks an edit outside the scope of the
+  session's ledger row. On when the plugin is installed, inert until a ledger is registered;
+  `TRACKSTEWARD_GUARD=off` in the environment turns it off (a convenience, not a lock). Windows-only
+  as shipped; its limits are in the hook header.
+- **Skill and templates**: the skill's recipes are script calls; the ledger template names
+  `coord-log.ps1` for appends and registration.
+- **Tests** (`tests/`): one suite per script and for the guard, a scrub suite for private content,
+  and `run.ps1`. They run under Windows PowerShell 5.1.
+- **Requirements**: git 2.38 or later; PowerShell. Verified on Windows 11 with Windows PowerShell
+  5.1 only. **PowerShell 7, macOS and Linux are unverified.** The git floor is not checked at start.
+- **Known and left**: a `-NewSession` name made only of characters that draw nothing (a Hangul
+  filler, a variation selector) is not refused.
+
 ## 0.1.2 - 2026-10-15
 
 Docs only: the skill, the brief, ledger, finding and report templates, and the README. No scripts.

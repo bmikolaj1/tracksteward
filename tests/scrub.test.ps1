@@ -74,7 +74,7 @@
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scrub.test.ps1 [-Strict]
 # Exit: 0 = all passed, 1 = a case failed.
-param([switch]$Strict)
+param([switch]$Strict, [string]$History = '')
 
 $testsDir = $PSScriptRoot
 $repoRoot = Split-Path -Parent $testsDir
@@ -459,6 +459,68 @@ function Invoke-ScrubRepoRule {
     $listed = 0
     if ($null -ne $list) { $listed = @($list).Count }
     return [pscustomobject]@{ Listed = $listed; Usable = [int]$n; Unchecked = @($Res.RepoUnchecked); Verdict = $verdict }
+}
+
+# Scans the history of a range of commits ($Range, a git revision range such as
+# origin/main..HEAD): every blob that a commit of the range adds or changes, at
+# its path, and every commit message. A blob seen under the same path twice is
+# scanned once. A merge commit adds no blob of its own (the commits of the merged
+# branch are in the range). $SelfRel names the one path whose pattern rules are
+# skipped, as in Invoke-ScrubScan. Returns { DiscoveryOk; Reason; Commits; the
+# same lists as Invoke-ScrubScan (Scanned, PatternSkipped, Utf16, Utf32,
+# NulFiles, Unreadable, RepoUnchecked, Hits, HexTokens); Blobs }. Not
+# DiscoveryOk when git cannot resolve the range, or the range holds no commit.
+function Invoke-ScrubHistory {
+    param([string]$Repo, [string]$Range, [string]$SelfRel = '', [string[]]$Denylist = $null)
+    $res = [pscustomobject]@{
+        DiscoveryOk = $false; Reason = ''; Commits = 0; Blobs = 0
+        Scanned = (New-Object System.Collections.Generic.List[string])
+        PatternSkipped = (New-Object System.Collections.Generic.List[string])
+        Utf16 = (New-Object System.Collections.Generic.List[string])
+        Utf32 = (New-Object System.Collections.Generic.List[string])
+        NulFiles = (New-Object System.Collections.Generic.List[string])
+        Unreadable = (New-Object System.Collections.Generic.List[string])
+        RepoUnchecked = (New-Object System.Collections.Generic.List[int])
+        Hits = (New-Object System.Collections.Generic.List[object])
+        HexTokens = @{}
+    }
+    # --end-of-options: a range that starts with '-' is never read as an option.
+    $c = Invoke-ScrubGit $Repo @('rev-list', '--no-merges', '--end-of-options', $Range)
+    if (-not $c.Ok -or $c.Code -ne 0) { $res.Reason = "git rev-list failed for the range '$Range' (exit $($c.Code)): $($c.Error)"; return $res }
+    $shas = @($coordUtf8.GetString($c.Bytes) -split "`r?`n" | Where-Object { $_ })
+    if ($shas.Count -eq 0) { $res.Reason = "the range '$Range' holds no commit"; return $res }
+    $res.DiscoveryOk = $true
+    $res.Commits = $shas.Count
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($sha in $shas) {
+        $m = Invoke-ScrubGit $Repo @('show', '-s', '--format=%B', $sha)
+        if ($m.Ok -and $m.Code -eq 0) {
+            $label = 'commit message ' + $sha.Substring(0, 7)
+            [void](Add-ScrubContent $res $label $label $m.Bytes $false $Denylist)
+        }
+        else { $res.Unreadable.Add('commit message ' + $sha.Substring(0, 7)) }
+        # The blobs this commit adds, copies, renames or modifies, against its first parent (the empty tree for a root commit).
+        $t = Invoke-ScrubGit $Repo @('diff-tree', '-r', '-z', '--root', '--no-renames', '--diff-filter=AM', '--no-abbrev', $sha)
+        if (-not $t.Ok -or $t.Code -ne 0) { $res.Unreadable.Add('tree of ' + $sha.Substring(0, 7)); continue }
+        # -z raw output: ":<mode> <mode> <old> <new> <status>" NUL "<path>" NUL ... (a root commit starts with its own sha).
+        $parts = @($coordUtf8.GetString($t.Bytes).Split([char]0) | Where-Object { $_ })
+        $i = 0
+        while ($i -lt $parts.Count) {
+            if (-not $parts[$i].StartsWith(':')) { $i++; continue }
+            $f = $parts[$i].Substring(1).Split(' ')
+            $newSha = $f[3]
+            $path = $parts[$i + 1]
+            $i += 2
+            if ($newSha -match '^0+$') { continue }
+            if (-not $seen.Add($path + [char]0 + $newSha)) { continue }
+            $res.Blobs++
+            $g = Invoke-ScrubGit $Repo @('cat-file', 'blob', $newSha)
+            if (-not $g.Ok -or $g.Code -ne 0) { $res.Unreadable.Add($path + ' (blob ' + $newSha.Substring(0, 7) + ')'); continue }
+            $skip = [bool]($SelfRel -and ($path -ceq $SelfRel))
+            [void](Add-ScrubContent $res $path ($path + ' (blob ' + $newSha.Substring(0, 7) + ')') $g.Bytes $skip $Denylist)
+        }
+    }
+    return $res
 }
 
 function Format-ScrubHit($H) {
@@ -892,6 +954,76 @@ if ($res.DiscoveryOk) {
 if (-not $denylist) {
     Write-ScrubUnchecked 'SG5 denylist rows' 'TRACKSTEWARD_SCRUB_DENYLIST is unset, the file is missing, or it holds no entry'
 }
+
+Write-Host "(SG6) the history scan: every blob a range of commits adds or changes, and every commit message"
+function Add-ScrubTestCommit([string]$Repo, [string]$Message) {
+    # no line-ending warning from git: the fixture helper reads stderr as an error
+    Invoke-HookTestGit $Repo @('config', 'core.autocrlf', 'false')
+    Invoke-HookTestGit $Repo @('add', '-A')
+    Invoke-HookTestGit $Repo @('commit', '--quiet', '--allow-empty', '-m', $Message)
+}
+$hRepo = New-ScrubTestRepo 'hist' @{ 'base.txt' = $hitLine + "`n" }
+Add-ScrubTestCommit $hRepo 'base'
+$hBase = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+# a private line added in one commit and removed in the next: the tip is clean, the history is not
+Set-CoordFile $hRepo 'gone.md' ($hitLine + "`nzzbeta in it`n")
+Add-ScrubTestCommit $hRepo 'adds a file with private content'
+Remove-Item -LiteralPath (Join-Path $hRepo 'gone.md')
+Set-CoordFile $hRepo 'clean.txt' "nothing here`n"
+Add-ScrubTestCommit $hRepo 'removes it again'
+# the scrub suite itself holds the patterns: only its denylist hits count
+Set-CoordFile $hRepo 'tests/scrub.test.ps1' ($hitLine + " zzbeta`n")
+Add-ScrubTestCommit $hRepo 'a self file'
+Add-ScrubTestCommit $hRepo ('message with ' + $hitLine)
+$res = Invoke-ScrubHistory -Repo $hRepo -Range ($hBase + '..HEAD') -SelfRel $selfName -Denylist @('zzbeta')
+Assert-Coord 'SG6 discovery works on a real range' $res.DiscoveryOk $res.Reason
+$tipRes = Invoke-ScrubScan -Repo $hRepo -SelfRel $selfName
+Assert-Coord 'SG6 control: the tip of that repo has no hit in gone.md (the file is gone), so only a history scan can see it' (@(Get-ScrubHitsOf $tipRes 'gone.md').Count -eq 0)
+$goneHits = @($res.Hits | Where-Object { $_.File -like 'gone.md*' })
+Assert-Coord 'SG6 a blob added and removed inside the range is scanned: the path rule and the denylist both hit' (@($goneHits | Where-Object { $_.Rule -ceq $pathRule }).Count -eq 1 -and @($goneHits | Where-Object { $_.Rule -like 'denylist entry*' }).Count -eq 1) (($res.Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+Assert-Coord 'SG6 a file of the base commit is not scanned (outside the range)' (@($res.Hits | Where-Object { $_.File -like 'base.txt*' }).Count -eq 0 -and -not ($res.Scanned | Where-Object { $_ -like 'base.txt*' }))
+Assert-Coord 'SG6 the self file is scanned for the denylist only' (@($res.Hits | Where-Object { $_.File -like "$selfName*" -and $_.Rule -ceq $pathRule }).Count -eq 0 -and @($res.Hits | Where-Object { $_.File -like "$selfName*" -and $_.Rule -like 'denylist entry*' }).Count -eq 1)
+Assert-Coord 'SG6 a commit message is scanned (named by its commit, not by a file)' (@($res.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq $pathRule }).Count -eq 1)
+Assert-Coord 'SG6 the hits carry no sha of the repo in a hex rule when no repo is listed' (-not ($res.Hits | Where-Object { $_.Rule -ceq $hexRuleName }))
+$badRes = Invoke-ScrubHistory -Repo $hRepo -Range 'no-such-rev..HEAD'
+Assert-Coord 'SG6 a range git cannot resolve is not a pass: discovery fails with a reason' ((-not $badRes.DiscoveryOk) -and $badRes.Reason)
+$emptyRes = Invoke-ScrubHistory -Repo $hRepo -Range 'HEAD..HEAD'
+Assert-Coord 'SG6 an empty range is not a pass either: discovery fails' ((-not $emptyRes.DiscoveryOk) -and $emptyRes.Reason)
+# a merge: the commits of a merged branch are in the range
+Invoke-HookTestGit $hRepo @('checkout', '--quiet', '-b', 'side', $hBase)
+Set-CoordFile $hRepo 'side.md' ($hitLine + "`n")
+Add-ScrubTestCommit $hRepo 'side work'
+Invoke-HookTestGit $hRepo @('checkout', '--quiet', 'main')
+Invoke-HookTestGit $hRepo @('merge', '--quiet', '--no-ff', '-m', 'merge side', 'side')
+$mRes = Invoke-ScrubHistory -Repo $hRepo -Range ($hBase + '..HEAD')
+Assert-Coord 'SG6 a branch merged inside the range is scanned' (@($mRes.Hits | Where-Object { $_.File -like 'side.md*' }).Count -eq 1)
+
+# the real range, when the run names one
+if ($History) {
+    $real = Invoke-ScrubHistory -Repo $repoRoot -Range $History -SelfRel $selfName -Denylist $denylist
+    Assert-Coord "SG6 history discovery: git lists the commits of $History" $real.DiscoveryOk $real.Reason
+    if ($real.DiscoveryOk) {
+        Write-Host "(SG6) no private content in $($real.Commits) commits and $($real.Scanned.Count) blob versions of $History"
+        foreach ($rule in $scrubRules) {
+            $hs = @($real.Hits | Where-Object { $_.Rule -ceq $rule.Name } | ForEach-Object { Format-ScrubHit $_ })
+            Assert-Coord "SG6 no '$($rule.Name)' in the history" ($hs.Count -eq 0) ($hs -join "`n")
+        }
+        if ($denylist) {
+            $hs = @($real.Hits | Where-Object { $_.Rule -like 'denylist entry*' } | ForEach-Object { Format-ScrubHit $_ })
+            Assert-Coord "SG6 no denylist entry ($($denylist.Count) entries) in the history" ($hs.Count -eq 0) ($hs -join "`n")
+        }
+        else { Write-ScrubUnchecked 'SG6 history denylist rows' 'TRACKSTEWARD_SCRUB_DENYLIST is unset, the file is missing, or it holds no entry' }
+        $histRepoRule = Invoke-ScrubRepoRule $real ([string]$env:TRACKSTEWARD_SCRUB_REPOS)
+        if ($histRepoRule.Verdict -ceq 'RAN') {
+            $hs = @($real.Hits | Where-Object { $_.Rule -ceq $hexRuleName } | ForEach-Object { Format-ScrubHit $_ })
+            Assert-Coord "SG6 no hex token that is a commit of the $($histRepoRule.Usable) listed repo(s) in the history" ($hs.Count -eq 0) ($hs -join "`n")
+        }
+        else { Write-ScrubUnchecked 'SG6 history commit-sha rows' 'TRACKSTEWARD_SCRUB_REPOS is unset, or none of its entries is the top level of a git repo' }
+        if ($real.NulFiles.Count -gt 0) { Write-ScrubUnchecked 'SG6 history blobs with NUL bytes and no BOM' ('not scanned: ' + ($real.NulFiles -join ', ')) }
+        if ($real.Unreadable.Count -gt 0) { Write-ScrubUnchecked 'SG6 history blobs git could not read' ('not scanned: ' + ($real.Unreadable -join ', ')) }
+    }
+}
+else { Write-ScrubUnchecked 'SG6 the real history' 'no -History range was given (the release gate passes origin/main..HEAD)' }
 
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-CoordUncheckedSummary
