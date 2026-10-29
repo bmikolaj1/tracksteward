@@ -15,7 +15,8 @@
 #      character (tab and line breaks included, checked before the trim), no
 #      character other than letters, digits, combining marks, punctuation,
 #      symbols and the plain space (so no zero-width space, BOM, soft hyphen,
-#      bidi mark or non-breaking space, and no character outside the Basic
+#      bidi mark, braille blank, object replacement character or
+#      non-breaking space, and no character outside the Basic
 #      Multilingual Plane, an emoji included; some other letters and marks that
 #      draw nothing, such as a Hangul filler or a variation selector, are not
 #      recognized, and a code point the host's Unicode tables do not know yet,
@@ -107,8 +108,9 @@
 # a ledger script is running.
 #
 # Limits: GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE are not cleared; run the
-# script from a shell where they are unset (git run from a hook sets them), or
-# every Repo cell would be read through that one repository. A Repo cell on a network share is checked for existence and probed
+# script from a shell where they are unset. An inherited absolute GIT_DIR (git
+# sets it when it runs a hook) makes every Repo cell be read through that one
+# repository. A Repo cell on a network share is checked for existence and probed
 # with git (step 3) and fetched (step 4) with no timeout, so an unreachable server can stall the run
 # there (no lock is held then). GIT_TERMINAL_PROMPT=0 stops git's own terminal
 # prompt only: an ssh passphrase prompt or a credential-manager window can
@@ -183,7 +185,8 @@ if ($NewSession -match $ctlRe) { Exit-NotWritten '-NewSession holds a tab, a lin
 # An allow-list, not a Cf test: .NET's \p{Cf} does not match every format character,
 # and it files the soft hyphen (U+00AD) under punctuation, so that one is named,
 # as are the braille blank (U+2800) and the object replacement character (U+FFFC).
-if ($NewSession -match '[^\p{L}\p{N}\p{M}\p{P}\p{S} ]|[\u00AD\u2800\uFFFC]') { Exit-NotWritten '-NewSession holds a character other than letters, digits, combining marks, punctuation, symbols and the plain space (no invisible, no-break-space or non-BMP character)' }
+if ($NewSession -match '[^\p{L}\p{N}\p{M}\p{P}\p{S} ]') { Exit-NotWritten '-NewSession holds a character other than letters, digits, combining marks, punctuation, symbols and the plain space (no invisible, no-break-space or non-BMP character)' }
+if ($NewSession -match '[\u00AD\u2800\uFFFC]') { Exit-NotWritten '-NewSession holds U+00AD, U+2800 or U+FFFC, a character that can draw nothing or look like a space' }
 if ($NewSession.Contains('`')) { Exit-NotWritten '-NewSession holds a backtick' }
 if ($NewSession.Contains('|')) { Exit-NotWritten '-NewSession holds a |, which would break a Tracks or Log reader' }
 if ($NewSession.Contains('"')) { Exit-NotWritten '-NewSession holds a double quote; the ledger writes the name between double quotes' }
@@ -299,7 +302,10 @@ function Get-CellText([string]$Cell) {
 
 # A -NewSession that is a track's Session cell (its text, or its id token as the
 # scope guard binds rows; any row, finished or live) is refused.
-$newToken = Get-CoordSessionToken $new
+# -NewSession is read the same way as a cell: its first word, with a local_ prefix in any case
+# (the token reader is case-sensitive there, so a refusal would be missed).
+$newFirst = ($new -split '\s+')[0] -replace '\A(?i:local_)', 'local_'
+$newToken = Get-CoordSessionToken $newFirst
 foreach ($row in $rows) {
     $cellText = Get-CellText ([string]$row.Session)
     $tok = Get-CoordSessionToken ([string]$row.Session)

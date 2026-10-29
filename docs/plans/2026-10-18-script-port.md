@@ -263,3 +263,9 @@ Findings from S3, ruled 2026-10-28 (one line each; fix in S7 or 0.2.1):
    `-Base` as `slot-check` has. S7 or 0.2.1.
 8. F5 (all scripts, latent): the git 2.38+ floor of section 3 is not enforced; no script refuses at
    start (grep finds comments only). S7 or 0.2.1.
+
+Finding from the S5 round-3 review (reviewed 2026-10-29, ruled: to the plan, for 0.2.1):
+
+9. `scripts/coord-handoff.ps1` name check (latent): a `-NewSession` made only of characters the allow-list
+   accepts but that draw nothing (U+3164, U+115F, U+1160, U+FFA0, U+034F, U+FE0F, U+17B5) is not
+   refused, so a name can read as blank; the header says so. 0.2.1.

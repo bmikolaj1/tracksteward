@@ -702,14 +702,19 @@ Invoke-HookTestGit $root @('init', '--bare', '--quiet', $bare13)
 [void][IO.Directory]::CreateDirectory((Join-Path $root 'My (stuff)'))
 [void][IO.Directory]::CreateDirectory((Join-Path $root 'norepo13'))
 [void][IO.Directory]::CreateDirectory((Join-Path $fxR.Launch 'notarepo13'))
-foreach ($c in $badRepos) {
-    $p = New-HLedger @(Get-HLines (New-CoordLine 'Old coordinator') @($liveR, (New-Row $c[1] $c[2] 'sess-b' 'bb' '' 'running')))
-    $b = Get-Bytes $p
-    $r = Invoke-Handoff $newName $p
-    $why13r = $c[1]
-    if ($c.Count -gt 3) { $why13r = $c[3] }
-    Test-RefusedNoFetch "H13 a live row whose Repo is $($c[0]) (the valid row's repo is not fetched either)" $r $p $b $fxR $staleR $why13r
-}
+# git must not walk up from the folder in no repository to one above the temp folder.
+$prevCeil13 = $env:GIT_CEILING_DIRECTORIES
+$env:GIT_CEILING_DIRECTORIES = $root
+try {
+    foreach ($c in $badRepos) {
+        $p = New-HLedger @(Get-HLines (New-CoordLine 'Old coordinator') @($liveR, (New-Row $c[1] $c[2] 'sess-b' 'bb' '' 'running')))
+        $b = Get-Bytes $p
+        $r = Invoke-Handoff $newName $p
+        $why13r = $c[1]
+        if ($c.Count -gt 3) { $why13r = $c[3] }
+        Test-RefusedNoFetch "H13 a live row whose Repo is $($c[0]) (the valid row's repo is not fetched either)" $r $p $b $fxR $staleR $why13r
+    }
+} finally { $env:GIT_CEILING_DIRECTORIES = $prevCeil13 }
 
 # =============================================================================
 Write-Host "(H14) no time parameter, no leftover words"
@@ -863,7 +868,11 @@ $cases3 = @(
     @('a Session cell holding the id and a note', 'r3note', $idS, ($idS.Substring(0, 14) + ' (port work, sonnet)'), 'running'),
     @('a live row, by id', 'r3id', $idS, $idS, 'running'),
     @('a Session cell with the id in upper-case hex', 'r3upper', $idS, $upperTok, 'running'),
-    @('a Session cell holding only the short token (local_ plus the first 8 hex)', 'r3short', $idS, $idS.Substring(0, 14), 'running')
+    @('a Session cell holding only the short token (local_ plus the first 8 hex)', 'r3short', $idS, $idS.Substring(0, 14), 'running'),
+    @('a -NewSession of the id and a note, the cell holding the bare id', 'r3newnote', ($idS + ' (opus)'), $idS, 'running'),
+    @('a -NewSession of the short id and a note, the cell holding the full id', 'r3newshort', ($idS.Substring(0, 14) + ' (opus)'), $idS, 'running'),
+    @('a -NewSession whose local_ prefix is in upper case', 'r3newucp', ('LOCAL_' + $idS.Substring(6)), $idS, 'running'),
+    @('a -NewSession of an upper-case prefix and a note, the cell holding the id and a note', 'r3newucn', ('LOCAL_' + $idS.Substring(6, 8) + ' (opus)'), ($idS.Substring(0, 14) + ' (port work)'), 'running')
 )
 foreach ($c in $cases3) {
     $rows3 = @((New-Row 'r3other' $root 'someone else' 'bo' '' 'running'), (New-Row $c[1] $root $c[3] 'bs' '' $c[4]))
