@@ -5,13 +5,13 @@
 # One read-only pass over the STRUCTURED sections of today's ledger (Tracks, Merge slots, Owed checks, Findings,
 # Queue), never the Log or Decisions, so it stays cheap on a long ledger: about 2,000 characters against the whole
 # file. Every row, finding, owed-check, queue and slot line ends in `L<n>`, the ledger line it came from (a DONE entry
-# is its PR number, or its track name, with its sha when the row records one).
+# is its PR number, or its track name, with its `as <sha>` when the row records one).
 #
 # Groups (the first word of a Tracks row's Status cell decides; anything else is UNCLASSIFIED and listed under WAITING):
 #   QUEUED -> QUEUED                    BRIEFED, WAIT-USER, WAIT-SLOT, WAIT-QUOTA -> WAITING
 #   RUNNING, PR-OPEN -> RUNNING         BLOCKED -> BLOCKED              MERGED, DONE -> DONE
 # The words are Get-CoordStateWords (coord-common.ps1). MERGED and DONE count as DONE only when Test-CoordRowTerminal
-# agrees ("MERGED/x" is live for every other script, so it is unclassified here). BRIEFED with no legacy "ACK HH:mm"
+# agrees ("MERGED/x" is live for every other script, so it is unclassified here). BRIEFED with no "ACK HH:mm"
 # after 15 minutes says so (the skill has an ACKed row set to RUNNING; a note such as "no ACK yet" is not an ACK); a
 # stamp later than the clock is yesterday's.
 # Also WAITING: Findings F<n> with no later `F<n> outcome:` line, unticked Owed checks. Also BLOCKED: an open Merge
@@ -162,7 +162,7 @@ for ($i = 0; $i -lt $rows.Count; $i++) {
         # a stamp later than the clock was written before midnight
         if ($stamp -gt $at) { $stamp = $stamp.AddDays(-1) }
         $mins = [int]($at - $stamp).TotalMinutes
-        # only the legacy append "ACK HH:mm" answers the brief; "no ACK yet" or "feedback" do not
+        # only an "ACK HH:mm" in the cell answers the brief; "no ACK yet" or "feedback" do not
         if ($mins -gt 15 -and $r.Status -cnotmatch '\bACK \d\d:\d\d\b') { $extra = ", no ACK ($mins min)" }
     }
     if ($isTerminal) {
