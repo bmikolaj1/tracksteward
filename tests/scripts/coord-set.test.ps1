@@ -240,6 +240,26 @@ $r = Invoke-Set @{ Track = 'T2'; Text = 'ok'; Ledger = $p }
 Test-Changed 'S4 Status still works there' $r $p $noModel @{ 14 = ($noModel[14] -replace 'running \|$', 'ok |') }
 Invoke-Refused 'S4 an unknown -Cell (PR) is refused' @{ Track = 'T1'; Cell = 'PR'; Text = 'x' } -Why "-Cell must be"
 
+# The check that the parser's rows and the table's data lines agree cannot be reached with a real ledger (both use
+# the same rule), so it is tested with a copy of the library whose row parser drops its last row.
+$driftDir = Join-Path $root 'drift-scripts'
+Copy-HookTestScripts -SourceDir (Split-Path -Parent $ScriptPath) -DestDir $driftDir
+$driftLib = Join-Path $driftDir 'coord-common.ps1'
+$driftSrc = [System.IO.File]::ReadAllText($driftLib)
+$driftAnchor = $driftSrc.IndexOf('function ConvertFrom-CoordTracksRows')
+$driftAt = $driftSrc.IndexOf('    return $result.ToArray()', $driftAnchor)
+Assert-Coord 'S4b control: the copy of the library has its row parser patched (the anchor was found)' (($driftAnchor -ge 0) -and ($driftAt -gt $driftAnchor)) "anchor=$driftAnchor at=$driftAt"
+if ($driftAt -gt $driftAnchor) {
+    $driftSrc = $driftSrc.Substring(0, $driftAt) + '    return @($result.ToArray() | Select-Object -First ($result.Count - 1))' + $driftSrc.Substring($driftAt + '    return $result.ToArray()'.Length)
+    [System.IO.File]::WriteAllText($driftLib, $driftSrc)
+    $p = New-Ledger $sample
+    $b = Get-Bytes $p
+    $realScript = $ScriptPath
+    $ScriptPath = Join-Path $driftDir (Split-Path -Leaf $realScript)
+    try { $r = Invoke-Set @{ Track = 'T2'; Text = 'ok'; Ledger = $p } } finally { $ScriptPath = $realScript }
+    Assert-Coord 'S4b the Tracks rows the parser returns and the table lines disagree: refused naming the counts, ledger unchanged' ($r.Code -eq 2 -and $r.Out -match '^COORD-SET: NOT WRITTEN - ' -and $r.Out -match 'cannot match the Tracks rows' -and (Get-Bytes $p) -ceq $b) "code=$($r.Code) out=$($r.Out)"
+}
+
 Write-Host '(S5) text'
 foreach ($c in @(@('empty', ''), @('spaces', '   '), @('pipe', 'a | b'), @('LF', "a`nb"), @('CR', "a`rb"), @('NUL', "a$([char]0)b"),
         @('U+0085', "a$([char]0x85)b"), @('U+2028', "a$([char]0x2028)b"), @('DEL', "a$([char]0x7F)b"))) {

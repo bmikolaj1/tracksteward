@@ -303,8 +303,6 @@ Found while porting Phase D (2026-10-29), for 0.2.1:
 20. The port's `coord-set.ps1` `Get-RepoFull` differs from the source on purpose: it uses
     `ConvertTo-CoordRootedPath` and the platform path comparison, so it rejects `, ; ( )`, device paths and a bare
     drive root in a Repo cell, and accepts `/...` paths off Windows.
-21. `scripts/coord-set.ps1` (coverage): no test pins the refusal "cannot match the Tracks rows to its lines"; a
-    mutant that disables it survives the suite.
 
 ## 10. Phase D (added 2026-10-29): the status board
 
