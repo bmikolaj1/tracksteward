@@ -41,7 +41,8 @@ where PowerShell is missing.
   whose branch is gone prints `branch not found` on every run; its base is always `origin/main`.
   `coord-status.ps1` does not list a finding whose id carries a carry date, can take a `#<n>` in the
   Status text as the row's PR, and under `-Verify` can ask the current folder's repository about a PR
-  of another repository; the Queue gate is anchored on an exact ` owner:`. All are on the 0.2.1 list.
+  of another repository; the Queue gate is anchored on an exact ` owner:`; an `[after Q<n>]` gate that names no line reads CLOSED;
+  an indented unticked Owed check is not listed. All are on the 0.2.1 list.
 
 ## 0.1.2 - 2026-10-15
 

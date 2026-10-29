@@ -5,7 +5,7 @@
 # One read-only pass over the STRUCTURED sections of today's ledger (Tracks, Merge slots, Owed checks, Findings,
 # Queue), never the Log or Decisions, so it stays cheap on a long ledger: about 2,000 characters against the whole
 # file. Every row, finding, owed-check, queue and slot line ends in `L<n>`, the ledger line it came from (a DONE entry
-# ends in its PR number and sha instead).
+# is its PR number, or its track name, with its sha when the row records one).
 #
 # Groups (the first word of a Tracks row's Status cell decides; anything else is UNCLASSIFIED and listed under WAITING):
 #   QUEUED -> QUEUED                    BRIEFED, WAIT-USER, WAIT-SLOT, WAIT-QUOTA -> WAITING

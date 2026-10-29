@@ -300,9 +300,11 @@ Any later change to a brief (a widened scope, a new merge order) is appended to 
 so the day's copy still shows what the track was told and when. It is also sent as its own message that says what changed and carries the
 current sha, and asks for `ACK {track} changed`. Each such request gets its own owed check and
 deadline (and the user is told it), and the change is in force once it is ACKed. The Status cell
-keeps the track's state word first; the change and its ACK are appended to it, not set over it:
-`coord-set.ps1 -Track '<name>' -Append -Text 'brief changed {now}'`, and later `-Append -Text 'ACK
-changed {now}'`, for example `PR-OPEN 10:22; @abc1234, brief changed 10:30, ACK changed 10:34`. After
+keeps the track's state word first; the change and its ACK are appended to it, not set over it, each
+call on one line: `coord-set.ps1 -Track '<name>' -Append -Text 'brief changed {now}'`, and later
+`coord-set.ps1 -Track '<name>' -Append -Text 'ACK {now} (changed)'`, for example
+`PR-OPEN 10:22; @abc1234, brief changed 10:30, ACK 10:34 (changed)`. The board reads an `ACK HH:mm` in
+the cell as the ACK. While the row is still BRIEFED, the first ACK is the one of step 6. After
 midnight a change is a fresh brief (see The ledger). A blocker or a question from the track is
 still sent in full in a message, never as a file.
 
@@ -348,7 +350,7 @@ still sent in full in a message, never as a file.
 Run the board and paste its lines; do not answer from memory and do not re-read the whole ledger.
 One read-only pass over the structured sections only (Tracks, Merge slots, Owed checks, Findings,
 Queue; never the Log), about 2,000 characters, every item line ending in a pointer (`L<n>`, the
-ledger line it came from; a DONE entry ends in its PR number and sha instead), from the PowerShell tool, in process:
+ledger line it came from; a DONE entry is its PR number (or its track name) with its sha when the row records one), from the PowerShell tool, in process:
 
 `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-status.ps1" [-Ledger <path>] [-Verify] [-Full] [-Group running|waiting|queued|blocked|done]`
 

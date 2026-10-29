@@ -354,7 +354,7 @@ Assert-Coord 'T18a a quoted "[after #99 merges]" in source does not take the gat
 Assert-Coord 'T18b a "[needs review]" in source does not take the gate: Q2 gate after Q9 CLOSED' ($q -match 'Q2 wait\s+gate: after Q9  CLOSED') $q
 Assert-Coord 'T18c an "[after the retro]" link in source does not take the gate: Q3 gate after 11:00 OPEN' ($q -match 'Q3 port it\s+gate: after 11:00  OPEN') $q
 Assert-Coord 'T18d a line with no owner part: the last gate-shaped group, Q4 gate after 11:00 OPEN' ($q -match 'Q4 no owner part \[needs user\] then\s+gate: after 11:00  OPEN') $q
-$rv = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view 130\b' '{"state":"MERGED"}'))
+$rv = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view 99\b' '{"state":"MERGED"}'))
 Assert-Coord 'T18e with -Verify, gh is never asked about the quoted #99 (the recorded calls), and #99 is not printed' (@($rv.Calls | Where-Object { "$_" -match '\b99\b' }).Count -eq 0 -and -not ($rv.Out -match '#99') -and (((Get-GroupBlock $rv 'QUEUED') -join "`n") -match 'Q1 port it\s+gate: after 11:00  OPEN')) $rv.Out
 
 # ---- T19 the real index folder
