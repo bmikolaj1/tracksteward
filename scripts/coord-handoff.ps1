@@ -43,7 +43,8 @@
 #      `Coordinator: session "<old name>"` (the shape the ledger template and
 #      this script write; the old name may be an id; it is trimmed, must not be
 #      a <placeholder> or hold "; before that: "; a -NewSession equal to it,
-#      ignoring case, is refused; look-alike spellings, such as a Cyrillic letter
+#      ignoring case, or whose first word is the same id (a note after the id, the
+#      short or the full form of one id), is refused; look-alike spellings, such as a Cyrillic letter
 #      for a Latin one or a decomposed accent, are not recognized as equal); `## Log` and `## Tracks` each exactly once
 #      (case-insensitive); the Tracks section must hold a table (a header row; a
 #      header with no data rows is accepted), read by Read-CoordLedgerTracks'
@@ -311,6 +312,10 @@ function Get-CellText([string]$Cell) {
 # a cell's own prefix is not folded, as the scope guard does not bind it either.
 $newFirst = ($new -split '\s+')[0] -replace '\A(?i:local_)', 'local_'
 $newToken = Get-CoordSessionToken $newFirst
+# The current coordinator is the same session when its id is: the whole-text compare above misses
+# a note after the id and the short and full forms of one id.
+$oldToken = Get-CoordSessionToken (($old -split '\s+')[0])
+if ($oldToken -and $newToken -and $oldToken -ceq $newToken) { Exit-NotWritten "-NewSession $new is already the coordinator named in $Ledger" }
 foreach ($row in $rows) {
     $cellText = Get-CellText ([string]$row.Session)
     $tok = Get-CoordSessionToken ([string]$row.Session)

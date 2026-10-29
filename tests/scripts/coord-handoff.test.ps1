@@ -678,6 +678,23 @@ $b = Get-Bytes $p
 $r = Invoke-Handoff 'Old' $p
 Test-RefusedNoFetch 'H13 -NewSession equal to a padded old name' $r $p $b $fxR $staleR 'already the coordinator'
 
+# The coordinator named by an id is the same session however the id is spelled: a note after it,
+# the short local_<8 hex> form against the full id, and an upper-case local_ prefix.
+$idC = New-Id
+$coordIdCases = @(
+    @('the id and a note, the ledger holding the bare id', $idC, ($idC + ' (opus)')),
+    @('the short id and a note, the ledger holding the full id', $idC, ($idC.Substring(0, 14) + ' (opus)')),
+    @('the full id, the ledger holding the short id and a note', ($idC.Substring(0, 14) + ' (port work)'), $idC),
+    @('an upper-case local_ prefix, the ledger holding the short id', $idC.Substring(0, 14), ('LOCAL_' + $idC.Substring(6, 8))),
+    @('an upper-case local_ prefix and a note, the ledger holding the id and a note', ($idC + ' (port work)'), ('LOCAL_' + $idC.Substring(6, 8) + ' (opus)'))
+)
+foreach ($c in $coordIdCases) {
+    $p = New-HLedger @(Get-HLines ('Coordinator: session "' + $c[1] + '", cwd `/x`.') @($liveR))
+    $b = Get-Bytes $p
+    $r = Invoke-Handoff $c[2] $p
+    Test-RefusedNoFetch "H13 -NewSession is the coordinator: $($c[0])" $r $p $b $fxR $staleR 'already the coordinator'
+}
+
 $noLog = @($okLines | ForEach-Object { if ($_ -ceq '## Log') { '## Journal' } else { $_ } })
 $p = New-HLedger $noLog
 $b = Get-Bytes $p
