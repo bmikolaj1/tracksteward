@@ -1,0 +1,7 @@
+# Text files are normalized to LF in the repository; Windows scripts are checked
+# out with CRLF everywhere (cmd.exe misreads LF-only batch files, and Windows
+# PowerShell 5.1 is the host the scripts are verified on).
+* text=auto
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf

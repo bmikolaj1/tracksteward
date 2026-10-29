@@ -60,13 +60,44 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
 
 - **Append before you reply.** Every event (a verification, a brief sent, a report, a slot, a
   merge, a decision, a finding and its outcome) goes into the ledger BEFORE the reply that
-  mentions it. One line per event, time first, taken from the clock (`date +%H:%M`,
-  `Get-Date -Format HH:mm`), never typed: typed times drift. Compare today's date (`date +%F`,
+  mentions it. One line per event, time first, taken from the clock, never typed: typed times
+  drift. Append with `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-log.ps1" -Section Log -Text '<event>'`
+  from the PowerShell tool (`-Section` is `Queue`, `Decisions`, `Findings` or `Log`; in this form a `'`
+  inside the text is doubled, `''`, and so is a typographic single quote such as U+2019), or, from Bash,
+  `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/coord-log.ps1")" -Section Log -Text '<event>'`
+  (there a `'` inside the text is written `'\''`; never without the prefix: Git Bash turns a text
+  that starts with `/` into a Windows path and the run exits 0 with that line written; with the
+  prefix no path is converted, hence `cygpath -w` for the script, and `-Ledger` is written as
+  `C:/...`);
+  it stamps the line with its own clock. Without
+  `-Ledger` the script uses today's ledger only from the repo's main checkout; anywhere else pass
+  `-Ledger <path>`. On a host without PowerShell, take the time from the clock
+  (`date +%H:%M`) and append by hand. Compare today's date (`date +%F`,
   `Get-Date -Format yyyy-MM-dd`) with the ledger's each time you append: when they differ, it is
   past midnight (below).
+- **A time inside a Tracks cell is never typed either.** Write `{now}` where a time goes and
+  `coord-set.ps1` puts HH:mm from its own `Get-Date` there (every `{now}`, one clock read); a time
+  typed by hand is refused. Use the same in-process form as `coord-log.ps1` (not through
+  `powershell.exe -File` from the PowerShell tool):
+  `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-set.ps1" -Track '<name>' -State BRIEFED -Text 'brief sent'`
+  sets the row's Status cell (`-State BRIEFED -Append -Text 'resent at {now}'` adds `, resent at <time>`;
+  `-Cell Model -Append -Text '{now} <model> <effort>'` adds `; <time> <model> <effort>`;
+  `-Repo <full path>` picks the row when a name is on rows of two repos). From Bash use the
+  `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/coord-set.ps1")" ...`
+  form of `coord-log.ps1`. Only `coord-set.ps1` expands `{now}`: `coord-log.ps1` stamps the line it
+  appends and leaves a `{now}` in its text as typed. An Owed-check tick is not scripted: tick it by
+  hand with a time from `Get-Date`. An outcome line stays an appended line (`coord-log.ps1`). The
+  script changes only that cell and keeps every other cell and line (a file that mixes LF and CRLF
+  comes back with one, as with `coord-log.ps1`), edits the ledger it is given, canonical or not,
+  and prints `COORD-SET <ledger> [Tracks <track> <cell>]: <the new cell>` or
+  `COORD-SET: NOT WRITTEN - <reason>` (exit 0 / 2). A Status set that finishes a live row adds a
+  `COORD-SET NOTE:` line, because a finished row is not live for slot-check, coord-brief,
+  coord-handoff, merge-verify or the scope guard; a set that makes a finished row live again adds a
+  `COORD-SET NOTE: ... LIVE again` line. Without `-Ledger` it uses today's ledger only from the
+  repo's main checkout, as `coord-log.ps1` does.
 - **Current state at the top, history at the bottom.** Baseline, Tracks, Merge slots and Owed
   checks (verifications or work someone still owes) are edited in place and kept short.
-  Decisions, Findings and Log are append-only, oldest first. A finding's outcome is a new
+  Queue, Decisions, Findings and Log are append-only, oldest first. A finding's outcome is a new
   `F<n> outcome: ...` line, not an edit. The Tracks table and its glob syntax are in the template.
 - **Tracks table.** Its columns are Track, Repo, Session, Model, Cwd, Branch, Scope, PR and Status,
   and every row needs exactly one cell per column, even an empty one: a ragged row makes the whole
@@ -74,11 +105,29 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
   - **Status cell:** lead with `MERGED` or `DONE` (upper case, the first word) when the track is
     finished, and never otherwise. A row is finished only by that first word, so `NOT MERGED ...`
     or `running; round 1 DONE` stay live. Briefing and slot checks look at live rows only.
+    Set the cell with `-State <word>` so the status board can group the row:
+    `coord-set.ps1 -Track '<name>' -State RUNNING -Text 'ACK'` writes `RUNNING HH:mm; ACK`.
+    The words: QUEUED (row, no brief yet), BRIEFED (no ACK yet), RUNNING, PR-OPEN, WAIT-USER (a
+    ruling or a merge go owed), WAIT-SLOT, WAIT-QUOTA, BLOCKED, MERGED, DONE; any other word is
+    refused. `-State <word> -Append` adds detail only while the cell's first word is that word; a
+    state change is a new `-State` without `-Append`. A cell set without `-State` is written as
+    before; the board classifies it by its first word, so a legacy cell (`running`,
+    `briefed 08:32`) counts as unclassified, and `MERGED/x` (not a finished row for the other
+    scripts) too.
   - **Model cell:** the track's model and effort at start, then each switch with its time
     (`<model> <effort>; 14:10 <model> <effort>`). It is evidence, for a later day, of which model
     and effort produced which result. Like the brief's other track-owned facts, it is asked for,
     not guessed: the brief asks the track for its model and effort in the ACK (or "unknown"), and
-    to tell the coordinator when it switches. The coordinator stamps each switch with its own clock.
+    to tell the coordinator when it switches. The coordinator stamps each switch with its own clock
+    (`coord-set.ps1 -Cell Model -Append`, above).
+  - **Session cell:** the session's name for display (`claude -n`, or the name `ListAgents`
+    shows), as the template says. The scope guard treats a cell as a binding session id only when
+    it is exactly one id (`local_` plus 8 or more hex digits, `local_` plus a UUID, or a bare
+    UUID). A cell that holds only a name, `none` or `TBD` never binds across repos, so two tracks
+    that share a name in two repos stay apart and neither may edit inside the other's scope. A
+    track that works in two repos needs one row per repo and the same session id in both Session
+    cells, and the guard then judges its edits in each repo by that repo's row. Within one repo
+    a track binds by its row's Repo and Branch, name or not.
 - **Re-read it** at the start of every coordination window, after every compaction and after `/clear`. A
   SessionStart hook that prints the top of today's ledger can automate this; Claude Code replaces
   hook output over 10,000 characters with a file path, so keep the top well under that.
@@ -96,6 +145,18 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
     investigation, the named track's report says what it measured. If a track merges without the
     fix, the coordinator re-opens the finding as PENDING to the user, so it cannot vanish with
     that merge.
+- **Queue** holds what is to start now or later and is not a track yet (an item from the previous
+  handover's queue, a decision's "after X", a finding whose outcome is its own slice). One line per
+  item, appended with `coord-log.ps1 -Section Queue -Text 'Q<n> <what> [<gate>] owner: <who>;
+  source: <where it came from>'`; a later `Q<n> outcome: started as track <name> | dropped,
+  because ... | moved to <where the backlog lives>` line closes it, as an outcome line closes a
+  finding. The board reads the gate in square brackets: `[after #<n> merges]`,
+  `[after <yyyy-MM-dd> <HH:mm>Z]`, `[after <HH:mm>]`, `[after Q<n>]`, `[needs <who> ...]`; it takes
+  the last `[after ...]` or `[needs ...]` group before ` owner:`, so a bracket quoted in owner or
+  source is not read as the gate. Write ` owner:` exactly (lower case, one space before it): a line
+  without it is searched whole, and a gate-shaped bracket quoted in its source can then take the
+  gate. A ledger made before the template had `## Queue` gets the heading added by hand once
+  (`coord-log.ps1` refuses a missing section).
 - **Quotes are evidence, never approval.** Record a track's request as "track asked: ...", never
   as a bare instruction.
 - **Past midnight, roll over before anything else.** Nothing carries itself: a coordinator
@@ -107,6 +168,15 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
   - the Baseline (re-snapshot it, CI column included);
   - the slot queue (an open slot stays open);
   - every unticked owed check, marked `(from <date>)` at the end of its line;
+  - every Queue item with no `Q<n> outcome:` line, re-appended with `coord-log.ps1 -Section Queue`
+    without its old time, keeping its `Q<n>` id, and marked `(from <date>)` at the end of its line,
+    plus the outcome line of every item an open item's `[after Q<n>]` gate names, so the gate still
+    reads OPEN; an `[after <HH:mm>]` gate is rewritten as `[after <yyyy-MM-dd> <HH:mm>Z]`, the local
+    time converted to UTC
+    (`(Get-Date '<yyyy-MM-dd> <HH:mm>').ToUniversalTime().ToString('yyyy-MM-dd HH:mm', [cultureinfo]::InvariantCulture)`
+    for the day it meant; the date can change), because the board reads a bare time as local and a
+    `Z` time as UTC; new items take ids above the highest id in any carried line, outcome lines
+    included; the template's `(none)` placeholders are not carried;
   - every PENDING finding, keeping its number with its date: `F3 (YYYY-MM-DD)`. Finding numbers
     restart each day, so a carried line that names one (an owed check, an outcome) writes it the
     same way, and the new day's own `F3` never collides with it.
@@ -122,10 +192,39 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
 
 ## Start of a coordination window
 
-1. Create or roll over today's ledger and fill in the header.
+1. Create or roll over today's ledger and fill in the header. Then register it, from its main
+   checkout: `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-log.ps1" -Register` (from Bash, through
+   `powershell.exe -ExecutionPolicy Bypass -File` as above), so the scope guard can find it. The
+   guard is a plugin hook, on once the plugin is installed and inert until a ledger is registered;
+   `TRACKSTEWARD_GUARD=off` in the environment turns it off (anything that can set the hook's
+   environment or write Claude's settings can do the same: it is not a lock). Register before
+   the tracks start: a session that starts before the ledger is registered has no anchor and
+   binds by its cwd (the next start, resume, compact or clear event the hook sees for that session id, on a day with an index, writes it an anchor from the cwd it has then).
+   That includes your own session on a day with no earlier ledger: keep the coordinator in the
+   main checkout and do not `cd` it into a track's worktree.
 2. Snapshot each repo: `git fetch --prune origin`, origin/main sha, open PRs and their checks,
    remote branches, `git worktree list`, the newest handover. Record the baseline shas, and
-   whether the repo has CI at all.
+   whether the repo has CI at all (the Baseline's CI column, `yes` or `none`: the slot check
+   reads it).
+
+   **With the script**, one call from the PowerShell tool does the read for every repo you name:
+   `& "${CLAUDE_PLUGIN_ROOT}/scripts/repo-snapshot.ps1" -Repos '<repo>','<repo>'` (default: the
+   current directory; from Bash, through `powershell.exe -ExecutionPolicy Bypass -File` as above, with
+   the repos as one comma list). It runs `git fetch --prune`, then prints per repo: `origin/main`,
+   the local branch and dirty count, open PRs with their checks, a files, scope and conflict preview
+   for each ledger track and for each open PR that is in no row (`[not in ledger]`), remote
+   branches, worktrees with their lock state, local branches whose PR is already merged, the newest
+   handover and the latest CI run on `main`. `gh` is optional: without it the PR and CI sections
+   say so. A failed call prints `unknown (...)` or `preview failed`, never `(none)` or `no
+   conflicts`. The last line is the summary, which names what needs a look:
+
+   ```
+   SNAPSHOT: <n> repo(s); attention: <items | none>
+   ```
+
+   It does not list sessions (use `ListAgents`), and it edits no branch and no file in a working tree (git itself
+   updates remote-tracking refs with `git fetch --prune`, may refresh the index stat cache, and stores objects for
+   the conflict preview).
 3. List the live sessions (Claude Code: `ListAgents`) and the folder each one is in. A finished
    session still holds its worktree. Record each live track in the Tracks table.
 4. Classify every branch: merged, in flight (owner session), parked (leave it, say why), stale (the
@@ -159,13 +258,29 @@ sessions is not available, the pointer line is what the user pastes.
    the coordinator's: replace every one before saving, delete the CROSS-REPO block and the
    SUPERSEDES line unless they apply, and never send a brief that still has one of the
    template's own slots (braces inside the text you fill in are fine, such as a glob or a
-   command). A `<...>` slot is filled when that line
+   command, unless they spell one of the slots). A `<...>` slot is filled when that line
    is used (a PR number, a sha, a time), by the coordinator or the track, and stays as written in
    the file. Put the file's own absolute path inside it.
+
+   **With the script**, the same step is two calls from the PowerShell tool, in process, from the
+   main checkout:
+   `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-brief.ps1" -Track '<track>'` renders the template for
+   the track's live ledger row into `briefs/` (named `<date>-<repo>-<track>-<id>.md`, so two repos
+   never share a file) and fills every slot the ledger can answer: your name from the
+   Coordinator line, the track, repo, branch and session cells, the file's own path, the Baseline
+   row of the repo, the live sibling tracks, and the scope lines. It lists the slots it left;
+   replace those by hand, delete the SUPERSEDES line and the CROSS-REPO block unless they apply, then
+   run `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-brief.ps1" -Track '<track>' -Check`. Only a brief with no
+   template slot left and every fixed line of the template still in it (only SUPERSEDES and
+   CROSS-REPO may go), for a ledger the scope guard can read (today's, registered with
+   `coord-log.ps1 -Register`), makes it print the pointer line to send. Pass `-Repo <full path>`
+   when two repos have a track of that name, and `-Force` to render again (the old file is kept as
+   `.bak`).
 3. **Check the session's working folder** is the track's worktree: a session opened in the wrong
    folder loads the wrong project instructions and hooks. If it is wrong, have the user stop it
    before any edit and relaunch it.
-4. **Record it, then send it.** Put `briefed <HH:MM>` in the row's Status cell (time from the
+4. **Record it, then send it.** Set the row's Status cell with
+   `coord-set.ps1 -Track '<name>' -State BRIEFED -Text 'brief sent'` (the time comes from the
    clock), add the ACK owed check with its deadline (see The ledger), and add a Log line.
 5. **Send the pointer line as the whole message**, with the path and the track name filled in
    (`SendMessage`, or the user pastes it): `BRIEF: {absolute path}; reply "ACK {track}" when read`.
@@ -176,16 +291,21 @@ sessions is not available, the pointer line is what the user pastes.
    its own worktree may ask the user for permission in the track's window; if it does, the user
    allows it once.
 6. **When the ACK comes**, stamp it with the coordinator's clock at receipt (not a time the track
-   typed), make the Status cell `briefed 08:32, ACK 08:40`, copy the model and effort the ACK
-   names into the Model cell, and tick the owed check.
+   typed): `coord-set.ps1 -Track '<name>' -State RUNNING -Text 'ACK'` makes the Status cell
+   `RUNNING 08:40; ACK`. Copy the model and effort the ACK names into the Model cell, and tick the
+   owed check. (The ACK of a changed brief is appended instead, as below, so the state word stays.)
 
 Any later change to a brief (a widened scope, a new merge order) is appended to the file under a
 `CHANGES <YYYY-MM-DD> <HH:MM>` heading (time from the clock), never rewritten over the old text,
 so the day's copy still shows what the track was told and when. It is also sent as its own message that says what changed and carries the
 current sha, and asks for `ACK {track} changed`. Each such request gets its own owed check and
 deadline (and the user is told it), and the change is in force once it is ACKed. The Status cell
-keeps the latest brief time and ACK time after the track's lifecycle words, for example
-`PR open @abc1234; briefed 10:05 (changed), ACK 10:20`. After
+keeps the track's state word first; the change and its ACK are appended to it, not set over it, each
+call on one line: `coord-set.ps1 -Track '<name>' -Append -Text 'brief changed {now}'`, and later
+`coord-set.ps1 -Track '<name>' -Append -Text 'ACK {now} (changed)'`, for example
+`PR-OPEN 10:22; @abc1234, brief changed 10:30, ACK 10:34 (changed)`. On a BRIEFED row the board reads an
+`ACK HH:mm` in the cell as the ACK (on other rows the owed check tracks it). While the row is still
+BRIEFED, the first ACK is the one of step 6, which replaces the cell. After
 midnight a change is a fresh brief (see The ledger). A blocker or a question from the track is
 still sent in full in a message, never as a file.
 
@@ -225,6 +345,33 @@ still sent in full in a message, never as a file.
   no PR until the user has decided how and when.
 - **A brief never says "hand it to the user as a follow-up"**: tracks read that as "spawn
   something". Name the document where the line goes.
+
+## Reporting status (the user asks "where are we")
+
+Run the board and paste its lines; do not answer from memory and do not re-read the whole ledger.
+One read-only pass over the structured sections only (Tracks, Merge slots, Owed checks, Findings,
+Queue; never the Log), about 2,000 characters, every item line ending in a pointer (`L<n>`, the
+ledger line it came from; a DONE entry is its PR number (or its track name) with its `as <sha>` when the row records one), from the PowerShell tool, in process:
+
+`& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-status.ps1" [-Ledger <path>] [-Verify] [-Full] [-Group running|waiting|queued|blocked|done]`
+
+From Bash, through `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/coord-status.ps1")"`
+with the same parameters (`-Ledger` written `C:/...`). Without `-Ledger` it reads today's ledger from
+the repo's main checkout only.
+
+- Groups: RUNNING, WAITING (BRIEFED, flagged when it has no ACK after 15 minutes, WAIT-*, unticked Owed checks,
+  Findings with no later `F<n> outcome:` line, and any Status cell whose first word is not in the
+  vocabulary, listed as unclassified), QUEUED, BLOCKED (also an open Merge slot no live row
+  carries), DONE. The last line is `STATUS <date> <time>: <counts>`.
+- Status vocabulary the board reads (first word, upper case): QUEUED, BRIEFED, RUNNING, PR-OPEN, WAIT-USER, WAIT-SLOT, WAIT-QUOTA, BLOCKED, MERGED, DONE. A ledger written before the vocabulary still renders; its live
+  rows count as unclassified.
+- Without `-Verify` it makes no gh call (and no git call when `-Ledger` is given) and its header says "not verified". Use `-Verify`
+  when the user asks for live state: it adds one `gh pr view` per live row with a PR (a QUEUED row
+  is skipped), reads an `[after #<n> merges]` Queue gate from gh, and flags a row that says MERGED
+  while its PR is not (MISMATCH). A failed call prints `unknown (...)`, never a state.
+- A ledger that cannot be read prints `STATUS: could not read - <reason>` (exit 2); report that as
+  is, never as "nothing running".
+- Put the STATUS line into the day-close handover and the kickoff prompt.
 
 ## Findings protocol
 
@@ -276,10 +423,32 @@ window and the coordinator, at once, and stops until answered.
      the track's report is the only evidence its suites ran).
    - every file against the Scope in the ledger row. Scope creep shows up only here.
 
+   **With the script**, the five checks are one call from the PowerShell tool, in process, from the
+   coordinator's main checkout: `& "${CLAUDE_PLUGIN_ROOT}/scripts/slot-check.ps1" -Pr <n>` (from
+   Bash, through `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/slot-check.ps1")" -Pr <n>`).
+   It takes the scope from the ledger row whose Repo cell is this repo's full path and whose Branch is the PR's
+   head branch (live rows only), or from `-Scope "<globs>"`; `-Base <branch>` names an
+   integration branch other than `main`, `-Repo <path>` the PR's repo when you run it from
+   another checkout, `-Ledger <path>` another ledger. It fetches `origin/<base>` and the PR's
+   head, prints the PR, the files, the checks and GitHub's merge state, and ends with exactly one
+   line, so the last line is the verdict:
+
+   ```
+   SLOT-CHECK #<n> @<full sha>: READY|WAIT|HOLD - <reasons>
+   SLOT-CHECK #<n>: COULD NOT CHECK - <reason>
+   ```
+
+   Exit 0 is READY, 1 is WAIT or HOLD, 2 is "could not check" (a failed `gh` or `git`, invalid
+   `gh` output, no scope, a bad `-Ci`): treat that as no verdict, never as READY. The `@<full sha>`
+   is the head to grant the slot to. A PR with no checks at all is READY only when the repo has
+   no CI: the CI column of its Baseline row in the ledger reads `none` (`-Ci none` says so for
+   one call, `-Ci yes` the opposite); anything else, including a missing row, WAITs. The script
+   writes nothing but `origin/<base>`, the fetched objects and a private ref it deletes again at once, and reports; it is not a merge gate.
+
    **READY** only when the PR is open, not a draft, based on `main`, `headRefOid` equals the
    reported sha and `refs/coordinate/pr/<n>`, the PR contains the current main, `mergeable` is
-   MERGEABLE, `mergeStateStatus` is CLEAN or HAS_HOOKS, every file is in scope, and every check
-   is in the pass or skipping bucket (no checks at all only when the ledger records that the repo
+   MERGEABLE, `mergeStateStatus` is CLEAN or HAS_HOOKS (the script also lets UNSTABLE through, since it judges the checks itself), every file is in scope, and every check
+   is in the pass or skipping bucket (no checks at all only when the ledger records, or `-Ci none` says, that the repo
    has no CI). **WAIT** while a check is pending, while `mergeable` or `mergeStateStatus` is
    UNKNOWN, while the fetched ref still lags `headRefOid` (refetch), or while no checks have
    appeared yet. BLOCKED while a check is pending and none has failed most likely means a
@@ -325,6 +494,25 @@ window and the coordinator, at once, and stops until answered.
    report your new head." Every merge voids the heads that were waiting, so each re-reports.
    Update a shared checkout only when no session is writing there.
 
+   **With the script**, step 5, step 6 (only with `-DeleteBranch`; without it step 6 stays yours) and
+   the notification half of step 7 are one call, after the user's merge OK, from the coordinator's
+   main checkout: `& "${CLAUDE_PLUGIN_ROOT}/scripts/merge-verify.ps1" -Pr <n>` (from Bash, through
+   `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/merge-verify.ps1")" -Pr <n>`).
+   It checks that the merge commit is on `origin/<base>`, fast-forwards the launch checkout when
+   that is safe (`-NoFastForward` skips it), checks the git config, and prints one `NOTIFY` line
+   per other live track of the repo, ready to paste (it sends nothing). **It deletes no branch
+   unless you pass `-DeleteBranch`.** Without the flag it prints the delete command it would have
+   run (none for a branch name with characters a shell would act on); with it, it deletes only while the branch tip is still the merged head, and never a fork
+   PR's branch, the base, origin's default branch, `main`, `master` or a branch an open PR uses.
+   `-Repo <path>` and `-Ledger <path>` name another checkout or ledger. The last line is the verdict:
+
+   ```
+   MERGE-VERIFY #<n>: OK|PROBLEM|NOT MERGED - merge <sha12> on origin/<base>; branch <...>; checkout <...>; config <ok|WARN: ...>
+   MERGE-VERIFY #<n>: COULD NOT CHECK - <reason>
+   ```
+
+   Exit 0 is OK, 1 is PROBLEM or NOT MERGED, 2 is could not check.
+
 ## Stop protocol (the user is leaving, or something is going wrong)
 
 Send every live track the same order: start nothing new; commit a coherent green subset with the
@@ -342,6 +530,19 @@ and tells each live track "report to <new> from now on". It reads and logs any r
 to the old coordinator. In the desktop app, a session started from inside another session nests
 under it; if any did, move it out before the user closes the old coordinator.
 
+**With the script**, the ledger half is one call from the new coordinator, in the main checkout:
+`& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-handoff.ps1" -NewSession '<your session name or id>'`
+(`-Ledger <path>` names another ledger). In one replacement it rewrites the Coordinator line
+(`took over HH:mm from "<old>"`, keeping one `before that` level) and adds a `HANDOFF` line to the Log.
+It first fetches `origin main` of every repo a live Tracks row names, and prints one `MESSAGE` line per
+live track with that repo's `main` sha, then six `CHECKLIST` lines. It sends nothing and does not
+register the ledger: send each `MESSAGE` line yourself, then run `coord-log.ps1 -Register`. It refuses
+(`COORD-HANDOFF: NOT WRITTEN - <reason>`; the ledger is byte-unchanged, except that a ledger which
+vanishes at the swap is not recreated and the temp file holding the new text is named) when the ledger
+changed during the fetch, when `-NewSession` is a track's Session cell (its name, or an id: the cell's first word and the first word of `-NewSession` are compared as ids, a `local_<8 hex>` and a full `local_<uuid>` of one session being the same id) or the current coordinator (by name, or by the same id), or when
+a live row's Repo is not the full path of a git working tree's top level. The fetches are not undone
+by a refusal. Run it in process (`&`), not through `powershell.exe -File`.
+
 ## Day close (built from the ledger)
 
 Resolve first: any finding still PENDING goes to the user before the handover is written. Then
@@ -354,9 +555,10 @@ write the day-close handover section by section:
 | Findings and their outcomes | ledger Findings |
 | Incidents and gotchas | ledger Log |
 | Next, by owner | unticked Owed checks, plus open tracks from the Tracks table |
+| Queue for the next day | every open Queue line from the ledger, whole (the board's `coord-status.ps1 -Group queued` names them by `L<n>`, but cuts the text and drops owner and source); they carry into tomorrow's ledger |
 
 Add a kickoff prompt for tomorrow that (a) re-verifies the baseline, (b) asks the user which item
-to start, (c) starts only that. Put the handover, a copy of the ledger and copies of the day's
+to start, listing the open `Q<n>` ids, (c) starts only that. Put the handover, a copy of the ledger and copies of the day's
 briefs in the handover folder, so a later retrospective can hold a track's work against what it
 was told; they stay local by default. If your repo commits them, first replace every line, in
 every section and every file (the ledger's sections including Tracks and Merge slots, each brief,

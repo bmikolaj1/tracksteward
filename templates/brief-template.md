@@ -1,16 +1,24 @@
 # Brief template
 
 Save the filled brief as a file in the coordinator's main checkout (where the ledger lives),
-`.claude/coordination/briefs/<YYYY-MM-DD>-<track>.md`, and send the track only the pointer line:
+`.claude/coordination/briefs/<YYYY-MM-DD>-<track>.md` (`coord-brief.ps1` names it
+`<date>-<repo>-<track>-<id>.md`, so two repos with a track of one name never share a file), and send the track only the pointer line:
 `BRIEF: {absolute path}; reply "ACK {track}" when read`. The file keeps the full text on disk, so a
 track that compacts can re-read it instead of asking. It does not deliver itself or stay fresh: a missing
 ACK shows a pointer line that went nowhere, and every later message carries the current sha.
 
 Two kinds of slot. `{...}` is the coordinator's: replace every one before saving (delete the CROSS-REPO
 block and the SUPERSEDES line unless they apply); a brief that still has one of the template's own slots
-is not sent (braces inside the text you fill in, such as a glob or a command, are fine). `<...>` is filled when that line is
+is not sent (braces inside the text you fill in, such as a glob or a command, are fine unless they spell one of these slots). `<...>` is filled when that line is
 used (a PR number, a sha, a time) and stays as written in the file. Assert only what you verified just now;
 ask for what the track owns. Write PRs as `#12`, never as links. Quote the user verbatim; if they gave no words for this track, delete that sentence.
+
+With `scripts/coord-brief.ps1 -Track <name>` the script fills the slots the ledger can answer (the coordinator
+and track names, repo, branch, session, this file's path, the Baseline row, the live tracks, your globs and the
+globs that are not yours) and leaves the others as they are here; `-Check` prints the pointer line only when
+none of the template's own slots is left and every fixed line (TRACK, THIS FILE, MERGE ORDER, ACK, WIP, REPORT BACK
+and the rest, apart from SUPERSEDES and CROSS-REPO) is still there. Without the script, fill all of them by hand. `-Check` looks for the
+slot names in this template, so keep the names when you edit it.
 
 ```
 Coordination brief from {coordinator session name}. The user's request, quoted: "{their words}"
@@ -19,14 +27,14 @@ TRACK: {track}, in {repo}, branch {branch}, session {session name}.
 THIS FILE: {absolute path of this file}. It is the brief of record; re-read it instead of asking me.
 SUPERSEDES: {old brief path, and what was carried from the previous day - after midnight only; otherwise delete this line}.
 
-BASELINE, verified {HH:MM}: {repo} origin/main = {sha}; open PRs: {list or none}; branch from {sha}.
+BASELINE, verified {verified at}: {baseline repo} origin/main = {origin/main sha}; open PRs: {list or none}; branch from {branch-from sha}.
 (True as of that time. Every later message from me carries the current sha.)
 
 LANDED SINCE YOUR TASK WAS WRITTEN, read before designing: {#PR, one line each, or none}.
 
 LIVE TRACKS: (1) YOU, {branch}; (2) "{session name}", branch {branch}, owns {globs}; ...
 
-FILE SCOPE, yours: {globs}. NOT yours: {globs}. If you need a file outside your scope, do not
+FILE SCOPE, yours: {your globs}. NOT yours: {globs not yours}. If you need a file outside your scope, do not
 edit it: send me a FINDING with "widen scope" (or a BLOCKER if it stops you). You may talk to the
 owning track, but only a widen-scope outcome I confirm puts the file in your scope.
 
