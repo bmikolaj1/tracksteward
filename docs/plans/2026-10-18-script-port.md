@@ -269,3 +269,28 @@ Finding from the S5 round-3 review (reviewed 2026-10-29, ruled: to the plan, for
 9. `scripts/coord-handoff.ps1` name check (latent): a `-NewSession` made only of characters the allow-list
    accepts but that draw nothing (U+3164, U+115F, U+1160, U+FFA0, U+034F, U+FE0F, U+17B5) is not
    refused, so a name can read as blank; the header says so. 0.2.1.
+
+Found while porting Phase D (2026-10-29), for 0.2.1:
+
+10. `scripts/coord-status.ps1` Queue gate (latent): the gate is anchored on the exact, case-sensitive
+    ` owner:`. A writer slip (`Owner:`, `owner :`, a tab, no owner part) falls back to searching the
+    whole line, so a gate-shaped bracket quoted in the source note can take the gate again (with
+    `-Verify`, OPEN or CLOSED for the quoted PR). The skill tells writers to write ` owner:` exactly.
+    Fix: match `\s+owner\s*:` ignoring case, or add a second anchor on ` source:`.
+11. `tests/scripts/coord-set.test.ps1`, `coord-status.test.ps1` (latent): the suites fence the real
+    coordination index by digest before and after the run, so a live append by a coordinator during
+    a run can fail them. Fix: read a scratch index only, or tolerate appended lines.
+12. `scripts/coord-log.ps1` (cosmetic): it does not expand `{now}` (only `coord-set.ps1` does) and keeps
+    its inline `-Ledger` handling, which duplicates `Resolve-CoordLedgerArg` in `coord-common.ps1`.
+
+## 10. Phase D (added 2026-10-29): the status board
+
+Ruled by the author on 2026-10-29: port the three coordinate changes of the private source since
+2026-10-22 into `port/0.2` as one more slice, before the release merge. They add `coord-status.ps1` (the
+status board), the ten state words with `WAIT-USER` (the neutral spelling) and `coord-set.ps1 -State`, and
+the status index with the `## Queue` ledger section. `coord-set.ps1` had never been ported, so it comes
+whole, with the helpers it needs (`Get-CoordStamp`, `Expand-CoordNow`, `Test-CoordTypedTime`,
+`Resolve-CoordLedgerArg`, `Get-CoordStateWords`). Tests port with them (`tests/scripts/coord-set.test.ps1`,
+`tests/scripts/coord-status.test.ps1`, and the changed rows of the `coord-common` and `coord-log` suites).
+Dropped from the source tests: one row that read a private archived ledger, and three that pinned private
+skill prose. The gate is the common one plus the history scrub of section 7.

@@ -6,7 +6,10 @@
 # takes HH:mm from its own clock (Get-Date, local time) and appends
 # "<HH:mm> <text>" as the LAST line of one of the ledger's append-only
 # sections:
-#   Decisions | Findings | Log
+#   Queue | Decisions | Findings | Log
+# (Queue: "Q<n> <what> [<gate>] owner: ...; source: ..." lines, closed by a
+# later "Q<n> outcome: ..." line, as a finding is; a ledger made before the
+# section existed has no "## Queue" and is refused until one is added by hand.)
 # The sections edited in place (Baseline, Tracks, Merge slots, Owed checks) are
 # refused: they are rewritten, not appended to.
 #
@@ -126,7 +129,7 @@ if ($Register) {
     if ($Section -or $Text) { Exit-NotWritten '-Register takes no -Section or -Text: registering and appending are separate calls' }
 }
 else {
-    $sections = @('Decisions', 'Findings', 'Log')
+    $sections = @('Queue', 'Decisions', 'Findings', 'Log')
     $name = @($sections | Where-Object { [string]::Equals($_, $Section.Trim(), [System.StringComparison]::OrdinalIgnoreCase) })
     if ($name.Count -ne 1) { Exit-NotWritten "-Section must be one of: $($sections -join ', ') (got '$Section')" }
     $name = $name[0]

@@ -17,7 +17,8 @@
 # last section of the sample ledger; the sample's last section is "Notes", a
 # section the script refuses.
 # New rows: L5 refuses -Section 'v2 field notes'; L13 checks that the template's
-# append-only sections are exactly the three the script accepts.
+# append-only sections are exactly the four the script accepts (Queue, Decisions,
+# Findings, Log); L34 covers the Queue section.
 #
 #   L1  each append-only section: the line lands after the section's last
 #       non-blank line, before the blank line and the next header; every
@@ -43,7 +44,7 @@
 #       text the user's "go" and a text that starts with '/' are persisted
 #       exactly (UNCHECKED without a bash.exe other than the WSL launcher); with
 #       no git on PATH: the NOT WRITTEN line, exit 2, ledger byte-unchanged
-#   L13 the real ledger-template.md accepts a line in each of the three
+#   L13 the real ledger-template.md accepts a line in each of the four
 #       append-only sections (template and script cannot drift)
 #   L14 no temp or lock file is left next to the ledger, after a write or a
 #       refusal (runs last of the file rows)
@@ -86,6 +87,8 @@
 #       exit 0 and a text starting with '/' written intact; controls: without
 #       cygpath -w a /c/... script path is not found, without MSYS_NO_PATHCONV=1
 #       the leading / is rewritten (UNCHECKED without a Git Bash)
+#   L34 the Queue section: a Q<n> line and an outcome line append like any
+#       other; a ledger with no ## Queue is refused; the section list names Queue
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\coord-log.test.ps1 [-ScriptPath <mutant copy of coord-log.ps1>]
 #       (a mutant copy needs coord-common.ps1 next to it: it dot-sources it)
@@ -450,8 +453,8 @@ if ($tpl[$tpl.Count - 1] -ceq '') { $tpl = $tpl[0..($tpl.Count - 2)] }
 # The template's append-only sections are exactly the ones the script accepts:
 # every '## ' section but the four edited in place.
 $tplAppend = @($tpl | Where-Object { $_ -match '^## ' } | ForEach-Object { $_.Substring(3).Trim() } | Where-Object { @('Baseline', 'Tracks', 'Merge slots', 'Owed checks') -cnotcontains $_ })
-Assert-Coord 'L13 the template''s append-only sections are exactly Decisions, Findings, Log' (($tplAppend -join '|') -ceq 'Decisions|Findings|Log') ($tplAppend -join '|')
-foreach ($s in @('Decisions', 'Findings', 'Log')) {
+Assert-Coord 'L13 the template''s append-only sections are exactly Queue, Decisions, Findings, Log' (($tplAppend -join '|') -ceq 'Queue|Decisions|Findings|Log') ($tplAppend -join '|')
+foreach ($s in @('Queue', 'Decisions', 'Findings', 'Log')) {
     $p = New-Ledger $tpl
     $h = [Array]::IndexOf($tpl, "## $s")
     $at = $h + 1
@@ -460,6 +463,22 @@ foreach ($s in @('Decisions', 'Findings', 'Log')) {
     Assert-Coord "L13 template has '## $s'" ($h -ge 0)
     Test-Inserted "L13 template ${s}: after its comment line" $r $p $tpl $at "tpl $s"
 }
+
+Write-Host "(L34) the Queue section"
+$qs = @($sample[0..10]) + @('## Queue', '', '<!-- HH:MM Q<n> <what> [<gate>] owner: ...; source: ... -->', '09:10 Q1 first item [after #12 merges] owner: coordinator; source: F3', '') + @($sample[11..($sample.Count - 1)])
+$p = New-Ledger $qs
+$r = Invoke-Log 'Queue' 'Q2 port the next slice [after 2026-10-28 23:00Z] owner: user; source: plan Q3' $p
+Test-Inserted 'L34 Queue: a Q<n> line is appended after the section''s last line' $r $p $qs 15 'Q2 port the next slice [after 2026-10-28 23:00Z] owner: user; source: plan Q3'
+Assert-Coord 'L34 Queue: reported under its canonical name' ($r.Out -match '\[Queue\]: \d\d:\d\d Q2 ') $r.Out
+$p = New-Ledger $qs
+$r = Invoke-Log 'queue' 'Q1 outcome: started as track slice-2' $p
+Test-Inserted 'L34 queue (lower case) -> ## Queue; an outcome line is an ordinary append' $r $p $qs 15 'Q1 outcome: started as track slice-2'
+$p = New-Ledger $sample
+$b = Get-Bytes $p
+$r = Invoke-Log 'Queue' 'Q1 x' $p
+Assert-Coord 'L34 a ledger with no ## Queue section (one made before the section existed): refused, unchanged' ($r.Code -eq 2 -and $r.Out -match "found 0 '## Queue' headers" -and (Get-Bytes $p) -ceq $b) $r.Out
+$r = Invoke-Log 'Owed checks' 'x' (New-Ledger $sample)
+Assert-Coord 'L34 the refusal for a section edited in place names Queue among the append-only ones' ($r.Code -eq 2 -and $r.Out -match '-Section must be one of: Queue, Decisions, Findings, Log \(got') $r.Out
 
 Write-Host "(L15) parallel runs"
 $p = New-Ledger $sample

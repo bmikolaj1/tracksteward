@@ -1,8 +1,9 @@
 # Ported from the private coordinate toolkit (coord-common.ps1), 2026-10-18.
 #
 # coord-common.ps1 - helpers shared by the coordinate scripts. Today
-# coord-log.ps1, coord-brief.ps1, coord-handoff.ps1, repo-snapshot.ps1,
-# slot-check.ps1 and merge-verify.ps1 dot-source it, from the same folder:
+# coord-log.ps1, coord-set.ps1, coord-status.ps1, coord-brief.ps1,
+# coord-handoff.ps1, repo-snapshot.ps1, slot-check.ps1 and merge-verify.ps1
+# dot-source it, from the same folder:
 # `. (Join-Path $PSScriptRoot 'coord-common.ps1')`. The scope guard hook
 # (hooks/coord-scope-guard.ps1) shares it too.
 #
@@ -67,6 +68,31 @@ function Get-CoordLedgerDate([string]$Leaf) {
     if ($Leaf -match '^[0-9]{4}-[0-9]{2}-[0-9]{2}\z' -and
         [DateTime]::TryParseExact($Leaf, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$d)) { return $Leaf }
     return (Get-CoordToday)
+}
+
+# The ledger stamp, HH:mm: the one clock coord-set.ps1 writes a time from.
+# Never typed by a model: hand-typed times drift.
+function Get-CoordStamp([datetime]$At) {
+    return $At.ToString('HH:mm', [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+# {now} in a text is the stamp of $At (lower case, exactly; {NOW} and other
+# braces stay as typed).
+function Expand-CoordNow([string]$Text, [datetime]$At) {
+    return $Text.Replace('{now}', (Get-CoordStamp $At))
+}
+
+# True when $Text holds a time somebody typed: H:mm or HH:mm that is not part
+# of a longer number, so "9:05pm", "09:12Z", "T10:22", "ACK08:40" and the start
+# of "09:12:30" count. A caller refuses it and says to write {now}; "1.5",
+# "v1:2" and "10:420" are not times, and neither is the line number of a file
+# reference such as "coord-brief.ps1:96" (a dot and a word right before the
+# digits). A ratio ("1:30"), a port map ("80:80") and an id with a colon
+# ("F3:12") ARE refused: rephrase them. NOT caught: a time glued right after a
+# dotted word ("done.T10:22"), because that shape cannot be told from
+# "x.ps1:96".
+function Test-CoordTypedTime([string]$Text) {
+    return ($Text -match '(?<![\d:])(?<!\.\w+)\d{1,2}:\d{2}(?!\d)')
 }
 
 function Test-CoordSha40([string]$Value) {
@@ -794,6 +820,18 @@ function Test-CoordRowTerminal([string]$Status) {
     return ([string]$Status -cmatch '^\s*(MERGED|DONE)(?=$|[\s.,;:()])')
 }
 
+# The Status vocabulary: the first word coord-set.ps1 -State writes, mapped to
+# the group coord-status.ps1 files the row under. One ordered list, so the
+# writer and the board cannot drift; the copies in SKILL.md and
+# ledger-template.md are prose, pinned to this list by coord-set.test.ps1 S22.
+function Get-CoordStateWords {
+    $m = [ordered]@{}
+    $m['QUEUED'] = 'queued'; $m['BRIEFED'] = 'waiting'; $m['RUNNING'] = 'running'; $m['PR-OPEN'] = 'running'
+    $m['WAIT-USER'] = 'waiting'; $m['WAIT-SLOT'] = 'waiting'; $m['WAIT-QUOTA'] = 'waiting'; $m['BLOCKED'] = 'blocked'
+    $m['MERGED'] = 'done'; $m['DONE'] = 'done'
+    return $m
+}
+
 # Which of $Repos a ledger Repo cell names. A cell with a path separator or a
 # drive colon is a full path (compared after GetFullPath, trailing separators
 # trimmed, as Get-CoordPathComparison says: ignoring case on Windows). A bare
@@ -1235,4 +1273,42 @@ function Write-CoordLedgerSwap {
         return [pscustomobject]@{ Ok = $false; Status = 'failed'; Temp = $null; Error = "cannot write ${Path}: $why" }
     }
     return [pscustomobject]@{ Ok = $true; Status = 'written'; Temp = $null; Error = $null }
+}
+
+# The ledger coord-set.ps1 and coord-status.ps1 work on, from their -Ledger
+# argument. Without it: today's ledger,
+# <main checkout>/.claude/coordination/<yyyy-MM-dd>.md, and only when the
+# current directory is in that repo's MAIN checkout (from a linked worktree or
+# another repo the caller passes -Ledger: a probe in a worktree once wrote
+# into the live ledger this way). A relative -Ledger is resolved against the
+# PowerShell location (in process, `cd` moves that, not the process directory
+# GetFullPath would use); only a FileSystem path is accepted (Env:\x or
+# HKLM:\x would otherwise land under the process directory). Returns
+# { Ok; Ledger (the full path); HasDir (its folder exists); Error }. The
+# caller words its own refusal around Error and checks the file itself.
+# (coord-log.ps1 does the same inline.)
+function Resolve-CoordLedgerArg {
+    param([string]$Ledger)
+    $fail = { param($Why) [pscustomobject]@{ Ok = $false; Ledger = $Ledger; HasDir = $false; Error = $Why } }
+    if (-not $Ledger) {
+        $here = (Get-Location).Path
+        $Ledger = Get-CoordLedgerPath $here
+        if (-not $Ledger) { return (& $fail "$here is not in a git repository; pass -Ledger") }
+        $top = Invoke-CoordGit $here @('rev-parse', '--show-toplevel')
+        $main = Get-CoordMainRoot $here
+        if ($top.Code -ne 0 -or -not $top.Out.Count -or -not $main -or
+            -not [string]::Equals((ConvertTo-CoordFullPath $top.Out[0].Trim()), (ConvertTo-CoordFullPath $main), (Get-CoordPathComparison))) {
+            return (& $fail "$here is not the repo's main checkout; pass -Ledger (the default would be $Ledger)")
+        }
+    }
+    try {
+        $prov = $null
+        $drive = $null
+        $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Ledger, [ref]$prov, [ref]$drive)
+        if ($prov.Name -ne 'FileSystem') { return (& $fail "-Ledger is not a file path (provider $($prov.Name)): $Ledger") }
+        $full = [System.IO.Path]::GetFullPath($resolved)
+        $hasDir = Test-Path -LiteralPath (Split-Path -Parent $full) -PathType Container
+    }
+    catch { return (& $fail "-Ledger is not a usable path: $($_.Exception.Message)") }
+    return [pscustomobject]@{ Ok = $true; Ledger = $full; HasDir = [bool]$hasDir; Error = $null }
 }

@@ -18,6 +18,12 @@ where PowerShell is missing.
   - `coord-brief.ps1`: renders a track's brief from the template; `-Check` verifies it before the
     pointer line is printed.
   - `coord-handoff.ps1`: hands the coordinator role to a new session.
+  - `coord-set.ps1`: changes one Tracks cell (Status or Model) with a time from the clock;
+    `-State <word>` writes a Status cell as one of ten state words.
+  - `coord-status.ps1`: the status board over the structured ledger sections (Tracks, Merge slots,
+    Owed checks, Findings, Queue); `-Verify` checks what it can against git and `gh`.
+  - The ledger gains a `## Queue` section (work not yet started), which `coord-log.ps1 -Section Queue`
+    appends to.
   - `coord-common.ps1`: the shared library.
 - **Scope guard** (`hooks/`): a `PreToolUse` hook that blocks an edit outside the scope of the
   session's ledger row. On when the plugin is installed, inert until a ledger is registered;
