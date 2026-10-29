@@ -39,7 +39,7 @@ where PowerShell is missing.
   filler, a variation selector) is not refused. `repo-snapshot` can read a clean repo when a
   `-Repos` path is a typo or an explicit `-Ledger` is missing (`attention none`); a finished track
   whose branch is gone prints `branch not found` on every run; its base is always `origin/main`.
-  `coord-status.ps1` does not list a finding whose id carries a carry date, can take a `#<n>` in the
+  `coord-status.ps1` can take a `#<n>` in the
   Status text as the row's PR, and under `-Verify` can ask the current folder's repository about a PR
   of another repository; the Queue gate is anchored on an exact ` owner:`; an `[after Q<n>]` gate that names no line reads CLOSED;
   an indented unticked Owed check is not listed. All are on the 0.2.1 list.
