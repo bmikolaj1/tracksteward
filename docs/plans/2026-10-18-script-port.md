@@ -282,11 +282,9 @@ Found while porting Phase D (2026-10-29), for 0.2.1:
     a run can fail them. Fix: read a scratch index only, or tolerate appended lines.
 12. `scripts/coord-log.ps1` (cosmetic): it does not expand `{now}` (only `coord-set.ps1` does) and keeps
     its inline `-Ledger` handling, which duplicates `Resolve-CoordLedgerArg` in `coord-common.ps1`.
-13. (Fixed in this slice, not a 0.2.1 item.) `scripts/coord-status.ps1`, the Findings patterns: a Findings line
-    whose id carries a carry date (`F3 (2026-10-28) from ...`, the form the carry rule writes) did not match,
-    so a carried PENDING finding was missing from the board. The id pattern now takes the date, an outcome
-    line names a dated finding the same way, and the day's own `F3` stays a separate finding (rows T5d-T5g,
-    red first). This is a change from the private source, which has the defect.
+13. `scripts/coord-status.ps1`, the Findings patterns (live, from the source): a Findings line whose id carries a carry date
+    (`F3 (2026-10-28) from ...`, the form the carry rule writes) does not match the finding patterns, so a
+    carried PENDING finding is missing from the board and from `findings pending`. No test covers a carried id.
 14. `scripts/coord-status.ps1`, the PR-number fallback (latent, from the source): with an empty PR cell, the first `#<n>` in the
     Status text is taken as the row's PR (the slot-open check, and `-Verify`'s `gh pr view`).
 15. `scripts/coord-status.ps1`, the `-Verify` paths (latent, from the source): under `-Verify`, a Repo cell that is a bare

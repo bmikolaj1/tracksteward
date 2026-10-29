@@ -167,17 +167,6 @@ Assert-Coord 'T5a F1 stays PENDING when only F10 has an outcome line' (($wait -j
 Assert-Coord 'T5b F10 and F2 (outcome lines) are closed; cF3 is pending' (($wait -join "`n") -notmatch 'tenth thing' -and ($wait -join "`n") -notmatch 'second' -and ($wait -join "`n") -match 'cF3 b: cloud one.*PENDING') ($wait -join "`n")
 Assert-Coord 'T5c the STATUS line counts 2 findings pending' ($r.Last -match '; 2 findings pending') $r.Last
 
-# T5d: a carried finding keeps its number with its date (F3 (YYYY-MM-DD)); an outcome line names it the same way
-$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
-    '08:00 F3 (2026-10-28) from a: old one | outcome: PENDING', '08:05 F3 (2026-10-27) from a: other old | outcome: PENDING',
-    '08:10 F3 (2026-10-27) outcome: dropped, noise', '09:40 F3 from c: today one | outcome: PENDING')
-$r = Invoke-Board $l
-$wait = ($(Get-GroupBlock $r 'WAITING') -join "`n")
-Assert-Coord 'T5d a carried finding with a date is listed as PENDING, with its date' ($wait -match 'F3 \(2026-10-28\) a: old one.*PENDING since 08:00') $wait
-Assert-Coord 'T5e a dated outcome line closes only that dated finding' ($wait -notmatch 'other old') $wait
-Assert-Coord 'T5f the day''s own F3 is a different finding: still pending, and the dated outcome does not close it' ($wait -match 'F3 c: today one.*PENDING since 09:40') $wait
-Assert-Coord 'T5g the STATUS line counts 2 findings pending' ($r.Last -match '; 2 findings pending') $r.Last
-
 # ---- T6 owed checks
 $l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Owed @(
     '- [ ] User: restore the required checks (from 2026-10-16)', '- [x] (09:00 done) a ticked one', '- [ ] a coordinator item',

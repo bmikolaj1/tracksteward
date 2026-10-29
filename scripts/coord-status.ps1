@@ -224,17 +224,15 @@ foreach ($s in $openSlots) {
 # ---- Findings: F<n> from ... with no later "<id> outcome:" line
 $pending = 0
 $findEntries = Get-SectionLines $secFind
-# A carried finding keeps its number with its date, F3 (YYYY-MM-DD), and an outcome line names it the same way.
-$findId = 'c?F\d+(?:\s+\(\d{4}-\d\d-\d\d\))?'
 $closed = @{}
 foreach ($e in $findEntries) {
-    if ($e[1] -match ('^\d\d:\d\d\s+(' + $findId + ')\s+outcome:')) { $closed[$Matches[1]] = $true }
+    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)\s+outcome:') { $closed[$Matches[1]] = $true }
 }
 foreach ($e in $findEntries) {
-    if ($e[1] -match ('^\d\d:\d\d\s+(' + $findId + ')\s+from\s') -and -not $closed.ContainsKey($Matches[1])) {
+    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)\s+from\s' -and -not $closed.ContainsKey($Matches[1])) {
         $id = $Matches[1]
         $since = if ($e[1] -match '^(\d\d:\d\d)') { $Matches[1] } else { '?' }
-        $what = ($e[1] -replace ('^\d\d:\d\d\s+' + $findId + '\s+from\s+'), '')
+        $what = ($e[1] -replace '^\d\d:\d\d\s+c?F\d+\s+from\s+', '')
         $pending++
         $gCount.waiting++
         $g.waiting += ('  {0} {1}   PENDING since {2}  L{3}' -f $id, (Get-Trunc $what 60), $since, $e[0])
