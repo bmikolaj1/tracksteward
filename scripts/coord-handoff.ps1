@@ -314,8 +314,9 @@ function Get-CellText([string]$Cell) {
 $newFirst = ($new -split '\s+')[0] -replace '\A(?i:local_)', 'local_'
 $newToken = Get-CoordSessionToken $newFirst
 # The current coordinator is the same session when its id is: the whole-text compare above misses
-# a note after the id and the short and full forms of one id. Unlike a track's cell, the Coordinator
-# line can hold an upper-case local_ prefix (this script writes -NewSession as typed), so it is folded too.
+# a note after the id and the short and full forms of one id. A track's cell keeps its prefix as
+# the scope guard reads it, but the Coordinator line is written by this script from -NewSession as typed and
+# can hold an upper-case local_ prefix, so it is folded too.
 $oldToken = Get-CoordSessionToken (($old -split '\s+')[0] -replace '\A(?i:local_)', 'local_')
 if ($oldToken -and $newToken -and $oldToken -ceq $newToken) { Exit-NotWritten "-NewSession $new is already the coordinator named in $Ledger" }
 foreach ($row in $rows) {
