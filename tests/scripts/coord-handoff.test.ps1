@@ -686,6 +686,7 @@ $coordIdCases = @(
     @('the short id and a note, the ledger holding the full id', $idC, ($idC.Substring(0, 14) + ' (opus)')),
     @('the full id, the ledger holding the short id and a note', ($idC.Substring(0, 14) + ' (port work)'), $idC),
     @('an upper-case local_ prefix, the ledger holding the short id', $idC.Substring(0, 14), ('LOCAL_' + $idC.Substring(6, 8))),
+    @('the full id, the ledger holding an upper-case local_ prefix, the short id and a note', ('LOCAL_' + $idC.Substring(6, 8) + ' (opus)'), $idC),
     @('an upper-case local_ prefix and a note, the ledger holding the id and a note', ($idC + ' (port work)'), ('LOCAL_' + $idC.Substring(6, 8) + ' (opus)'))
 )
 foreach ($c in $coordIdCases) {

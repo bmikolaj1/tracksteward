@@ -974,6 +974,8 @@ Add-ScrubTestCommit $hRepo 'removes it again'
 # the scrub suite itself holds the patterns: only its denylist hits count
 Set-CoordFile $hRepo 'tests/scrub.test.ps1' ($hitLine + " zzbeta`n")
 Add-ScrubTestCommit $hRepo 'a self file'
+Set-CoordFile $hRepo 'clean.txt' ("nothing here`n" + $hitLine + "`n")
+Add-ScrubTestCommit $hRepo 'modifies a file'
 Add-ScrubTestCommit $hRepo ('message with ' + $hitLine)
 $res = Invoke-ScrubHistory -Repo $hRepo -Range ($hBase + '..HEAD') -SelfRel $selfName -Denylist @('zzbeta')
 Assert-Coord 'SG6 discovery works on a real range' $res.DiscoveryOk $res.Reason
@@ -981,6 +983,7 @@ $tipRes = Invoke-ScrubScan -Repo $hRepo -SelfRel $selfName
 Assert-Coord 'SG6 control: the tip of that repo has no hit in gone.md (the file is gone), so only a history scan can see it' (@(Get-ScrubHitsOf $tipRes 'gone.md').Count -eq 0)
 $goneHits = @($res.Hits | Where-Object { $_.File -like 'gone.md*' })
 Assert-Coord 'SG6 a blob added and removed inside the range is scanned: the path rule and the denylist both hit' (@($goneHits | Where-Object { $_.Rule -ceq $pathRule }).Count -eq 1 -and @($goneHits | Where-Object { $_.Rule -like 'denylist entry*' }).Count -eq 1) (($res.Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+Assert-Coord 'SG6 a blob a commit of the range modifies (not only adds) is scanned' (@($res.Hits | Where-Object { $_.File -like 'clean.txt*' -and $_.Rule -ceq $pathRule }).Count -eq 1)
 Assert-Coord 'SG6 a file of the base commit is not scanned (outside the range)' (@($res.Hits | Where-Object { $_.File -like 'base.txt*' }).Count -eq 0 -and -not ($res.Scanned | Where-Object { $_ -like 'base.txt*' }))
 Assert-Coord 'SG6 the self file is scanned for the denylist only' (@($res.Hits | Where-Object { $_.File -like "$selfName*" -and $_.Rule -ceq $pathRule }).Count -eq 0 -and @($res.Hits | Where-Object { $_.File -like "$selfName*" -and $_.Rule -like 'denylist entry*' }).Count -eq 1)
 Assert-Coord 'SG6 a commit message is scanned (named by its commit, not by a file)' (@($res.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq $pathRule }).Count -eq 1)
