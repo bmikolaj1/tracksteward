@@ -1,10 +1,10 @@
 # Ported from the private coordinate toolkit (coord-common.ps1), 2026-10-18.
 #
 # coord-common.ps1 - helpers shared by the coordinate scripts. Today
-# coord-log.ps1, coord-brief.ps1, repo-snapshot.ps1, slot-check.ps1 and
-# merge-verify.ps1 dot-source it, from the same folder:
-# `. (Join-Path $PSScriptRoot 'coord-common.ps1')`. The scope guard hook is to
-# share it too (ported in a later slice).
+# coord-log.ps1, coord-brief.ps1, coord-handoff.ps1, repo-snapshot.ps1,
+# slot-check.ps1 and merge-verify.ps1 dot-source it, from the same folder:
+# `. (Join-Path $PSScriptRoot 'coord-common.ps1')`. The scope guard hook
+# (hooks/coord-scope-guard.ps1) shares it too.
 #
 # Runs under Windows PowerShell 5.1 and PowerShell 7. Windows is the verified
 # platform; every behaviour that differs elsewhere branches on
@@ -129,8 +129,8 @@ function Step-CoordGitReads($S) {
     }
 }
 
-# Runs `git -C $Repo <args>` with a time bound, for the scope guard (ported
-# in a later slice), whose whole run is to have a 3 s budget. Returns { Code; Out (string[]); TimedOut }.
+# Runs `git -C $Repo <args>` with a time bound, for the scope guard,
+# whose whole run has a 3 s budget. Returns { Code; Out (string[]); TimedOut }.
 # git is the first git application on PATH (as `& git` in Invoke-CoordGit
 # finds it; a .cmd there runs too). Both streams are read asynchronously into
 # buffers, never to their end: stdout is decoded as UTF-8 (whatever the
@@ -248,7 +248,7 @@ function Invoke-CoordGitBounded {
 # $Dir's own top level when $Dir is in the main checkout, else $null.
 # Paths compare as Get-CoordPathComparison says.
 # -Git: the git invoker every git call here goes through (see
-# Invoke-CoordGitWith; the scope guard, ported in a later slice, is to pass a
+# Invoke-CoordGitWith; the scope guard passes a
 # bounded one); default
 # Invoke-CoordGit.
 function Get-CoordMainRoot {
@@ -282,7 +282,7 @@ function ConvertTo-CoordFullPath([string]$Path) {
 }
 
 # ---- the ledger index
-# The scope guard (ported in a later slice) is to find the day's ledgers
+# The scope guard finds the day's ledgers
 # through <index dir>/<date>.ledgers, one full path per line; coord-log.ps1
 # writes it. <index dir> is $env:COORD_INDEX_DIR when set (the coord-common
 # and coord-log suites point it at a scratch folder), as a full path; else
@@ -419,7 +419,7 @@ function Read-CoordStreamBounded {
 }
 
 # The bounded discovery read of an index, for the scope guard and
-# coord-brief.ps1 -Check (both ported in a later slice). From -Path (a file;
+# coord-brief.ps1 -Check. From -Path (a file;
 # at most its first 65536 bytes are read, through a handle that lets a writer keep it open) or -Bytes (the same
 # rules over bytes in hand; Register-CoordLedger checks its proposed index this
 # way). Lines end in LF (one CR before it is dropped); a last line with no LF
@@ -563,7 +563,7 @@ function Register-CoordLedger {
 }
 
 # The trust rules for a ledger, implemented once here for the scope guard and
-# coord-brief.ps1 -Check (both ported in a later slice): the ledger sits in
+# coord-brief.ps1 -Check: the ledger sits in
 # <main root>/.claude/coordination (main root = Get-CoordMainRoot of its folder); git names that main root as
 # its own top level; the ledger is an existing regular file, not a reparse
 # point; .claude and .claude/coordination exist and are no junction or
@@ -702,8 +702,8 @@ function Add-CoordTracksLine($S, [string]$Line) {
     elseif ($S.Rows.Count -gt 0) { $S.Ended = $true }
 }
 
-# The ledger's Tracks table as the scope guard (ported in a later slice) is
-# to read it: lines from the top,
+# The ledger's Tracks table as the scope guard
+# reads it: lines from the top,
 # through a handle that lets a writer keep the file open, within the first
 # 1 MiB (1048576 bytes), stopping at the line that ends the table (the first
 # non-table line after its rows, as Read-CoordLedgerTracks ends it). The rest
@@ -905,8 +905,8 @@ function ConvertTo-CoordGlobRegex([string]$Glob) {
 }
 
 # True when $Path matches at least one positive glob and no '!' glob.
-# Case-sensitive; with -IgnoreCase (for the scope guard, ported in a later
-# slice: NTFS paths ignore case)
+# Case-sensitive; with -IgnoreCase (for the scope guard:
+# NTFS paths ignore case)
 # positive and '!' globs alike are matched ignoring case.
 function Test-CoordInScope {
     param([string]$Path, [string[]]$Globs, [switch]$IgnoreCase)

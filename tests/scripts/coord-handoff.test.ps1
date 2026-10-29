@@ -549,7 +549,7 @@ $badNames = @(
     @('a name ending in a zero-width space', ('Evening' + [char]0x200B)), @('a bidi override (U+202E)', ('a' + [char]0x202E + 'b')),
     @('a lone surrogate (U+D800)', ('a' + [char]0xD800 + 'b')),
     @('an emoji (a surrogate pair, outside the BMP)', ('Night ' + [char]::ConvertFromUtf32(0x1F680))),
-    @('a braille blank (U+2800)', ('Evening' + [char]0x2800)), @('an object replacement character (U+FFFC)', ('Evening' + [char]0xFFFC)),
+    @('a braille blank (U+2800)', ('Evening' + [char]0x2800), 'U\+00AD, U\+2800 or U\+FFFC'), @('an object replacement character (U+FFFC)', ('Evening' + [char]0xFFFC), 'U\+00AD, U\+2800 or U\+FFFC'),
     @('a soft hyphen (U+00AD)', ('Eve' + [char]0xAD + 'ning')), @('a no-break space (U+00A0)', ('Evening' + [char]0xA0 + 'shift')),
     @('81 characters', ('x' * 81)), @('81 characters after the trim', ('  ' + ('x' * 81) + '  ')),
     @('empty', ''), @('blank', '   '),
@@ -561,7 +561,9 @@ foreach ($c in $badNames) {
     $p = New-HLedger $linesV
     $b = Get-Bytes $p
     $r = Invoke-Handoff $c[1] $p
-    Test-RefusedNoFetch "H10 -NewSession $($c[0])" $r $p $b $fxV $staleV
+    $why10 = ''
+    if ($c.Count -gt 2) { $why10 = $c[2] }
+    Test-RefusedNoFetch "H10 -NewSession $($c[0])" $r $p $b $fxV $staleV $why10
 }
 # Accepted (these fetch, so they run after every refusal above).
 $shaV = Get-OriginMain $fxV
@@ -676,6 +678,24 @@ $b = Get-Bytes $p
 $r = Invoke-Handoff 'Old' $p
 Test-RefusedNoFetch 'H13 -NewSession equal to a padded old name' $r $p $b $fxR $staleR 'already the coordinator'
 
+# The coordinator named by an id is the same session however the id is spelled: a note after it,
+# the short local_<8 hex> form against the full id, and an upper-case local_ prefix.
+$idC = New-Id
+$coordIdCases = @(
+    @('the id and a note, the ledger holding the bare id', $idC, ($idC + ' (opus)')),
+    @('the short id and a note, the ledger holding the full id', $idC, ($idC.Substring(0, 14) + ' (opus)')),
+    @('the full id, the ledger holding the short id and a note', ($idC.Substring(0, 14) + ' (port work)'), $idC),
+    @('an upper-case local_ prefix, the ledger holding the short id', $idC.Substring(0, 14), ('LOCAL_' + $idC.Substring(6, 8))),
+    @('the full id, the ledger holding an upper-case local_ prefix, the short id and a note', ('LOCAL_' + $idC.Substring(6, 8) + ' (opus)'), $idC),
+    @('an upper-case local_ prefix and a note, the ledger holding the id and a note', ($idC + ' (port work)'), ('LOCAL_' + $idC.Substring(6, 8) + ' (opus)'))
+)
+foreach ($c in $coordIdCases) {
+    $p = New-HLedger @(Get-HLines ('Coordinator: session "' + $c[1] + '", cwd `/x`.') @($liveR))
+    $b = Get-Bytes $p
+    $r = Invoke-Handoff $c[2] $p
+    Test-RefusedNoFetch "H13 -NewSession is the coordinator: $($c[0])" $r $p $b $fxR $staleR 'already the coordinator'
+}
+
 $noLog = @($okLines | ForEach-Object { if ($_ -ceq '## Log') { '## Journal' } else { $_ } })
 $p = New-HLedger $noLog
 $b = Get-Bytes $p
@@ -702,14 +722,19 @@ Invoke-HookTestGit $root @('init', '--bare', '--quiet', $bare13)
 [void][IO.Directory]::CreateDirectory((Join-Path $root 'My (stuff)'))
 [void][IO.Directory]::CreateDirectory((Join-Path $root 'norepo13'))
 [void][IO.Directory]::CreateDirectory((Join-Path $fxR.Launch 'notarepo13'))
-foreach ($c in $badRepos) {
-    $p = New-HLedger @(Get-HLines (New-CoordLine 'Old coordinator') @($liveR, (New-Row $c[1] $c[2] 'sess-b' 'bb' '' 'running')))
-    $b = Get-Bytes $p
-    $r = Invoke-Handoff $newName $p
-    $why13r = $c[1]
-    if ($c.Count -gt 3) { $why13r = $c[3] }
-    Test-RefusedNoFetch "H13 a live row whose Repo is $($c[0]) (the valid row's repo is not fetched either)" $r $p $b $fxR $staleR $why13r
-}
+# git must not walk up from the folder in no repository to one above the temp folder.
+$prevCeil13 = $env:GIT_CEILING_DIRECTORIES
+$env:GIT_CEILING_DIRECTORIES = $root
+try {
+    foreach ($c in $badRepos) {
+        $p = New-HLedger @(Get-HLines (New-CoordLine 'Old coordinator') @($liveR, (New-Row $c[1] $c[2] 'sess-b' 'bb' '' 'running')))
+        $b = Get-Bytes $p
+        $r = Invoke-Handoff $newName $p
+        $why13r = $c[1]
+        if ($c.Count -gt 3) { $why13r = $c[3] }
+        Test-RefusedNoFetch "H13 a live row whose Repo is $($c[0]) (the valid row's repo is not fetched either)" $r $p $b $fxR $staleR $why13r
+    }
+} finally { $env:GIT_CEILING_DIRECTORIES = $prevCeil13 }
 
 # =============================================================================
 Write-Host "(H14) no time parameter, no leftover words"
@@ -863,7 +888,11 @@ $cases3 = @(
     @('a Session cell holding the id and a note', 'r3note', $idS, ($idS.Substring(0, 14) + ' (port work, sonnet)'), 'running'),
     @('a live row, by id', 'r3id', $idS, $idS, 'running'),
     @('a Session cell with the id in upper-case hex', 'r3upper', $idS, $upperTok, 'running'),
-    @('a Session cell holding only the short token (local_ plus the first 8 hex)', 'r3short', $idS, $idS.Substring(0, 14), 'running')
+    @('a Session cell holding only the short token (local_ plus the first 8 hex)', 'r3short', $idS, $idS.Substring(0, 14), 'running'),
+    @('a -NewSession of the id and a note, the cell holding the bare id', 'r3newnote', ($idS + ' (opus)'), $idS, 'running'),
+    @('a -NewSession of the short id and a note, the cell holding the full id', 'r3newshort', ($idS.Substring(0, 14) + ' (opus)'), $idS, 'running'),
+    @('a -NewSession whose local_ prefix is in upper case, the cell holding the short id', 'r3newucp', ('LOCAL_' + $idS.Substring(6)), $idS.Substring(0, 14), 'running'),
+    @('a -NewSession of an upper-case prefix and a note, the cell holding the id and a note', 'r3newucn', ('LOCAL_' + $idS.Substring(6, 8) + ' (opus)'), ($idS.Substring(0, 14) + ' (port work)'), 'running')
 )
 foreach ($c in $cases3) {
     $rows3 = @((New-Row 'r3other' $root 'someone else' 'bo' '' 'running'), (New-Row $c[1] $root $c[3] 'bs' '' $c[4]))

@@ -14,9 +14,11 @@
 #      session's NAME or its id: trimmed, 1 to 80 characters, no control
 #      character (tab and line breaks included, checked before the trim), no
 #      character other than letters, digits, combining marks, punctuation,
-#      symbols and the plain space (so no zero-width space, BOM, soft hyphen,
-#      bidi mark or non-breaking space, and no character outside the Basic
-#      Multilingual Plane, an emoji included; some other letters and marks that
+#      symbols and the plain space (so no zero-width space, BOM, bidi mark or
+#      non-breaking space, and no character outside the Basic
+#      Multilingual Plane, an emoji included; the braille blank and object
+#      replacement character are refused by name, and so is the soft hyphen on
+#      Windows PowerShell 5.1 (elsewhere the allow-list refuses it); some other letters and marks that
 #      draw nothing, such as a Hangul filler or a variation selector, are not
 #      recognized, and a code point the host's Unicode tables do not know yet,
 #      for example a recent letter on Windows PowerShell 5.1, is refused),
@@ -41,15 +43,18 @@
 #      `Coordinator: session "<old name>"` (the shape the ledger template and
 #      this script write; the old name may be an id; it is trimmed, must not be
 #      a <placeholder> or hold "; before that: "; a -NewSession equal to it,
-#      ignoring case, is refused; look-alike spellings, such as a Cyrillic letter
+#      ignoring case, or whose first word is the same id as the old name's first
+#      word (a note after the id, the short or the full form, a local_ prefix in
+#      any case), is refused; look-alike spellings, such as a Cyrillic letter
 #      for a Latin one or a decomposed accent, are not recognized as equal); `## Log` and `## Tracks` each exactly once
 #      (case-insensitive); the Tracks section must hold a table (a header row; a
 #      header with no data rows is accepted), read by Read-CoordLedgerTracks'
 #      section scan and row parser. A -NewSession that is any row's Session
 #      cell (finished rows included; the cell with one pair of quotes or
-#      backticks removed, ignoring case) or whose session token
-#      (Get-CoordSessionToken) is the token of any row's cell, or of the first
-#      word of one (an id followed by a note), is refused: it is a track, not
+#      backticks removed, ignoring case) or whose first word, read as a session
+#      token (Get-CoordSessionToken, a local_ prefix in any case taken as
+#      local_), is the token of any row's cell, or of the first word of one (an
+#      id followed by a note), is refused: it is a track, not
 #      a new coordinator. A row is live unless Test-CoordRowTerminal says it
 #      is finished. Every live row's Repo cell must be a rooted full path
 #      (ConvertTo-CoordRootedPath); a relative cell (.\x, ..\x), a drive-relative
@@ -107,8 +112,10 @@
 # a ledger script is running.
 #
 # Limits: GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE are not cleared; run the
-# script from a shell where they are unset (git run from a hook sets them), or
-# every Repo cell would be read through that one repository. A Repo cell on a network share is checked for existence and probed
+# script from a shell where they are unset. An inherited GIT_DIR (git sets
+# it when it runs a hook) breaks the run: an absolute one makes every Repo cell and,
+# when -Ledger is omitted, the current folder be read through that one repository; a relative one is
+# resolved under each folder git is run in, where it usually names no repository. A Repo cell on a network share is checked for existence and probed
 # with git (step 3) and fetched (step 4) with no timeout, so an unreachable server can stall the run
 # there (no lock is held then). GIT_TERMINAL_PROMPT=0 stops git's own terminal
 # prompt only: an ssh passphrase prompt or a credential-manager window can
@@ -181,9 +188,11 @@ if ($NewSession -match $ctlRe) { Exit-NotWritten '-NewSession holds a tab, a lin
 # space) pass the trim and make a name that looks like another; the regex sees
 # UTF-16 code units, so a surrogate pair (any non-BMP character) is refused too.
 # An allow-list, not a Cf test: .NET's \p{Cf} does not match every format character,
-# and it files the soft hyphen (U+00AD) under punctuation, so that one is named,
-# as are the braille blank (U+2800) and the object replacement character (U+FFFC).
-if ($NewSession -match '[^\p{L}\p{N}\p{M}\p{P}\p{S} ]|[\u00AD\u2800\uFFFC]') { Exit-NotWritten '-NewSession holds a character other than letters, digits, combining marks, punctuation, symbols and the plain space (no invisible, no-break-space or non-BMP character)' }
+# and char.GetUnicodeCategory files the soft hyphen (U+00AD) under punctuation on .NET
+# Framework (Windows PowerShell 5.1), so there it is named, as are the braille blank
+# (U+2800) and the object replacement character (U+FFFC), which are symbols everywhere.
+if ($NewSession -match '[^\p{L}\p{N}\p{M}\p{P}\p{S} ]') { Exit-NotWritten '-NewSession holds a character other than letters, digits, combining marks, punctuation, symbols and the plain space (no invisible, no-break-space or non-BMP character)' }
+if ($NewSession -match '[\u00AD\u2800\uFFFC]') { Exit-NotWritten '-NewSession holds U+00AD, U+2800 or U+FFFC, a character that can draw nothing or look like a space' }
 if ($NewSession.Contains('`')) { Exit-NotWritten '-NewSession holds a backtick' }
 if ($NewSession.Contains('|')) { Exit-NotWritten '-NewSession holds a |, which would break a Tracks or Log reader' }
 if ($NewSession.Contains('"')) { Exit-NotWritten '-NewSession holds a double quote; the ledger writes the name between double quotes' }
@@ -299,7 +308,17 @@ function Get-CellText([string]$Cell) {
 
 # A -NewSession that is a track's Session cell (its text, or its id token as the
 # scope guard binds rows; any row, finished or live) is refused.
-$newToken = Get-CoordSessionToken $new
+# -NewSession is read by its first word, as a cell's first word is, but with a local_ prefix in
+# any case taken as local_ (the token reader is case-sensitive there, so a refusal would be missed);
+# a cell's own prefix is not folded, as the scope guard does not bind it either.
+$newFirst = ($new -split '\s+')[0] -replace '\A(?i:local_)', 'local_'
+$newToken = Get-CoordSessionToken $newFirst
+# The current coordinator is the same session when its id is: the whole-text compare above misses
+# a note after the id and the short and full forms of one id. A track's cell keeps its prefix as
+# the scope guard reads it, but the Coordinator line is written by this script from -NewSession as typed and
+# can hold an upper-case local_ prefix, so it is folded too.
+$oldToken = Get-CoordSessionToken (($old -split '\s+')[0] -replace '\A(?i:local_)', 'local_')
+if ($oldToken -and $newToken -and $oldToken -ceq $newToken) { Exit-NotWritten "-NewSession $new is already the coordinator named in $Ledger" }
 foreach ($row in $rows) {
     $cellText = Get-CellText ([string]$row.Session)
     $tok = Get-CoordSessionToken ([string]$row.Session)

@@ -79,8 +79,8 @@
 # folder whose last write time is more than 7 days old. A later SessionStart
 # event of a session that already has an anchor (the hook does not tell start,
 # resume, compact and clear apart), on a day with an index, only refreshes that
-# write time. The second-line append below (at most once per anchor) also sets
-# it, so an anchor is pruned
+# write time. The second-line append below (made only while the anchor file holds
+# one line) also sets it, so an anchor is pruned
 # when 7 days pass with neither; its session then binds by cwd until its next
 # SessionStart event on a day with an index writes a new anchor from the cwd it
 # has at that moment. A track that started before its coordinator registered the
@@ -127,10 +127,10 @@
 # timeout there gives the deadline warning; the anchor file read waits at most
 # the time left; the anchor append is
 # skipped, with a warning, under 200 ms left. Anchor mode has its own 1 s budget
-# and exits silently for an unusable session id, with no index (a cwd that does
-# not start with a drive letter warns first; a cwd that GetFullPath rejects warns
-# only with an index), for a session that already has its anchor and a drive-letter
-# cwd (a failed refresh is ignored), and when it loses the create race to another run; any
+# and exits silently for an unusable session id, with no index (a cwd that is not
+# a drive-letter full path warns first; a cwd that GetFullPath rejects warns, for a
+# session with no anchor yet and time left in the budget, only with an index), for
+# a session that already has its anchor and a drive-letter full-path cwd (a failed refresh is ignored), and when it loses the create race to another run; any
 # other failure writes no anchor and warns (a prune failure after the anchor is
 # written is ignored).
 #

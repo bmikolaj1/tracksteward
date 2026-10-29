@@ -148,7 +148,7 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
    `TRACKSTEWARD_GUARD=off` in the environment turns it off (anything that can set the hook's
    environment or write Claude's settings can do the same: it is not a lock). Register before
    the tracks start: a session that starts before the ledger is registered has no anchor and
-   binds by its cwd (its next start, resume, compact or clear writes it an anchor from wherever it is then).
+   binds by its cwd (the next start, resume, compact or clear event the hook sees for that session id, on a day with an index, writes it an anchor from the cwd it has then).
    That includes your own session on a day with no earlier ledger: keep the coordinator in the
    main checkout and do not `cd` it into a track's worktree.
 2. Snapshot each repo: `git fetch --prune origin`, origin/main sha, open PRs and their checks,
@@ -455,7 +455,7 @@ live track with that repo's `main` sha, then six `CHECKLIST` lines. It sends not
 register the ledger: send each `MESSAGE` line yourself, then run `coord-log.ps1 -Register`. It refuses
 (`COORD-HANDOFF: NOT WRITTEN - <reason>`; the ledger is byte-unchanged, except that a ledger which
 vanishes at the swap is not recreated and the temp file holding the new text is named) when the ledger
-changed during the fetch, when `-NewSession` is a track's Session cell (its name, or an id that is the cell's first word) or the current coordinator, or when
+changed during the fetch, when `-NewSession` is a track's Session cell (its name, or an id: the cell's first word and the first word of `-NewSession` are compared as ids, a `local_<8 hex>` and a full `local_<uuid>` of one session being the same id) or the current coordinator (by name, or by the same id), or when
 a live row's Repo is not the full path of a git working tree's top level. The fetches are not undone
 by a refusal. Run it in process (`&`), not through `powershell.exe -File`.
 

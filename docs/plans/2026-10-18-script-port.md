@@ -139,7 +139,7 @@ Grouped; every item is a code change with a test row, not a doc note.
 - **Shell quoting.** The private scripts carry the 5.1 `-File` / `-Command` caveats (exit code 2
   becomes 1 under `-Command`; `[ ]` in a path read as a wildcard). The hook command and the skill's
   invocation lines keep the exit-code forward and the path escape, and get a test each.
-- **Floors, checked at start with a clear refusal:** git 2.38+ (`merge-tree --write-tree`), `gh`
+- **Floors, checked at start with a clear refusal (ruled 2026-10-29: not in 0.2.0, see section 9 item 8):** git 2.38+ (`merge-tree --write-tree`), `gh`
   for the PR scripts only (`repo-snapshot` already runs without it), PowerShell 5.1 or 7.
 
 ## 4. Layout
@@ -222,7 +222,7 @@ need no go.
 | S4 | Merge verify | `merge-verify`, delete opt-in (D5), NOTIFY lines | a delete without `-DeleteBranch` is impossible; tip-moved branch never deleted |
 | S5 | Handoff | `coord-handoff`, name-or-id `-NewSession` | the swap is one write; a refused handoff leaves the ledger byte-unchanged |
 | S6 | Scope guard | hook, `hooks.json` (D3), anchor policy (D4), off switch, guard suite; the skill and the refusal text say that name-only Session cells never bind across repos (D2) | P1 passed; guard rows ported; a session with no registered ledger writes nothing |
-| S7 | Release | a scrub of every blob in `origin/main..HEAD` (the slice scrubs cover the next commit only; the author: "Tip now, history at S7 (Recommended)"); SKILL.md (script calls replace the recipes), README (Roadmap and "ships no scripts" lines, Requirements floors, what the guard does and how to turn it off), CHANGELOG, 0.2.0, merge `port/0.2` → `main` | a fresh-clone run of `tests/run.ps1`; a docs read for anything that still says "no scripts" |
+| S7 | Release | a scrub of every blob in `origin/main..HEAD` (the slice scrubs cover the next commit only; the author: "Tip now, history at S7 (Recommended)"); SKILL.md (script calls replace the recipes), README (Roadmap and "ships no scripts" lines, Requirements floors, what the guard does and how to turn it off), CHANGELOG, 0.2.0, merge `port/0.2` → `main` | the history scrub: `tests/scrub.test.ps1 -History origin/main..HEAD` (or `TRACKSTEWARD_SCRUB_HISTORY` set to that range, which `tests/run.ps1` passes on), with the denylist and repo variables set, and no SG6 UNCHECKED line in its output (a blob the scan could not read is not a pass); a fresh-clone run of `tests/run.ps1`; a docs read for anything that still says "no scripts" |
 
 S3 and S5 touch separate files from each other and could run as parallel tracks once S1 has landed
 (S2 also needs S1); S4 after S3 (shared `gh` helpers); S6 after S1; S7 last. One track at a time is
@@ -251,7 +251,7 @@ the default unless the coordinator opens a second.
    until the user sets the switch? **Ruled 2026-10-28 (the author: "On, inert until registered"):**
    on; `TRACKSTEWARD_GUARD=off` in the environment turns it off.
 
-Findings from S3, ruled 2026-10-28 (one line each; fix in S7 or 0.2.1):
+Findings from S3, ruled 2026-10-28 (one line each; fix in S7 or 0.2.1). **Ruled 2026-10-29 (the author: "All to 0.2.1"):** items 4-8 are all 0.2.1; none is fixed in 0.2.0, and the git floor (item 8) is stated as not enforced in the README and CHANGELOG.
 
 4. F1 (`scripts/repo-snapshot.ps1:144`, latent): a `-Repos` path that is not a git repo is skipped
    and the snapshot prints `attention none`, so a typo reads as a clean repo. S7 or 0.2.1.
@@ -263,3 +263,9 @@ Findings from S3, ruled 2026-10-28 (one line each; fix in S7 or 0.2.1):
    `-Base` as `slot-check` has. S7 or 0.2.1.
 8. F5 (all scripts, latent): the git 2.38+ floor of section 3 is not enforced; no script refuses at
    start (grep finds comments only). S7 or 0.2.1.
+
+Finding from the S5 round-3 review (reviewed 2026-10-29, ruled: to the plan, for 0.2.1):
+
+9. `scripts/coord-handoff.ps1` name check (latent): a `-NewSession` made only of characters the allow-list
+   accepts but that draw nothing (U+3164, U+115F, U+1160, U+FFA0, U+034F, U+FE0F, U+17B5) is not
+   refused, so a name can read as blank; the header says so. 0.2.1.

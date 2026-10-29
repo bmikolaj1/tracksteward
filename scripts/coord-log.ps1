@@ -35,7 +35,7 @@
 # (Enter-CoordLedgerLock, Read-CoordLedgerFile, Find-CoordSectionEnd,
 # Write-CoordLedgerSwap); this script words every refusal.
 #
-# Registration: the scope guard (when installed) finds the day's ledgers
+# Registration: the scope guard finds the day's ledgers
 # through its index, <index dir>/<yyyy-MM-dd>.ledgers (coord-common.ps1,
 # Get-CoordIndexPath). When the ledger is today's canonical one
 # (<main checkout>/.claude/coordination/<yyyy-MM-dd>.md of the repo that
@@ -167,7 +167,7 @@ catch { Exit-NotWritten "-Ledger is not a usable path: $($_.Exception.Message)" 
 $noLedger = "no ledger at $Ledger (from another repo's checkout, pass -Ledger with the coordinator's ledger; only a new day's ledger is started from ledger-template.md)"
 if (-not $hasDir) { Exit-NotWritten $noLedger }
 
-# The scope guard (when installed) finds the day's ledgers through the index (coord-common.ps1,
+# The scope guard finds the day's ledgers through the index (coord-common.ps1,
 # Register-CoordLedger). Today's canonical ledger is registered BEFORE the lock
 # on it is taken and before anything is appended, so a failed registration
 # leaves the ledger as it was and a retry never writes an event twice. Any
