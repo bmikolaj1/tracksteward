@@ -212,7 +212,7 @@ calls these from the plugin folder (`${CLAUDE_PLUGIN_ROOT}/scripts/`):
 - `coord-status.ps1`: the status board, one read-only pass over the structured ledger sections
   (Tracks, Merge slots, Owed checks, Findings, Queue) grouped as running, waiting, queued,
   blocked and done, each line ending in the ledger line it came from; `-Verify` checks the
-  claims it can against git and `gh`.
+  claims it can against `gh`.
 
 Every script ends with one verdict line and prints text for you to send; none sends a message.
 

@@ -4,7 +4,8 @@
 #
 # One read-only pass over the STRUCTURED sections of today's ledger (Tracks, Merge slots, Owed checks, Findings,
 # Queue), never the Log or Decisions, so it stays cheap on a long ledger: about 2,000 characters against the whole
-# file. Every row, finding, owed-check, queue and slot line ends in `L<n>`, the ledger line it came from.
+# file. Every row, finding, owed-check, queue and slot line ends in `L<n>`, the ledger line it came from (a DONE entry
+# ends in its PR number and sha instead).
 #
 # Groups (the first word of a Tracks row's Status cell decides; anything else is UNCLASSIFIED and listed under WAITING):
 #   QUEUED -> QUEUED                    BRIEFED, WAIT-USER, WAIT-SLOT, WAIT-QUOTA -> WAITING
@@ -193,7 +194,7 @@ for ($i = 0; $i -lt $rows.Count; $i++) {
         else { $g[$key] += "    verified: #$pr unknown ($($j.Error))" }
     }
 }
-# MISMATCH: a MERGED/DONE row whose PR is not merged (only checked with -Verify)
+# MISMATCH: a MERGED row whose PR is not merged (only checked with -Verify)
 if ($Verify) {
     for ($i = 0; $i -lt $rows.Count; $i++) {
         $r = $rows[$i]
@@ -270,7 +271,7 @@ foreach ($e in $queueEntries) {
     $what = $rest
     # the gate is the LAST bracket group shaped like a gate, "[after ...]" or "[needs ...]", BEFORE " owner:" (the
     # line shape: Q<n> <what> [<gate>] owner: ...; source: ...): a bracket in the text ("fix [F3]
-    # regression"), an unclosed "[", or any bracket after " owner:" (a quoted "[after #130 merges]" in source) does not
+    # regression"), an unclosed "[", or any bracket after " owner:" (a quoted "[after #99 merges]" in source) does not
     # take it over. A line with no " owner:" is searched whole. With no gate-shaped group the first group is the gate,
     # printed as is with ?
     $ownerAt = $rest.IndexOf(' owner:', [System.StringComparison]::Ordinal)

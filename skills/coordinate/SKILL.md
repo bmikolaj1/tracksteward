@@ -293,15 +293,16 @@ sessions is not available, the pointer line is what the user pastes.
 6. **When the ACK comes**, stamp it with the coordinator's clock at receipt (not a time the track
    typed): `coord-set.ps1 -Track '<name>' -State RUNNING -Text 'ACK'` makes the Status cell
    `RUNNING 08:40; ACK`. Copy the model and effort the ACK names into the Model cell, and tick the
-   owed check.
+   owed check. (The ACK of a changed brief is appended instead, as below, so the state word stays.)
 
 Any later change to a brief (a widened scope, a new merge order) is appended to the file under a
 `CHANGES <YYYY-MM-DD> <HH:MM>` heading (time from the clock), never rewritten over the old text,
 so the day's copy still shows what the track was told and when. It is also sent as its own message that says what changed and carries the
 current sha, and asks for `ACK {track} changed`. Each such request gets its own owed check and
 deadline (and the user is told it), and the change is in force once it is ACKed. The Status cell
-keeps the latest brief time and ACK time after the track's state word, for example
-`PR-OPEN 10:22; @abc1234, briefed 10:05 (changed), ACK 10:20` (each time written with `{now}`). After
+keeps the track's state word first; the change and its ACK are appended to it, not set over it:
+`coord-set.ps1 -Track '<name>' -Append -Text 'brief changed {now}'`, and later `-Append -Text 'ACK
+changed {now}'`, for example `PR-OPEN 10:22; @abc1234, brief changed 10:30, ACK changed 10:34`. After
 midnight a change is a fresh brief (see The ledger). A blocker or a question from the track is
 still sent in full in a message, never as a file.
 
@@ -347,7 +348,7 @@ still sent in full in a message, never as a file.
 Run the board and paste its lines; do not answer from memory and do not re-read the whole ledger.
 One read-only pass over the structured sections only (Tracks, Merge slots, Owed checks, Findings,
 Queue; never the Log), about 2,000 characters, every item line ending in a pointer (`L<n>`, the
-ledger line it came from), from the PowerShell tool, in process:
+ledger line it came from; a DONE entry ends in its PR number and sha instead), from the PowerShell tool, in process:
 
 `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-status.ps1" [-Ledger <path>] [-Verify] [-Full] [-Group running|waiting|queued|blocked|done]`
 
@@ -355,13 +356,13 @@ From Bash, through `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -F
 with the same parameters (`-Ledger` written `C:/...`). Without `-Ledger` it reads today's ledger from
 the repo's main checkout only.
 
-- Groups: RUNNING, WAITING (BRIEFED with no ACK after 15 minutes, WAIT-*, unticked Owed checks,
+- Groups: RUNNING, WAITING (BRIEFED, flagged when it has no ACK after 15 minutes, WAIT-*, unticked Owed checks,
   Findings with no later `F<n> outcome:` line, and any Status cell whose first word is not in the
   vocabulary, listed as unclassified), QUEUED, BLOCKED (also an open Merge slot no live row
   carries), DONE. The last line is `STATUS <date> <time>: <counts>`.
 - Status vocabulary the board reads (first word, upper case): QUEUED, BRIEFED, RUNNING, PR-OPEN, WAIT-USER, WAIT-SLOT, WAIT-QUOTA, BLOCKED, MERGED, DONE. A ledger written before the vocabulary still renders; its live
   rows count as unclassified.
-- Without `-Verify` it makes no git or gh call and its header says "not verified". Use `-Verify`
+- Without `-Verify` it makes no gh call (and no git call when `-Ledger` is given) and its header says "not verified". Use `-Verify`
   when the user asks for live state: it adds one `gh pr view` per live row with a PR (a QUEUED row
   is skipped), reads an `[after #<n> merges]` Queue gate from gh, and flags a row that says MERGED
   while its PR is not (MISMATCH). A failed call prints `unknown (...)`, never a state.
