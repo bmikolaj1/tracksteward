@@ -939,6 +939,17 @@ foreach ($v in $variants) {
 Write-Host '(B17) the real index folder'
 Assert-Coord 'B17 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination: its listing and the SHA-256 of every file outside sessions/, or still absent) is unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
 
+Write-Host "(F5) git below 2.38 is refused at the start"
+$gitOldDir = Join-Path $root 'gitstub-floor-old'
+[void][IO.Directory]::CreateDirectory($gitOldDir)
+[System.IO.File]::WriteAllText((Join-Path $gitOldDir 'git.cmd'), "@echo off`r`necho git version 2.37.9.windows.1`r`nexit /b 0`r`n", [System.Text.Encoding]::ASCII)
+$gitOldEnv = @{ PATH = $gitOldDir + [System.IO.Path]::PathSeparator + $env:PATH }
+$ledgerNone = Join-Path $root 'floor-no-such-ledger.md'
+$x = Invoke-HookTestPowerShell -Script $ScriptPath -StartDir $root -ExtraEnv $gitOldEnv -ScriptArgs "-Track floor -Ledger `"$ledgerNone`""
+$xOut = ([string]$x.Out).Trim()
+Assert-Coord 'F5 coord-brief: a git that answers 2.37.9 is refused with exit 2, one line starting "COORD-BRIEF: NOT WRITTEN - " that names git 2.37.9 and the 2.38 floor' ($x.Code -eq 2 -and $xOut.StartsWith('COORD-BRIEF: NOT WRITTEN - ', [System.StringComparison]::Ordinal) -and $xOut -notmatch '[\r\n]' -and $xOut.Contains('git 2.37.9 ') -and $xOut.Contains('2.38')) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
+Assert-Coord 'F5 coord-brief: ... and the ledger is not created' (-not (Test-Path -LiteralPath $ledgerNone)) ''
+
 Write-CoordUncheckedSummary
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Passed: $script:coordPass  Failed: $script:coordFail"

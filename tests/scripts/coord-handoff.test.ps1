@@ -550,6 +550,13 @@ $badNames = @(
     @('a lone surrogate (U+D800)', ('a' + [char]0xD800 + 'b')),
     @('an emoji (a surrogate pair, outside the BMP)', ('Night ' + [char]::ConvertFromUtf32(0x1F680))),
     @('a braille blank (U+2800)', ('Evening' + [char]0x2800), 'U\+00AD, U\+2800 or U\+FFFC'), @('an object replacement character (U+FFFC)', ('Evening' + [char]0xFFFC), 'U\+00AD, U\+2800 or U\+FFFC'),
+    @('only a Hangul filler (U+3164)', [string][char]0x3164, 'U\+3164'),
+    @('only a Hangul choseong filler (U+115F)', [string][char]0x115F, 'U\+115F'),
+    @('only a Hangul jungseong filler (U+1160)', [string][char]0x1160, 'U\+1160'),
+    @('only a halfwidth Hangul filler (U+FFA0)', [string][char]0xFFA0, 'U\+FFA0'),
+    @('only a combining grapheme joiner (U+034F)', [string][char]0x034F, 'U\+034F'),
+    @('only a variation selector-16 (U+FE0F)', [string][char]0xFE0F, 'U\+FE0F'),
+    @('only a Khmer inherent vowel (U+17B5)', [string][char]0x17B5, 'U\+17B5'),
     @('a soft hyphen (U+00AD)', ('Eve' + [char]0xAD + 'ning')), @('a no-break space (U+00A0)', ('Evening' + [char]0xA0 + 'shift')),
     @('81 characters', ('x' * 81)), @('81 characters after the trim', ('  ' + ('x' * 81) + '  ')),
     @('empty', ''), @('blank', '   '),
@@ -1164,6 +1171,17 @@ Assert-Coord 'H17 no global git, gh, Get-Date or Start-Sleep function is left be
 # =============================================================================
 Write-Host "(H18) the real index folder"
 Assert-Coord 'H18 the real index folder ($HOME\.claude\coordination, *.ledgers and sessions\) is byte-unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
+Write-Host "(F5) git below 2.38 is refused at the start"
+$gitOldDir = Join-Path $root 'gitstub-floor-old'
+[void][IO.Directory]::CreateDirectory($gitOldDir)
+[System.IO.File]::WriteAllText((Join-Path $gitOldDir 'git.cmd'), "@echo off`r`necho git version 2.37.9.windows.1`r`nexit /b 0`r`n", [System.Text.Encoding]::ASCII)
+$gitOldEnv = @{ PATH = $gitOldDir + [System.IO.Path]::PathSeparator + $env:PATH }
+$ledgerNone = Join-Path $root 'floor-no-such-ledger.md'
+$x = Invoke-HookTestPowerShell -Script $ScriptPath -StartDir $root -ExtraEnv $gitOldEnv -ScriptArgs "-NewSession floor -Ledger `"$ledgerNone`""
+$xOut = ([string]$x.Out).Trim()
+Assert-Coord 'F5 coord-handoff: a git that answers 2.37.9 is refused with exit 2, one line starting "COORD-HANDOFF: NOT WRITTEN - " that names git 2.37.9 and the 2.38 floor' ($x.Code -eq 2 -and $xOut.StartsWith('COORD-HANDOFF: NOT WRITTEN - ', [System.StringComparison]::Ordinal) -and $xOut -notmatch '[\r\n]' -and $xOut.Contains('git 2.37.9 ') -and $xOut.Contains('2.38')) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
+Assert-Coord 'F5 coord-handoff: ... and the ledger is not created' (-not (Test-Path -LiteralPath $ledgerNone)) ''
+
 Write-CoordUncheckedSummary
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

@@ -73,6 +73,8 @@
 #   C24 (S2) Get-CoordLedgerDate (anchored with z), ConvertTo-CoordRootedPath,
 #       Test-CoordLocalFixedPath, ConvertTo-CoordArgLine (a backslash before a
 #       final LF is not doubled)
+#   C25 (F5) Test-CoordGitFloor: 2.37.9 refused, 2.38.0 and 2.45.1.windows.1 ok,
+#       garbage and empty refused (-VersionText), and a stub git.cmd on PATH
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\coord-common.test.ps1 [-ScriptPath <mutant copy of coord-common.ps1>]
 #       (-CommonPath is an alias of -ScriptPath)
@@ -160,6 +162,11 @@ $t0 = [datetime]::new(2026, 10, 22, 9, 5, 0)
 Assert-Coord 'C1 Get-CoordStamp: HH:mm, two digits, from the given time' ((Get-CoordStamp $t0) -ceq '09:05')
 Assert-Coord 'C1 Expand-CoordNow: every {now} becomes the stamp; other braces stay' ((Expand-CoordNow 'a {now} b {now} {x} {NOW}' $t0) -ceq 'a 09:05 b 09:05 {x} {NOW}')
 Assert-Coord 'C1 Test-CoordTypedTime: a typed H:mm / HH:mm is found, with or without {now} beside it, also glued to letters or seconds, and an id or port with a colon' ((Test-CoordTypedTime 'ACK 08:40') -and (Test-CoordTypedTime 'at 9:05.') -and (Test-CoordTypedTime '{now} then 14:10 Sonnet') -and (Test-CoordTypedTime '9:05pm') -and (Test-CoordTypedTime '09:12Z') -and (Test-CoordTypedTime 'T10:22') -and (Test-CoordTypedTime 'ACK08:40') -and (Test-CoordTypedTime '09:12:30') -and (Test-CoordTypedTime 'F3:12') -and (Test-CoordTypedTime '80:80'))
+$fwColon = [string][char]0xFF1A
+Assert-Coord 'C1 Test-CoordTypedTime: a time with the fullwidth colon (U+FF1A) is found, also glued to letters' ((Test-CoordTypedTime ('at 10' + $fwColon + '22')) -and (Test-CoordTypedTime ('ACK9' + $fwColon + '05pm')))
+Assert-Coord 'C1 Test-CoordTypedTime: 10h22 is found, also glued to letters' ((Test-CoordTypedTime 'at 10h22') -and (Test-CoordTypedTime 'ACK08h40.'))
+Assert-Coord 'C1 Test-CoordTypedTime: 10.22 is found, also glued to letters or at the end of a sentence' ((Test-CoordTypedTime 'at 10.22') -and (Test-CoordTypedTime 'done at 9.05.') -and (Test-CoordTypedTime 'T10.22'))
+Assert-Coord 'C1 Test-CoordTypedTime: a longer dotted or h number is no time (1.10.22, 110.22, 1.5.3, 100h22, 10h225, 10.225)' (-not ((Test-CoordTypedTime 'v1.10.22') -or (Test-CoordTypedTime 'ip 110.22') -or (Test-CoordTypedTime 'v1.5.3') -or (Test-CoordTypedTime '100h22') -or (Test-CoordTypedTime '10h225') -or (Test-CoordTypedTime '10.225')))
 Assert-Coord 'C1 Test-CoordTypedTime: no time in {now}, 1.5, v1:2, 10:420 or a file:line reference' (-not ((Test-CoordTypedTime 'merged {now}') -or (Test-CoordTypedTime '1.5 days') -or (Test-CoordTypedTime 'v1:2') -or (Test-CoordTypedTime '10:420 is no time') -or (Test-CoordTypedTime 'see coord-brief.ps1:96') -or (Test-CoordTypedTime 'x.ps1:80') -or (Test-CoordTypedTime 'at coord-log.ps1:217')))
 
 Write-Host "(C2) Tracks table"
@@ -1237,6 +1244,54 @@ foreach ($c in @(
     $show = { param($s) ($s -replace "`n", '<LF>') }
     Assert-Coord ("C24 ConvertTo-CoordArgLine '" + (& $show $c[0]) + "' -> " + (& $show $c[1])) ($got -ceq $c[1]) ("got " + (& $show $got))
 }
+
+Write-Host "(C25) Test-CoordGitFloor"
+# The parser: -VersionText stands in for the output of `git --version`.
+foreach ($c in @(
+        @('2.37.9', 'git version 2.37.9', $false, '2.37.9'),
+        @('2.37.9 with a Windows suffix', 'git version 2.37.9.windows.1', $false, '2.37.9'),
+        @('2.9.5 (the minor is a number, not text)', 'git version 2.9.5', $false, '2.9.5'),
+        @('1.9.0', 'git version 1.9.0', $false, '1.9.0'),
+        @('2.38.0', 'git version 2.38.0', $true, '2.38.0'),
+        @('2.38 with no patch', 'git version 2.38', $true, '2.38'),
+        @('2.45.1.windows.1', 'git version 2.45.1.windows.1', $true, '2.45.1'),
+        @('2.100.0 (the minor is a number, not text)', 'git version 2.100.0', $true, '2.100.0'),
+        @('3.0.0', 'git version 3.0.0', $true, '3.0.0'),
+        @('Apple suffix', 'git version 2.39.3 (Apple Git-145)', $true, '2.39.3')
+    )) {
+    $x = Test-CoordGitFloor -VersionText $c[1]
+    Assert-Coord "C25 '$($c[0])': Ok is $($c[2]), Version $($c[3])" ($x.Ok -eq $c[2] -and $x.Version -ceq $c[3]) "ok=$($x.Ok) version=$($x.Version) error=$($x.Error)"
+    if ($c[2]) { Assert-Coord "C25 '$($c[0])': no error text" ($x.Error -ceq '') $x.Error }
+    else { Assert-Coord "C25 '$($c[0])': one line naming the version found and the 2.38 floor" ($x.Error -notmatch '[\r\n]' -and $x.Error.Contains("git $($c[3]) ") -and $x.Error.Contains('2.38')) $x.Error }
+}
+foreach ($c in @(
+        @('garbage', 'banana'),
+        @('empty', ''),
+        @('a version without the git prefix', '2.45.1'),
+        @('only a major', 'git version 2'),
+        @('a letter for the major', 'git version x.45.1')
+    )) {
+    $x = Test-CoordGitFloor -VersionText $c[1]
+    Assert-Coord "C25 unparseable ($($c[0])): refused, one line saying it could not be read and naming 2.38" (-not $x.Ok -and $x.Error -notmatch '[\r\n]' -and $x.Error.Contains('could not be read') -and $x.Error.Contains('2.38')) "ok=$($x.Ok) error=$($x.Error)"
+}
+# Without -VersionText it runs the first git on PATH: a stub git.cmd answers.
+function Invoke-GitFloorWithStub([string]$StubDir) {
+    $prev = $env:PATH
+    try {
+        $env:PATH = $StubDir + [System.IO.Path]::PathSeparator + $prev
+        return (Test-CoordGitFloor)
+    }
+    finally { $env:PATH = $prev }
+}
+$stubOld = New-GitStub 'floor-old' @('@echo off', 'echo git version 2.37.9.windows.1', 'exit /b 0')
+$stubNew = New-GitStub 'floor-new' @('@echo off', 'echo git version 2.45.1.windows.1', 'exit /b 0')
+$stubJunk = New-GitStub 'floor-junk' @('@echo off', 'echo not a version', 'exit /b 0')
+$x = Invoke-GitFloorWithStub $stubOld
+Assert-Coord 'C25 the git on PATH answers 2.37.9: refused, naming 2.37.9 and 2.38' (-not $x.Ok -and $x.Error.Contains('git 2.37.9 ') -and $x.Error.Contains('2.38')) "ok=$($x.Ok) error=$($x.Error)"
+$x = Invoke-GitFloorWithStub $stubNew
+Assert-Coord 'C25 the git on PATH answers 2.45.1.windows.1: ok' ($x.Ok -and $x.Version -ceq '2.45.1') "ok=$($x.Ok) version=$($x.Version) error=$($x.Error)"
+$x = Invoke-GitFloorWithStub $stubJunk
+Assert-Coord 'C25 the git on PATH answers text that is no version: refused as unreadable' (-not $x.Ok -and $x.Error.Contains('could not be read')) "ok=$($x.Ok) error=$($x.Error)"
 
 Write-Host "(C21-pre) what the real-index digest covers"
 # The digest function itself, pointed at a scratch folder through the fixture's

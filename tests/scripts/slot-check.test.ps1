@@ -543,6 +543,15 @@ Remove-Item -LiteralPath $cixLedger -Force
 $r = Invoke-CoordScript -Name 'slot-check.ps1' -Cwd $cix.Launch -ScriptArgs "-Pr 40 -Scope `"docs/**`" -Ledger `"$coordLedgerPath`"" -Rules @((New-CoordRule '^pr view 40\b' $noChecks)) -ScriptPath $ScriptPath
 Assert-Verdict 'C8b--Ledger-names-it' $r 'READY' 40 $cif @('no checks reported (CI: none)')
 
+Write-Host "(F5) git below 2.38 is refused at the start"
+$gitOldDir = Join-Path $root 'gitstub-floor-old'
+[void][IO.Directory]::CreateDirectory($gitOldDir)
+[System.IO.File]::WriteAllText((Join-Path $gitOldDir 'git.cmd'), "@echo off`r`necho git version 2.37.9.windows.1`r`nexit /b 0`r`n", [System.Text.Encoding]::ASCII)
+$gitOldEnv = @{ PATH = $gitOldDir + [System.IO.Path]::PathSeparator + $env:PATH }
+$x = Invoke-CoordScript -Name 'slot-check.ps1' -Cwd $root -ScriptArgs '-Pr 7' -ExtraEnv $gitOldEnv -ScriptPath $ScriptPath
+$xOut = ([string]$x.Out).Trim()
+Assert-Coord 'F5 slot-check: a git that answers 2.37.9 is refused with exit 2, one line starting "SLOT-CHECK #7: COULD NOT CHECK - " that names git 2.37.9 and the 2.38 floor' ($x.Code -eq 2 -and $xOut.StartsWith('SLOT-CHECK #7: COULD NOT CHECK - ', [System.StringComparison]::Ordinal) -and $xOut -notmatch '[\r\n]' -and $xOut.Contains('git 2.37.9 ') -and $xOut.Contains('2.38')) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
+
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "Passed: $script:coordPass  Failed: $script:coordFail"

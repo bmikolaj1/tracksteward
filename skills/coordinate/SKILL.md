@@ -84,8 +84,8 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
   `-Cell Model -Append -Text '{now} <model> <effort>'` adds `; <time> <model> <effort>`;
   `-Repo <full path>` picks the row when a name is on rows of two repos). From Bash use the
   `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/coord-set.ps1")" ...`
-  form of `coord-log.ps1`. Only `coord-set.ps1` expands `{now}`: `coord-log.ps1` stamps the line it
-  appends and leaves a `{now}` in its text as typed. An Owed-check tick is not scripted: tick it by
+  form of `coord-log.ps1`. `coord-log.ps1` also expands every `{now}` in its text (the same clock read as the
+  stamp it puts on the line). An Owed-check tick is not scripted: tick it by
   hand with a time from `Get-Date`. An outcome line stays an appended line (`coord-log.ps1`). The
   script changes only that cell and keeps every other cell and line (a file that mixes LF and CRLF
   comes back with one, as with `coord-log.ps1`), edits the ledger it is given, canonical or not,

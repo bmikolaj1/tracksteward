@@ -14,10 +14,12 @@
 # agrees ("MERGED/x" is live for every other script, so it is unclassified here). BRIEFED with no "ACK HH:mm"
 # after 15 minutes says so (the skill has an ACKed row set to RUNNING; a note such as "no ACK yet" is not an ACK); a
 # stamp later than the clock is yesterday's.
-# Also WAITING: Findings F<n> with no later `F<n> outcome:` line, unticked Owed checks. Also BLOCKED: an open Merge
+# The ledger is read once; the Tracks table is parsed from those lines.
+# Also WAITING: Findings F<n> (followed by `from <track>` or a colon) with no later `F<n> outcome:` line (an id may be followed by parenthesised tags, a carry
+# date or a track tag, nested at most two levels deep, ignored when matching and not printed), unticked Owed checks. Also BLOCKED: an open Merge
 # slot no live row carries. The template's placeholders `1. (none)` and `- [ ] (none)` (any case, with any number of
 # `(from <date>)` tails) are not items. QUEUED also takes the `Q<n>` lines of the Queue section with no `Q<n> outcome:`
-# line; the gate is the LAST bracket group shaped like one, `[after ...]` or `[needs ...]`, before ` owner:` (the
+# line (a Queue id and its outcome line take no tag or exactly one `(yyyy-MM-dd)` tag, ignored and not printed); the gate is the LAST bracket group shaped like one, `[after ...]` or `[needs ...]`, before ` owner:` (the
 # whole line when it has no ` owner:`; with no such group there, the first group there), read OPEN, CLOSED or ? (only these shapes: after #<n> merges, after <yyyy-MM-dd> <HH:mm>Z (UTC), after
 # <HH:mm> (local), after Q<n>, needs <who> ...). The line shows the text before the gate, cut.
 #
@@ -88,7 +90,18 @@ $secOwed = Get-Section 'Owed checks' $false
 $secFind = Get-Section 'Findings' $false
 $secQueue = Get-Section 'Queue' $false
 
-try { $rows = @(Read-CoordLedgerTracks $path) } catch { Exit-Unreadable $_.Exception.Message }
+# The Tracks table comes from the lines already read (one read of the ledger: a swap of the file between two reads
+# cannot end in "could not read"). The scan is Read-CoordLedgerTracks's: the first pipe line starts the table, the
+# first non-pipe line after it ends it.
+$tracksRaw = New-Object System.Collections.Generic.List[string]
+for ($k = $secTracks.Header + 1; $k -lt $secTracks.End; $k++) {
+    if ($lines[$k].TrimStart().StartsWith('|')) { $tracksRaw.Add($lines[$k]) }
+    elseif ($tracksRaw.Count -gt 0) { break }
+}
+$rows = @()
+if ($tracksRaw.Count -gt 0) {
+    try { $rows = @(ConvertFrom-CoordTracksRows $tracksRaw $path) } catch { Exit-Unreadable $_.Exception.Message }
+}
 
 # Line number (1-based) of each data row, in the order the reader returns them.
 $rowLine = New-Object System.Collections.Generic.List[int]
@@ -221,18 +234,18 @@ foreach ($s in $openSlots) {
     }
 }
 
-# ---- Findings: F<n> from ... with no later "<id> outcome:" line
+# ---- Findings: F<n> from ... or F<n>: ... with no later "<id> outcome:" line (F<n>: outcome: closes too); known gaps (CHANGELOG, "Known and left"): a repeated id is listed per line, and an inline `| outcome: dropped` does not close a line
 $pending = 0
 $findEntries = Get-SectionLines $secFind
 $closed = @{}
 foreach ($e in $findEntries) {
-    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)\s+outcome:') { $closed[$Matches[1]] = $true }
+    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)(?:\s+\((?:[^()]|\([^()]*\))*\))*:?\s+outcome:') { $closed[$Matches[1]] = $true }
 }
 foreach ($e in $findEntries) {
-    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)\s+from\s' -and -not $closed.ContainsKey($Matches[1])) {
+    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)(?:\s+\((?:[^()]|\([^()]*\))*\))*(?:\s+from\s|:\s)' -and -not $closed.ContainsKey($Matches[1])) {
         $id = $Matches[1]
         $since = if ($e[1] -match '^(\d\d:\d\d)') { $Matches[1] } else { '?' }
-        $what = ($e[1] -replace '^\d\d:\d\d\s+c?F\d+\s+from\s+', '')
+        $what = ($e[1] -replace '^\d\d:\d\d\s+c?F\d+(?:\s+\((?:[^()]|\([^()]*\))*\))*(?:\s+from\s+|:\s+)', '')
         $pending++
         $gCount.waiting++
         $g.waiting += ('  {0} {1}   PENDING since {2}  L{3}' -f $id, (Get-Trunc $what 60), $since, $e[0])
@@ -245,14 +258,15 @@ $unrecognised = 0
 foreach ($e in (Get-SectionLines $secOwed)) {
     $t = $e[1]
     # the template's placeholder "- [ ] (none)" is not an owed check, in any case and with any "(from <date>)" tails
-    if ($t -match '^- \[ \] \(none\)(\s+\(from [^)]*\))*\s*$') { continue }
-    if ($t -cmatch '^- \[ \] (.*)$') {
+    # (an indented or oddly spaced "  -  [ ] x" is the same item as a column-0 one)
+    if ($t -match '^\s*-\s+\[ \] \(none\)(\s+\(from [^)]*\))*\s*$') { continue }
+    if ($t -cmatch '^\s*-\s+\[ \] (.*)$') {
         $owedText = $Matches[1]
         $owedOpen++
         $gCount.waiting++
         $g.waiting += ('  Owed: {0}  L{1}' -f (Get-Trunc ($owedText -replace '\s*\(from [^)]*\)', '') 70), $e[0])
     }
-    elseif ($t -cmatch '^\s*([*+]|\d+\.)\s+\[.\]' -or $t -cmatch '^- \[[^ xX]\]') { $unrecognised++ }
+    elseif ($t -cmatch '^\s*([*+]|\d+\.)\s+\[.\]' -or $t -cmatch '^\s*-\s+\[[^ xX]\]') { $unrecognised++ }
 }
 
 # ---- Queue: Q<n> lines with no later "Q<n> outcome:" line
@@ -260,9 +274,9 @@ $gatesOpen = 0
 $gatesUnknown = 0
 $queueEntries = Get-SectionLines $secQueue
 $qClosed = @{}
-foreach ($e in $queueEntries) { if ($e[1] -match '^\d\d:\d\d\s+(Q\d+)\s+outcome:') { $qClosed[$Matches[1]] = $true } }
+foreach ($e in $queueEntries) { if ($e[1] -match '^\d\d:\d\d\s+(Q\d+)(?:\s+\(\d{4}-\d\d-\d\d\))?\s+outcome:') { $qClosed[$Matches[1]] = $true } }
 foreach ($e in $queueEntries) {
-    if ($e[1] -notmatch '^\d\d:\d\d\s+(Q\d+)\s+(?!outcome:)(.*)$') { continue }
+    if ($e[1] -notmatch '^\d\d:\d\d\s+(Q\d+)(?:\s+\(\d{4}-\d\d-\d\d\))?\s+(?!outcome:)(.*)$') { continue }
     $qid = $Matches[1]
     $rest = $Matches[2]
     if ($qClosed.ContainsKey($qid)) { continue }

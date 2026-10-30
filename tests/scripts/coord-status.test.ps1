@@ -15,7 +15,8 @@
 #        lower-case `merged` and `NOT MERGED` stay live
 #   T4   BRIEFED older than 15 minutes with no ACK says so, with the minutes; a fresh one does not
 #   T5   Findings: F<n> with no later `F<n> outcome:` is PENDING; F1 is not closed by F10's outcome
-#   T6   Owed checks: unticked listed ("(from ...)" tail dropped), ticked not, odd box shapes counted as unrecognised
+#   T6   Owed checks: unticked listed ("(from ...)" tail dropped), ticked not, odd box shapes counted as unrecognised;
+#        indented or oddly spaced boxes count like column-0 ones; the ledger is read once (source pin)
 #   T7   Merge slots: an open slot is printed on its row by PR number; one no live row carries is BLOCKED;
 #        MERGED, VOIDED and `slot free` are closed
 #   T8   Queue: gates read OPEN/CLOSED/? by the rules (time, local time, person, PR without -Verify, after Q<n>,
@@ -167,6 +168,48 @@ Assert-Coord 'T5a F1 stays PENDING when only F10 has an outcome line' (($wait -j
 Assert-Coord 'T5b F10 and F2 (outcome lines) are closed; cF3 is pending' (($wait -join "`n") -notmatch 'tenth thing' -and ($wait -join "`n") -notmatch 'second' -and ($wait -join "`n") -match 'cF3 b: cloud one.*PENDING') ($wait -join "`n")
 Assert-Coord 'T5c the STATUS line counts 2 findings pending' ($r.Last -match '; 2 findings pending') $r.Last
 
+# T5d (F13, 2026-10-29) an id may carry a parenthesised tag before "from" (a carry date, or a track tag as in "F9 (F-g) from F-e"):
+# still a finding, still closed by its own outcome line, with or without the tag on the outcome line
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F3 (2026-10-28) from a: carried thing | outcome: PENDING', '09:05 F4 (2026-10-28) from a: carried closed | outcome: PENDING', '09:10 F4 outcome: dropped',
+    '09:15 F5 (F-g) from b: tagged thing | outcome: PENDING', '09:20 F6 (2026-10-28) from a: tagged outcome closed | outcome: PENDING', '09:25 F6 (2026-10-28) outcome: done',
+    '09:30 F7 from a: tail carry | outcome: PENDING (from 2026-10-28)')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5d F3 (2026-10-28) shows in WAITING' ($wait -match 'F3 .*carried thing.*PENDING since 09:00') $wait
+Assert-Coord 'T5e F5 (F-g) and the tail-dated F7 show; F4 and F6 (outcome lines, tagged or not) do not' ($wait -match 'tagged thing' -and $wait -match 'tail carry' -and $wait -notmatch 'carried closed' -and $wait -notmatch 'tagged outcome closed') $wait
+Assert-Coord 'T5f the STATUS line counts 3 findings pending' ($r.Last -match '; 3 findings pending') $r.Last
+
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F1 (a (b)) from a: nested tag | outcome: PENDING', '09:05 F2 (a) (b) from a: double tag | outcome: PENDING', '09:10 F3 (2026-10-28) from a: untagged close | outcome: PENDING', '09:15 F3 outcome: done',
+    '09:20 F11 (2026-10-28) outcome: done', '09:25 F1x (2026-10-28) from a: not a finding id | outcome: PENDING')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5h a nested or double tag still lists the finding, an untagged outcome closes a tagged one, F11 does not close F1, and the tag stays off the board' ($wait -match 'nested tag' -and $wait -match 'double tag' -and $wait -notmatch 'untagged close' -and $wait -notmatch '\(a' -and $wait -notmatch '2026-10-28' -and $wait -notmatch 'not a finding id' -and $r.Last -match '; 2 findings pending') ($wait + "`n" + $r.Last)
+
+# T5i (F16, folded into F13) a finding needs no " from <track>": "F22 (coordinator, measured): ..." and "F23: ..." are findings too
+# (listed, closed by their own outcome line); a Log line, an id with trailing letters and a note that only mentions "F3:" are not
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F22 (coordinator, measured): hook took 24m | outcome: PENDING', '09:05 F23: bare colon form | outcome: PENDING', '09:10 F24: closed colon form | outcome: PENDING', '09:15 F24 outcome: done',
+    '09:20 F25x: not a finding id | outcome: PENDING', '09:25 note that F3: is mentioned here | outcome: PENDING') -Log @('09:30 F26: log line is never read | outcome: PENDING')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5i F22 (tag, colon) and F23 (colon) are pending; F24 is closed; F25x, a mention of F3: and a Log line are not' ($wait -match 'F22 .*hook took 24m.*PENDING since 09:00' -and $wait -match 'F23 .*bare colon form' -and $wait -notmatch 'closed colon form' -and $wait -notmatch 'not a finding id' -and $wait -notmatch 'is mentioned here' -and $wait -notmatch 'log line is never read' -and $r.Last -match '; 2 findings pending') ($wait + "`n" + $r.Last)
+
+# T5j (panel round 3) "F30: outcome: x" closes F30 like "F30 outcome: x"; a repeated id and an inline "| outcome: dropped" are known gaps (CHANGELOG, "Known and left"), not pinned
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F30 from a: closed by colon outcome | outcome: PENDING', '09:05 F30: outcome: done', '09:25 F33: real colon one | outcome: PENDING')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5j F30 colon outcome closes it, F33 lists; 1 pending' ($wait -notmatch 'closed by colon outcome' -and $wait -notmatch 'F30: outcome' -and $wait -match 'F33 .*real colon one' -and $r.Last -match '; 1 findings? pending') ($wait + "`n" + $r.Last)
+# T5g (F13 sibling) Queue ids carry a date tag: a tagged Q is queued, a tagged outcome line closes it; text that starts with parentheses stays
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Queue @(
+    '09:00 Q1 (2026-10-28) carried queue item [after 23:00] owner: a', '09:05 Q2 (2026-10-28) closed queue item [after 23:00] owner: a', '09:10 Q2 (2026-10-28) outcome: done',
+    '09:15 Q3 (urgent) fix thing [after Q1] owner: a', '09:20 Q4 (2026-10-28) gated item [after Q2] owner: a')
+$r = Invoke-Board $l
+$q = ((Get-GroupBlock $r 'QUEUED') -join "`n")
+Assert-Coord 'T5g tagged Q1 is queued, tagged Q2 with its outcome line is not, "(urgent)" stays in the text, a tagged item still reads its [after Q2] gate as OPEN' ($q -match 'Q1 .*carried queue item' -and $q -notmatch 'closed queue item' -and $q -match 'Q3 \(urgent\) fix thing' -and $q -match 'Q4 .*gate: after Q2\s+OPEN' -and $q -notmatch '2026-10-28') $q
+
 # ---- T6 owed checks
 $l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Owed @(
     '- [ ] User: restore the required checks (from 2026-10-16)', '- [x] (09:00 done) a ticked one', '- [ ] a coordinator item',
@@ -176,6 +219,27 @@ $wait = Get-GroupBlock $r 'WAITING'
 Assert-Coord 'T6a the two unticked "- [ ]" lines are WAITING, the "(from ...)" tail dropped' ($wait[0] -eq 'WAITING (2)' -and ($wait -join "`n") -match 'Owed: User: restore the required checks  L' -and ($wait -join "`n") -notmatch 'from 2026-10-16') ($wait -join "`n")
 Assert-Coord 'T6b a ticked line is not listed' (($wait -join "`n") -notmatch 'ticked one') ($wait -join "`n")
 Assert-Coord 'T6c three odd box shapes are counted as unrecognised, not guessed' ($r.Last -match '; 3 owed-check lines in an unrecognised box shape') $r.Last
+
+# T6d (item 17) an indented or oddly spaced unticked box is the same owed check as a column-0 one; an indented placeholder
+# is still not an item; an indented or oddly spaced unknown mark ("[?]") is counted as unrecognised
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Owed @(
+    '  - [ ] indented item (from 2026-10-16)', '-   [ ] wide spaced item', "`t- [ ] tab indented item", '  - [ ] (none) (from 2026-10-16)',
+    '  - [x] indented ticked', '  - [?] indented odd mark', '-  [~] spaced odd mark')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T6d indented, wide-spaced and tab-indented unticked boxes are WAITING (3), with the tail dropped; the indented placeholder and ticked box are not' ($wait -match 'WAITING \(3\)' -and $wait -match 'Owed: indented item  L' -and $wait -match 'Owed: wide spaced item' -and $wait -match 'Owed: tab indented item' -and $wait -notmatch 'from 2026-10-16' -and $wait -notmatch 'none' -and $wait -notmatch 'indented ticked') $wait
+Assert-Coord 'T6e an indented and a wide-spaced odd mark are counted as unrecognised' ($r.Last -match '; 2 owed-check lines in an unrecognised box shape') $r.Last
+
+# T6f (item 18) the ledger is read once: the script text calls neither Read-CoordLedgerFile twice nor Read-CoordLedgerTracks at all
+# (a swap of the file between two reads ended in "could not read"; a subprocess run cannot swap the file between two reads, so this
+# pins the source)
+$srcPath = if ($ScriptPath) { [System.IO.Path]::GetFullPath($ScriptPath) } else { Join-Path (Split-Path -Parent $testsDir) 'scripts\coord-status.ps1' }
+$code = @([IO.File]::ReadAllLines($srcPath) | Where-Object { $_ -notmatch '^\s*#' })
+$reads = @($code | Where-Object { $_ -match 'Read-CoordLedgerFile|Read-CoordLedgerTracks' }).Count
+Assert-Coord 'T6f the script reads the ledger once (one Read-CoordLedgerFile, no Read-CoordLedgerTracks)' ($reads -eq 1 -and @($code | Where-Object { $_ -match 'Read-CoordLedgerFile' }).Count -eq 1) "reads=$reads"
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00'), (Get-Row 'b' 'BLOCKED 10:05'))
+$r = Invoke-Board $l
+Assert-Coord 'T6g the Tracks rows built from the one read keep their ledger line numbers' ((((Get-GroupBlock $r 'RUNNING') -join "`n") -match 'a .*L11') -and (((Get-GroupBlock $r 'BLOCKED') -join "`n") -match 'b .*L12')) $r.Out
 
 # ---- T7 merge slots
 $l = New-Ledger -Rows @((Get-Row 'a' 'PR-OPEN 11:00' '#81'), (Get-Row 'b' 'RUNNING 11:00' '#82')) -Slots @(

@@ -88,6 +88,9 @@ function Exit-CouldNotCheck([string]$Reason) {
 }
 function Get-Short([string]$Sha) { if ($Sha.Length -ge 12) { return $Sha.Substring(0, 12) } return $Sha }
 
+$gitFloor = Test-CoordGitFloor
+if (-not $gitFloor.Ok) { Exit-CouldNotCheck $gitFloor.Error }
+
 $top = Invoke-CoordGit $Repo @('rev-parse', '--show-toplevel')
 if ($top.Code -ne 0 -or -not $top.Out[0]) {
     $bare = Invoke-CoordGit $Repo @('config', '--bool', 'core.bare')

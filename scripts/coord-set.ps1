@@ -9,10 +9,14 @@
 # Ticking an Owed check is not done here: tick it by hand with a time from
 # Get-Date.)
 #
-#   -Track <name> [-Repo <full path>] [-Cell Status|Model] -Text '<text>' [-Append]
+#   -Track <name> [-Repo <full path or Repo cell text>] [-Cell Status|Model] -Text '<text>' [-Append]
 #       The Tracks row whose Track cell is <name> (case-insensitive). The row
 #       must be one: a name on rows of two repos needs -Repo, a name twice in
-#       one repo is refused (rename one). -Cell defaults to Status. -Text
+#       one repo is refused (rename one). When no full path resolves from -Repo (a
+#       bare name such as "alpha", as a row's Repo cell may hold), the rows are
+#       selected by the Repo cell's text equal to -Repo (trimmed; compared as paths are, so
+#       case is ignored on Windows); two rows still
+#       matching are refused. -Cell defaults to Status. -Text
 #       replaces the cell; with -Append it is added after the cell's raw text
 #       (", " after a Status cell, "; " after a Model cell, nothing before it
 #       when the cell is empty). Every other cell and line is unchanged.
@@ -35,15 +39,18 @@
 #   the row up again.
 #
 # Time: {now} in -Text is replaced by HH:mm from Get-Date, every one of them, from
-# one clock read. (Only this script expands {now}: coord-log.ps1 stamps the line
-# it appends and leaves a {now} in its text as typed.) A time typed by hand
+# one clock read. (coord-log.ps1 expands {now} in the line it appends the same way.)
+# A time typed by hand
 # (H:mm or HH:mm not inside a longer number: "9:05pm", "09:12Z", "T10:22" and
 # "09:12:30" all count) is refused: write {now}. The line number of a file
 # reference ("coord-brief.ps1:96") is not a time; a ratio, a port map and an id
 # with a colon ("F3:12") are refused too (Test-CoordTypedTime): rephrase. NOT
-# caught: a time glued right after a dotted word ("done.T10:22").
+# caught: a time glued right after a dotted word ("done.T10:22"). Also refused as
+# typed: the fullwidth colon (U+FF1A), "10h22" and "10.22" (so a decimal such as
+# "0.25" is refused too: rephrase).
 # -Text is refused (nothing written) when empty, when it holds a pipe (it would
-# split the table cell), a line break or another control character; surrounding
+# split the table cell), a line break or another control character, a BOM
+# (U+FEFF) or a bidi mark (U+200E, U+200F, U+202A-U+202E, U+2066-U+2069); surrounding
 # spaces are trimmed. So is any argument left over after the parameters (a split
 # text: see coord-log.ps1, Usage; no parameter binds by position).
 #
@@ -127,6 +134,8 @@ function Get-CheckedText([string]$Name, [string]$Value) {
     # (Trim() would drop a leading or trailing one); built from [char]: this file stays ASCII.
     if ($Value -match ('[\x00-\x08\x0A-\x1F\x7F\x85' + [char]0x2028 + [char]0x2029 + ']')) { Exit-NotWritten "$Name holds a line break or a control character; one line per event" }
     if ($t.Contains('|')) { Exit-NotWritten "$Name holds a pipe; it would split the table cell" }
+    # A BOM and the bidi marks draw nothing or reorder the cell: refused in the untrimmed value.
+    if ($Value -match '[\uFEFF\u200E\u200F\u202A-\u202E\u2066-\u2069]') { Exit-NotWritten "$Name holds a BOM character or a bidi mark (U+FEFF, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069)" }
     if (Test-CoordTypedTime $t) { Exit-NotWritten "$Name holds a typed time; the script stamps it: write {now} where the time goes" }
     return $t
 }
@@ -204,15 +213,22 @@ try {
     $hitIdx = @(for ($i = 0; $i -lt $rows.Count; $i++) { if ([string]::Equals($rows[$i].Track.Trim(), $wantTrack, [System.StringComparison]::OrdinalIgnoreCase)) { $i } })
     if ($Repo) {
         $wantRepo = Get-RepoFull $Repo
-        if (-not $wantRepo) { Exit-NotWritten "-Repo '$Repo' is not a usable full path" }
-        $hitIdx = @($hitIdx | Where-Object { $r = Get-RepoFull $rows[$_].Repo; $r -and [string]::Equals($r, $wantRepo, $cmp) })
+        if ($wantRepo) {
+            $hitIdx = @($hitIdx | Where-Object { $r = Get-RepoFull $rows[$_].Repo; $r -and [string]::Equals($r, $wantRepo, $cmp) })
+        }
+        else {
+            # No full path resolves (a bare name, "alpha"): the Repo cell's own text, trimmed, is compared.
+            $wantText = $Repo.Trim()
+            if (-not $wantText) { Exit-NotWritten "-Repo '$Repo' is not a usable full path or a Repo cell's text" }
+            $hitIdx = @($hitIdx | Where-Object { [string]::Equals($rows[$_].Repo.Trim(), $wantText, $cmp) })
+        }
     }
     if ($hitIdx.Count -eq 0) { Exit-NotWritten "no Tracks row '$wantTrack'$(if ($Repo) { " in $Repo" }) in $Ledger" }
     if ($hitIdx.Count -gt 1) {
         $ignoreCase = ($cmp -eq [System.StringComparison]::OrdinalIgnoreCase)
         $repos = @($hitIdx | ForEach-Object { $r = Get-RepoFull $rows[$_].Repo; if ($r) { if ($ignoreCase) { $r.ToLowerInvariant() } else { $r } } else { $rows[$_].Repo } } | Sort-Object -Unique)
         if ($repos.Count -lt $hitIdx.Count) { Exit-NotWritten "$($hitIdx.Count) Tracks rows named '$wantTrack' share a repo in $Ledger; rename one in the ledger" }
-        Exit-NotWritten "$($hitIdx.Count) Tracks rows '$wantTrack' in $Ledger (repos: $(($hitIdx | ForEach-Object { $rows[$_].Repo }) -join ', ')); pass -Repo <full path>"
+        Exit-NotWritten "$($hitIdx.Count) Tracks rows '$wantTrack' in $Ledger (repos: $(($hitIdx | ForEach-Object { $rows[$_].Repo }) -join ', ')); pass -Repo <full path, or the Repo cell's text>"
     }
     $ri = $hitIdx[0]
     $li = $dataAt[$ri]

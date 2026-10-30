@@ -746,6 +746,15 @@ $r = Invoke-Notify $c (Get-NotifyJson $c) $led
 Assert-Verify 'N13' $r 'OK' 0
 $n = Get-NotifyLines $r
 Assert-Coord 'N13 the good row gets its line, then one none-printed line names the odd row' ($n.Count -eq 2 -and $n[0] -ceq (Get-ExpectedNotify $c 'rc-a' 'local_aaa' $c.Merge $c.Merge) -and $n[1] -ceq "NOTIFY: none printed - row 'rc-bad': its Repo cell is not a usable path") "got: $($n -join ' || ')"
+Write-Host "(F5) git below 2.38 is refused at the start"
+$gitOldDir = Join-Path $root 'gitstub-floor-old'
+[void][IO.Directory]::CreateDirectory($gitOldDir)
+[System.IO.File]::WriteAllText((Join-Path $gitOldDir 'git.cmd'), "@echo off`r`necho git version 2.37.9.windows.1`r`nexit /b 0`r`n", [System.Text.Encoding]::ASCII)
+$gitOldEnv = @{ PATH = $gitOldDir + [System.IO.Path]::PathSeparator + $env:PATH }
+$x = Invoke-CoordScript -Name 'merge-verify.ps1' -Cwd $root -ScriptArgs '-Pr 7' -ExtraEnv $gitOldEnv -ScriptPath $ScriptPath
+$xOut = ([string]$x.Out).Trim()
+Assert-Coord 'F5 merge-verify: a git that answers 2.37.9 is refused with exit 2, one line starting "MERGE-VERIFY #7: COULD NOT CHECK - " that names git 2.37.9 and the 2.38 floor' ($x.Code -eq 2 -and $xOut.StartsWith('MERGE-VERIFY #7: COULD NOT CHECK - ', [System.StringComparison]::Ordinal) -and $xOut -notmatch '[\r\n]' -and $xOut.Contains('git 2.37.9 ') -and $xOut.Contains('2.38')) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
+
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "Passed: $script:coordPass  Failed: $script:coordFail"

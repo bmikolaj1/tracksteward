@@ -84,7 +84,10 @@ function Expand-CoordNow([string]$Text, [datetime]$At) {
 
 # True when $Text holds a time somebody typed: H:mm or HH:mm that is not part
 # of a longer number, so "9:05pm", "09:12Z", "T10:22", "ACK08:40" and the start
-# of "09:12:30" count. A caller refuses it and says to write {now}; "1.5",
+# of "09:12:30" count. So do the same shapes with the fullwidth colon (U+FF1A),
+# with an h ("10h22") and with a dot ("10.22"; not inside a longer dotted number
+# such as "1.10.22"): a decimal "0.25" or a version "2.10" IS refused, rephrase.
+# A caller refuses it and says to write {now}; "1.5",
 # "v1:2" and "10:420" are not times, and neither is the line number of a file
 # reference such as "coord-brief.ps1:96" (a dot and a word right before the
 # digits). A ratio ("1:30"), a port map ("80:80") and an id with a colon
@@ -92,7 +95,8 @@ function Expand-CoordNow([string]$Text, [datetime]$At) {
 # dotted word ("done.T10:22"), because that shape cannot be told from
 # "x.ps1:96".
 function Test-CoordTypedTime([string]$Text) {
-    return ($Text -match '(?<![\d:])(?<!\.\w+)\d{1,2}:\d{2}(?!\d)')
+    return (($Text -match '(?<![\d:\uFF1A])(?<!\.\w+)\d{1,2}(?:[:\uFF1A]|h)\d{2}(?!\d)') -or
+        ($Text -match '(?<![\d:.\uFF1A])(?<!\.\w+)\d{1,2}\.\d{2}(?!\d|\.\d)'))
 }
 
 function Test-CoordSha40([string]$Value) {
@@ -120,6 +124,42 @@ function Invoke-CoordGitWith {
     param([scriptblock]$Git, [string]$Repo, [string[]]$GitArgs)
     if ($Git) { return (& $Git $Repo $GitArgs) }
     return (Invoke-CoordGit $Repo $GitArgs)
+}
+
+# The git floor (README, CHANGELOG): git 2.38 or newer, for `git merge-tree
+# --write-tree`. Reads `git --version` (the first git application on PATH, as
+# Invoke-CoordGit finds it), or the text given as -VersionText (a test passes
+# one; an empty one is "unreadable"). Returns { Ok; Version; Error }: Ok is
+# false when git is missing, its answer is not "git version <major>.<minor>...",
+# or it is older than 2.38; Error is one line naming the version found and the
+# floor. "git version 2.45.1.windows.1" reads as 2.45.1.
+function Test-CoordGitFloor {
+    param([string]$VersionText = $null)
+    $floorText = '2.38'
+    if (-not $PSBoundParameters.ContainsKey('VersionText')) {
+        $VersionText = ''
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $o = @(& git --version 2>$null)
+            if ($o.Count) { $VersionText = [string]$o[0] }
+        }
+        catch { $VersionText = '' }
+        finally { $ErrorActionPreference = $prev }
+    }
+    $m = [regex]::Match([string]$VersionText, '^git version (\d+)\.(\d+)(?:\.(\d+))?')
+    if (-not $m.Success) {
+        $shown = ([string]$VersionText).Trim()
+        if (-not $shown) { $shown = 'nothing' }
+        return [pscustomobject]@{ Ok = $false; Version = ''; Error = "git version could not be read (git --version gave '$shown'); git $floorText or newer is required" }
+    }
+    $maj = [int]$m.Groups[1].Value
+    $min = [int]$m.Groups[2].Value
+    $found = "$maj.$min" + $(if ($m.Groups[3].Success) { '.' + [int]$m.Groups[3].Value } else { '' })
+    if ($maj -lt 2 -or ($maj -eq 2 -and $min -lt 38)) {
+        return [pscustomobject]@{ Ok = $false; Version = $found; Error = "git $found is older than the $floorText floor; git $floorText or newer is required" }
+    }
+    return [pscustomobject]@{ Ok = $true; Version = $found; Error = '' }
 }
 
 # One argument list for ProcessStartInfo.Arguments, quoted by the rules the
@@ -1275,7 +1315,7 @@ function Write-CoordLedgerSwap {
     return [pscustomobject]@{ Ok = $true; Status = 'written'; Temp = $null; Error = $null }
 }
 
-# The ledger coord-set.ps1 and coord-status.ps1 work on, from their -Ledger
+# The ledger coord-set.ps1, coord-log.ps1 and coord-status.ps1 work on, from their -Ledger
 # argument. Without it: today's ledger,
 # <main checkout>/.claude/coordination/<yyyy-MM-dd>.md, and only when the
 # current directory is in that repo's MAIN checkout (from a linked worktree or
@@ -1286,7 +1326,6 @@ function Write-CoordLedgerSwap {
 # HKLM:\x would otherwise land under the process directory). Returns
 # { Ok; Ledger (the full path); HasDir (its folder exists); Error }. The
 # caller words its own refusal around Error and checks the file itself.
-# (coord-log.ps1 does the same inline.)
 function Resolve-CoordLedgerArg {
     param([string]$Ledger)
     $fail = { param($Why) [pscustomobject]@{ Ok = $false; Ledger = $Ledger; HasDir = $false; Error = $Why } }
