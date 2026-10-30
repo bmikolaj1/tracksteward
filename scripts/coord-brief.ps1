@@ -122,6 +122,9 @@ trap { Exit-Refused "unexpected error: $($_.Exception.Message)" }
 Initialize-CoordConsole
 $cmp = Get-CoordPathComparison
 
+$gitFloor = Test-CoordGitFloor
+if (-not $gitFloor.Ok) { Exit-Refused $gitFloor.Error }
+
 if ($Rest.Count) { Exit-Refused "unexpected words after the parameters ($($Rest -join ' ')); quote the -Track value" }
 $Track = $Track.Trim()
 if (-not $Track) { Exit-Refused '-Track is empty' }

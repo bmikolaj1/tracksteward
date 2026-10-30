@@ -169,7 +169,7 @@ function Assert-Coord {
 # The suites that run coord-log.ps1 or the index helpers point COORD_INDEX_DIR
 # at a scratch folder for their whole run and end by comparing the REAL index
 # folder ($coordRealIndexDir below: the COORD_INDEX_DIR value from before the
-# suite overrides it, else $HOME/.claude/coordination) with a digest taken at
+# suite overrides it, else $HOME/.claude/coordination) with a snapshot taken at
 # their start.
 
 $script:coordUnchecked = 0
@@ -186,36 +186,59 @@ function Write-CoordUncheckedSummary {
 
 # The user's real index folder, as it is when this fixture is loaded (before a
 # suite points COORD_INDEX_DIR at a scratch folder): the COORD_INDEX_DIR value if
-# one is set, else $HOME/.claude/coordination. Get-CoordRealIndexDigest protects it.
+# one is set, else $HOME/.claude/coordination. Get-CoordRealIndexSnapshot and Get-CoordRealIndexLeak protect it.
 $coordRealIndexDir = Join-Path (Join-Path $HOME '.claude') 'coordination'
 if ($env:COORD_INDEX_DIR) {
     try { $coordRealIndexDir = [System.IO.Path]::GetFullPath($env:COORD_INDEX_DIR) } catch { $coordRealIndexDir = [string]$env:COORD_INDEX_DIR }
 }
 
-# One text for the real index folder ($coordRealIndexDir): whether it exists,
-# and every folder and file under it (listing), with the length and SHA-256 of
-# every file (byte hash), EXCEPT the sessions/ subfolder and what is in it. A
-# scope guard that is live on the host writes its anchor files there whenever
-# any session starts, so a fence that hashed sessions/ failed at random while
-# the suite touched nothing. The top-level files (the *.ledgers index files and
-# any other) and the other subfolders are covered. An absent folder gives the
-# same text before and after only if it is still absent.
-function Get-CoordRealIndexDigest {
-    $dir = $coordRealIndexDir
-    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return 'index folder: absent' }
-    $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add('index folder: present')
-    $items = @(Get-ChildItem -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue | Sort-Object FullName)
+# The real index folder ($coordRealIndexDir) as relative path -> text for every file under it EXCEPT the sessions/
+# subfolder and what is in it (an absent folder is an empty snapshot). A scope guard that is live on the host writes
+# its anchor files in sessions/ whenever any session starts, so a fence that read sessions/ failed at random while the
+# suite touched nothing. The top-level files (the *.ledgers index files and any other) and the other subfolders are
+# covered. A file that cannot be read (locked by a live coordinator mid-write) is stored as null and skipped by
+# Get-CoordRealIndexLeak, never reported as rewritten.
+function Get-CoordRealIndexSnapshot {
+    param([string]$Dir = $coordRealIndexDir)
+    $snap = [ordered]@{}
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return $snap }
+    $items = @(Get-ChildItem -LiteralPath $Dir -Recurse -File -Force -ErrorAction SilentlyContinue | Sort-Object FullName)
     foreach ($f in $items) {
-        $rel = $f.FullName.Substring($dir.Length)
-        $relTrim = $rel.TrimStart('\', '/')
-        if ($relTrim -match '^sessions([\\/]|$)' -and ($f.PSIsContainer -or $relTrim -match '^sessions[\\/]')) { continue }
-        if ($f.PSIsContainer) { $lines.Add('D ' + $rel); continue }
-        $h = 'unreadable'
-        try { $h = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash } catch { }
-        $lines.Add('F ' + $rel + ' ' + $f.Length + ' ' + $h)
+        $rel = $f.FullName.Substring($Dir.Length)
+        if ($rel.TrimStart('\', '/') -match '^sessions[\\/]') { continue }
+        $text = $null
+        try {
+            $fs = [IO.File]::Open($f.FullName, 'Open', 'Read', 'ReadWrite')
+            try { $text = (New-Object IO.StreamReader($fs, (New-Object Text.UTF8Encoding($false)))).ReadToEnd() } finally { $fs.Dispose() }
+        } catch { }
+        $snap[$rel] = $text
     }
-    return ($lines -join "`n")
+    return $snap
+}
+
+# '' when the index folder shows nothing this run wrote, else one line per problem. This is weaker than the byte digest it
+# replaced, on purpose: a coordinator session running beside the suite may append to a file or register a new one, so
+# appended text and new files are tolerated. What it flags: a file removed (re-checked once after 300 ms, for a
+# coordinator's replace-by-rename), an earlier byte changed, and added text that names $Marker (this run's scratch root,
+# either slash, any case). A suite write that names no scratch path is NOT caught.
+function Get-CoordRealIndexLeak {
+    param($Before, [string]$Marker, [string]$Dir = $coordRealIndexDir)
+    $after = Get-CoordRealIndexSnapshot -Dir $Dir
+    if (@($Before.Keys | Where-Object { -not $after.Contains($_) }).Count) { Start-Sleep -Milliseconds 300; $after = Get-CoordRealIndexSnapshot -Dir $Dir }
+    $marks = @($Marker, $Marker.Replace('\', '/')) | Where-Object { $_ }
+    $problems = New-Object System.Collections.Generic.List[string]
+    foreach ($k in $Before.Keys) {
+        if (-not $after.Contains($k)) { $problems.Add("removed: $k"); continue }
+        if ($null -eq $Before[$k] -or $null -eq $after[$k]) { continue }
+        if (-not $after[$k].StartsWith([string]$Before[$k], [StringComparison]::Ordinal)) { $problems.Add("rewritten: $k") }
+    }
+    foreach ($k in $after.Keys) {
+        if ($null -eq $after[$k]) { continue }
+        $b = if ($Before.Contains($k) -and $null -ne $Before[$k] -and $after[$k].StartsWith([string]$Before[$k], [StringComparison]::Ordinal)) { [string]$Before[$k] } else { '' }
+        $added = $after[$k].Substring($b.Length)
+        foreach ($m in $marks) { if ($added.IndexOf($m, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $problems.Add("names this run's scratch root: $k"); break } }
+    }
+    return ($problems -join "`n")
 }
 
 # Points COORD_INDEX_DIR at a new, not yet created folder under $Root and returns

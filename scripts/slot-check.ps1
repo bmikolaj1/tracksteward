@@ -78,6 +78,9 @@ function Exit-CouldNotCheck([string]$Reason) {
     exit 2
 }
 
+$gitFloor = Test-CoordGitFloor
+if (-not $gitFloor.Ok) { Exit-CouldNotCheck $gitFloor.Error }
+
 $ciArg = $Ci.Trim().ToLowerInvariant()
 if ($ciArg -and $ciArg -ne 'yes' -and $ciArg -ne 'none') { Exit-CouldNotCheck "-Ci is '$Ci'; it takes yes or none" }
 

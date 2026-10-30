@@ -12,7 +12,7 @@
 # host the fixture names; S21 reads this repo's SKILL.md (two rows of the
 # private suite pinned prose this repo does not have: its rules for starting a
 # session from a message or a card; they are dropped); S22 pins this repo's
-# SKILL.md, ledger-template.md and the script header; S0 compares the real index
+# SKILL.md, ledger-template.md and the script header; S0 checks the real index
 # folder as the other suites do.
 #
 #   S1  Status: the cell is replaced, every other cell and line is unchanged;
@@ -54,6 +54,8 @@
 #       other word, -Cell Model, a typed time or an empty text refused; -Append
 #       only onto the same word; through -File; the prose copies of the
 #       vocabulary and of the Queue rules in SKILL.md and the template
+#   S23 a BOM or a bidi mark in -Text is refused; -Repo as a bare name selects the
+#       row whose Repo cell holds it (two same-name rows with bare Repo cells)
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\coord-set.test.ps1 [-ScriptPath <mutant copy>]
 #       (a mutant copy needs coord-common.ps1 next to it: it dot-sources it)
@@ -74,7 +76,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('coord-set-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void][IO.Directory]::CreateDirectory($root)
-$realIndexBefore = Get-CoordRealIndexDigest
+$realIndexBefore = Get-CoordRealIndexSnapshot
 $null = New-CoordScratchIndex $root
 
 $alphaRepo = 'C:'+[char]92+'Fx'+[char]92+'alpha'
@@ -204,12 +206,16 @@ Write-Host '(S2) {now}'
 $p = New-Ledger $sample
 $r = Invoke-Set @{ Track = 'T1'; Repo = $alphaRepo; Text = 'ACK {now}, ready {now} {x} {NOW}'; Ledger = $p }
 Test-Changed 'S2 every {now} is the clock''s HH:mm; {x} and {NOW} stay' $r $p $sample @{ 13 = ($r13 -replace 'briefed 08:32 \|$', 'ACK {S}, ready {S} {x} {NOW} |') }
-foreach ($c in @(@('ACK 08:40', 'ACK 08:40'), @('at 9:05', 'at 9:05'), @('{now} and 14:10', '{now} and 14:10'), @('time first', '23:59 done'), @('pm', 'done 9:05pm'), @('Z', 'at 09:12Z'), @('seconds', 'at 09:12:30'))) {
+foreach ($c in @(@('ACK 08:40', 'ACK 08:40'), @('at 9:05', 'at 9:05'), @('{now} and 14:10', '{now} and 14:10'), @('time first', '23:59 done'), @('pm', 'done 9:05pm'), @('Z', 'at 09:12Z'), @('seconds', 'at 09:12:30'),
+        @('fullwidth colon (U+FF1A)', ('at 10' + [char]0xFF1A + '22')), @('10h22', 'at 10h22'))) {
     Invoke-Refused "S2 a typed time is refused: $($c[0])" @{ Track = 'T1'; Text = $c[1] } -Why 'typed time|\{now\}'
 }
 $p = New-Ledger $sample
 $r = Invoke-Set @{ Track = 'T1'; Repo = $alphaRepo; Text = 'v1:2 and 1.5 and 10:420 and coord-brief.ps1:96'; Ledger = $p }
 Test-Changed 'S2 text that only looks like a time is written as typed' $r $p $sample @{ 13 = ($r13 -replace 'briefed 08:32 \|$', 'v1:2 and 1.5 and 10:420 and coord-brief.ps1:96 |') }
+$p = New-Ledger $sample
+$r = Invoke-Set @{ Track = 'T1'; Repo = $alphaRepo; Cell = 'Model'; Text = 'Opus 4.15 high'; Ledger = $p }
+Test-Changed 'S2 a dotted number (Model "Opus 4.15 high") is no typed time and is written as typed' $r $p $sample @{ 13 = ($r13 -replace 'Opus 5.5 high \|', 'Opus 4.15 high |') }
 
 Write-Host '(S3) -Append'
 $p = New-Ledger $sample
@@ -455,7 +461,7 @@ Assert-Coord 'S20 the template takes a Status append and a Model append (templat
 Write-Host '(S21) SKILL.md'
 $skill = [regex]::Replace([System.IO.File]::ReadAllText((Join-Path $coordScriptsDir '..\skills\coordinate\SKILL.md')), '\s+', ' ')
 Assert-Coord 'S21 SKILL.md documents coord-set.ps1 with {now} and -Append' ($skill.Contains('coord-set.ps1') -and $skill.Contains('{now}') -and $skill.Contains('-Append')) 'missing'
-Assert-Coord 'S21 SKILL.md calls coord-set.ps1 through the plugin root, and says only it expands {now}' ($skill.Contains('"${CLAUDE_PLUGIN_ROOT}/scripts/coord-set.ps1"') -and $skill.Contains('Only `coord-set.ps1` expands `{now}`')) 'missing'
+Assert-Coord 'S21 SKILL.md calls coord-set.ps1 through the plugin root' ($skill.Contains('"${CLAUDE_PLUGIN_ROOT}/scripts/coord-set.ps1"')) 'missing'
 
 Write-Host '(S22) -State: the Status vocabulary'
 $vocab = @('QUEUED', 'BRIEFED', 'RUNNING', 'PR-OPEN', 'WAIT-USER', 'WAIT-SLOT', 'WAIT-QUOTA', 'BLOCKED', 'MERGED', 'DONE')
@@ -514,7 +520,27 @@ Assert-Coord 'S22 SKILL.md: carry-forward keeps the outcome line an open [after 
 $csSrc = [System.IO.File]::ReadAllText($ScriptPath)
 Assert-Coord 'S22 coord-set.ps1: the header does not say the board counts a cell set without -State as unclassified' (-not ([regex]::Replace($csSrc, '\s+', ' ')).Contains('the board counts it as unclassified')) 'missing'
 
-Assert-Coord 'S0 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination) is byte-unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
+Write-Host '(S23) a BOM or a bidi mark in -Text; -Repo as the text of a Repo cell'
+foreach ($cp in @(0xFEFF, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069)) {
+    Invoke-Refused ('S23 U+{0:X4} inside a Status -Text is refused' -f $cp) @{ Track = 'T2'; Text = ('ok' + [char]$cp + 'ok') } -Why 'BOM character or a bidi mark'
+}
+Invoke-Refused 'S23 a bidi mark in a Model -Text is refused too (the check is on the text, whatever the cell)' @{ Track = 'T2'; Cell = 'Model'; Text = ('ok' + [char]0x202E + 'ok') } -Why 'BOM character or a bidi mark'
+$bare = @($sample | ForEach-Object { $_ })
+$bare[13] = '| T1 | alpha | local_1111 | Opus 5.5 high | C:' + [char]92 + 'Fx' + [char]92 + 'w1 | br-one | docs/** | | briefed 08:32 |'
+$bare[16] = '| T1 | beta | local_1111 | | C:' + [char]92 + 'Fx' + [char]92 + 'w4 | br-x | b/** | | running |'
+$p = New-Ledger $bare
+$r = Invoke-Set @{ Track = 'T1'; Repo = 'beta'; Text = 'picked beta'; Ledger = $p }
+Test-Changed 'S23 two rows named T1 with bare-name Repo cells: -Repo beta selects the row whose Repo cell is beta' $r $p $bare @{ 16 = ($bare[16] -replace 'running \|$', 'picked beta |') }
+$p = New-Ledger $bare
+$r = Invoke-Set @{ Track = 'T1'; Repo = ' alpha '; Text = 'picked alpha'; Ledger = $p }
+Test-Changed 'S23 -Repo alpha (padded with spaces) selects the row whose Repo cell is alpha' $r $p $bare @{ 13 = ($bare[13] -replace 'briefed 08:32 \|$', 'picked alpha |') }
+Invoke-Refused 'S23 a bare -Repo that no Repo cell holds is refused: no such row' @{ Track = 'T1'; Repo = 'gamma'; Text = 'x' } -Lines $bare -Why "no Tracks row 'T1' in gamma"
+$bareDup = @($bare | ForEach-Object { $_ })
+$bareDup[16] = $bare[16].Replace('| beta |', '| alpha |')
+Invoke-Refused 'S23 a bare -Repo that two same-name rows hold is still refused as ambiguous' @{ Track = 'T1'; Repo = 'alpha'; Text = 'x' } -Lines $bareDup -Why 'share a repo|rename'
+Invoke-Refused 'S23 control: no -Repo on two same-name bare-Repo rows is refused, naming how to pick' @{ Track = 'T1'; Text = 'x' } -Lines $bare -Why 'pass -Repo <full path, or the Repo cell''s text>'
+
+Assert-Coord 'S0 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
 Write-CoordUncheckedSummary
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

@@ -79,7 +79,7 @@
 #       another day) is appended to and not registered
 #   L29 -Register: registers and writes nothing to the ledger; not canonical,
 #       a full index, -Section/-Text, a linked worktree: exit 2
-#   L30 the real index folder is unchanged at the end of the run
+#   L30 the run left nothing of its own in the real index folder
 #   L31 git failing on a canonical-shaped ledger: exit 2, "cannot tell whether", ledger
 #       and index unchanged; control: a stale worktree copy is still appended
 #   L32 the Bash form shown in the script header and in SKILL.md (same text),
@@ -87,6 +87,7 @@
 #       exit 0 and a text starting with '/' written intact; controls: without
 #       cygpath -w a /c/... script path is not found, without MSYS_NO_PATHCONV=1
 #       the leading / is rewritten (UNCHECKED without a Git Bash)
+#   L35 {now} in -Text: every one becomes the stamp's HH:mm (as coord-set.ps1)
 #   L34 the Queue section: a Q<n> line and an outcome line append like any
 #       other; a ledger with no ## Queue is refused; the section list names Queue
 #
@@ -113,7 +114,7 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('coord-log-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void][IO.Directory]::CreateDirectory($root)
 # Nothing in this run may reach the real index folder.
-$realIndexBefore = Get-CoordRealIndexDigest
+$realIndexBefore = Get-CoordRealIndexSnapshot
 $null = New-CoordScratchIndex $root
 
 $sample = @(
@@ -480,6 +481,15 @@ Assert-Coord 'L34 a ledger with no ## Queue section (one made before the section
 $r = Invoke-Log 'Owed checks' 'x' (New-Ledger $sample)
 Assert-Coord 'L34 the refusal for a section edited in place names Queue among the append-only ones' ($r.Code -eq 2 -and $r.Out -match '-Section must be one of: Queue, Decisions, Findings, Log \(got') $r.Out
 
+Write-Host "(L35) {now} in the text"
+$p = New-Ledger $sample
+$r = Invoke-Log 'Log' 'ACK at {now}, again {now} {x} {NOW}' $p
+$gotL = Read-Lines $p
+$mL = @($gotL | ForEach-Object { [regex]::Match($_, '^(\d\d:\d\d) ACK at (\d\d:\d\d), again (\d\d:\d\d) \{x\} \{NOW\}$') } | Where-Object { $_.Success })
+$okL = ($mL.Count -eq 1) -and ($mL[0].Groups[1].Value -ceq $mL[0].Groups[2].Value) -and ($mL[0].Groups[1].Value -ceq $mL[0].Groups[3].Value) -and ((Get-Stamps $r) -contains $mL[0].Groups[1].Value)
+Assert-Coord 'L35 every {now} in -Text becomes the stamp''s HH:mm; {x} and {NOW} stay as typed' ($r.Code -eq 0 -and $okL -and $gotL.Count -eq ($sample.Count + 2)) "code=$($r.Code) out=$($r.Out)`n$($gotL -join "`n")"
+Assert-Coord 'L35 the printed line shows the expanded text' ($r.Out -match '\[Log\]: \d\d:\d\d ACK at \d\d:\d\d, again \d\d:\d\d \{x\}') $r.Out
+
 Write-Host "(L15) parallel runs"
 $p = New-Ledger $sample
 $procs = @()
@@ -768,14 +778,15 @@ $left = @(Get-ChildItem -LiteralPath $root -Recurse -Force | Where-Object { $_.N
 Assert-Coord 'L14 no *.coord-log-*.tmp or *.coord-log.lock left under the case folders' ($left.Count -eq 0) (($left | ForEach-Object { $_.FullName }) -join "`n")
 
 Write-Host "(L31) a canonical-shaped ledger whose canonical check cannot be decided"
-# A git that fails makes Test-CoordLedgerCanonical unable to decide. The ledger's
+# A git that fails (but answers --version, so the 2.38 floor check passes)
+# makes Test-CoordLedgerCanonical unable to decide. The ledger's
 # path has the canonical SHAPE <X>\.claude\coordination\<today>.md, so coord-log
 # must not append to it unregistered. Control: with the real git back, a stale
 # worktree copy (positively not canonical) is still appended, unregistered, and
 # the canonical-shaped ledger is written and registered.
 $failDir = Join-Path $root 'gitstub-fail'
 [void][IO.Directory]::CreateDirectory($failDir)
-[System.IO.File]::WriteAllText((Join-Path $failDir 'git.cmd'), "@echo off`r`nexit /b 128`r`n", [System.Text.Encoding]::ASCII)
+[System.IO.File]::WriteAllText((Join-Path $failDir 'git.cmd'), "@echo off`r`nif `"%~1`"==`"--version`" goto ver`r`nexit /b 128`r`n:ver`r`necho git version 2.45.1.windows.1`r`nexit /b 0`r`n", [System.Text.Encoding]::ASCII)
 $null = New-CoordScratchIndex $root
 $idxFile = Get-CoordIndexPath
 $b = Get-Bytes $canonLedger
@@ -849,7 +860,18 @@ else {
     Assert-Coord 'L32 control: without MSYS_NO_PATHCONV=1 MSYS rewrites the leading / (exit 0, a mangled line): why the form needs it' ($form -and $x.Code -eq 0 -and @($lines -match '^\d\d:\d\d /review-code panel$').Count -eq 0 -and @($lines -match '^\d\d:\d\d .*review-code panel$').Count -eq 1) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
 }
 Write-Host "(L30) the real index folder"
-Assert-Coord 'L30 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination: its listing and the SHA-256 of every file outside sessions/, or still absent) is unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
+Assert-Coord 'L30 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
+Write-Host "(F5) git below 2.38 is refused at the start"
+$gitOldDir = Join-Path $root 'gitstub-floor-old'
+[void][IO.Directory]::CreateDirectory($gitOldDir)
+[System.IO.File]::WriteAllText((Join-Path $gitOldDir 'git.cmd'), "@echo off`r`necho git version 2.37.9.windows.1`r`nexit /b 0`r`n", [System.Text.Encoding]::ASCII)
+$gitOldEnv = @{ PATH = $gitOldDir + [System.IO.Path]::PathSeparator + $env:PATH }
+$ledgerNone = Join-Path $root 'floor-no-such-ledger.md'
+$x = Invoke-HookTestPowerShell -Script $ScriptPath -StartDir $root -ExtraEnv $gitOldEnv -ScriptArgs "-Section Log -Text `"floor`" -Ledger `"$ledgerNone`""
+$xOut = ([string]$x.Out).Trim()
+Assert-Coord 'F5 coord-log: a git that answers 2.37.9 is refused with exit 2, one line starting "COORD-LOG: NOT WRITTEN - " that names git 2.37.9 and the 2.38 floor' ($x.Code -eq 2 -and $xOut.StartsWith('COORD-LOG: NOT WRITTEN - ', [System.StringComparison]::Ordinal) -and $xOut -notmatch '[\r\n]' -and $xOut.Contains('git 2.37.9 ') -and $xOut.Contains('2.38')) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
+Assert-Coord 'F5 coord-log: ... and the ledger is not created' (-not (Test-Path -LiteralPath $ledgerNone)) ''
+
 Write-CoordUncheckedSummary
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

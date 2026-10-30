@@ -298,7 +298,7 @@ Found while porting Phase D (2026-10-29), for 0.2.1:
 18. `scripts/coord-status.ps1`, the two ledger reads (latent, from the source): the ledger is read twice without a lock, so a
     `coord-set.ps1` or `coord-log.ps1` swap between the reads can end the board with `could not read`.
 19. `scripts/coord-set.ps1` (latent, from the source): `Test-CoordTypedTime` misses a fullwidth colon, `10h22` and
-    `10.22`; a Status cell can hold U+FEFF or a bidi mark; two rows with the same track name and bare-name Repo
+    `10.22` (0.2.1 fixes the first two; the dot form is left, ruled 2026-10-30, because it refuses "Opus 4.15" and "git 2.38"); a Status cell can hold U+FEFF or a bidi mark; two rows with the same track name and bare-name Repo
     cells cannot be told apart by `-Repo`.
 20. The port's `coord-set.ps1` `Get-RepoFull` differs from the source on purpose: it uses
     `ConvertTo-CoordRootedPath` and the platform path comparison, so it rejects `, ; ( )`, device paths and a bare

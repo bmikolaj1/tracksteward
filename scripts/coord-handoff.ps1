@@ -16,10 +16,11 @@
 #      character other than letters, digits, combining marks, punctuation,
 #      symbols and the plain space (so no zero-width space, BOM, bidi mark or
 #      non-breaking space, and no character outside the Basic
-#      Multilingual Plane, an emoji included; the braille blank and object
-#      replacement character are refused by name, and so is the soft hyphen on
+#      Multilingual Plane, an emoji included; the braille blank, the object
+#      replacement character, the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0),
+#      U+034F, U+FE0F and U+17B5 are refused by name, and so is the soft hyphen on
 #      Windows PowerShell 5.1 (elsewhere the allow-list refuses it); some other letters and marks that
-#      draw nothing, such as a Hangul filler or a variation selector, are not
+#      draw nothing, such as another variation selector, are not
 #      recognized, and a code point the host's Unicode tables do not know yet,
 #      for example a recent letter on Windows PowerShell 5.1, is refused),
 #      no backtick, no |, no double quote, not a <placeholder>, and not holding
@@ -176,6 +177,9 @@ function Exit-NotWritten([string]$Reason) {
     exit 2
 }
 
+$gitFloor = Test-CoordGitFloor
+if (-not $gitFloor.Ok) { Exit-NotWritten $gitFloor.Error }
+
 # ---- 1. inputs ---------------------------------------------------------------
 if ($Rest.Count) { Exit-NotWritten "unexpected arguments after the parameters ($($Rest -join ' ')): there is no time parameter (the stamp is this script's clock) and no positional word; pass -NewSession '<name or id>' and -Ledger only, in process with & (see Usage)" }
 
@@ -191,8 +195,11 @@ if ($NewSession -match $ctlRe) { Exit-NotWritten '-NewSession holds a tab, a lin
 # and char.GetUnicodeCategory files the soft hyphen (U+00AD) under punctuation on .NET
 # Framework (Windows PowerShell 5.1), so there it is named, as are the braille blank
 # (U+2800) and the object replacement character (U+FFFC), which are symbols everywhere.
+# The letters and marks that draw nothing are named too: the Hangul fillers (U+115F,
+# U+1160, U+3164, U+FFA0), the combining grapheme joiner (U+034F), the variation
+# selector-16 (U+FE0F) and the Khmer inherent vowel (U+17B5).
 if ($NewSession -match '[^\p{L}\p{N}\p{M}\p{P}\p{S} ]') { Exit-NotWritten '-NewSession holds a character other than letters, digits, combining marks, punctuation, symbols and the plain space (no invisible, no-break-space or non-BMP character)' }
-if ($NewSession -match '[\u00AD\u2800\uFFFC]') { Exit-NotWritten '-NewSession holds U+00AD, U+2800 or U+FFFC, a character that can draw nothing or look like a space' }
+if ($NewSession -match '[\u00AD\u2800\uFFFC\u115F\u1160\u3164\uFFA0\u034F\uFE0F\u17B5]') { Exit-NotWritten '-NewSession holds U+00AD, U+2800 or U+FFFC, or a Hangul filler (U+115F, U+1160, U+3164, U+FFA0), U+034F, U+FE0F or U+17B5: a character that can draw nothing or look like a space' }
 if ($NewSession.Contains('`')) { Exit-NotWritten '-NewSession holds a backtick' }
 if ($NewSession.Contains('|')) { Exit-NotWritten '-NewSession holds a |, which would break a Tracks or Log reader' }
 if ($NewSession.Contains('"')) { Exit-NotWritten '-NewSession holds a double quote; the ledger writes the name between double quotes' }

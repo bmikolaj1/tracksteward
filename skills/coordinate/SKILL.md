@@ -84,8 +84,8 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
   `-Cell Model -Append -Text '{now} <model> <effort>'` adds `; <time> <model> <effort>`;
   `-Repo <full path>` picks the row when a name is on rows of two repos). From Bash use the
   `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/coord-set.ps1")" ...`
-  form of `coord-log.ps1`. Only `coord-set.ps1` expands `{now}`: `coord-log.ps1` stamps the line it
-  appends and leaves a `{now}` in its text as typed. An Owed-check tick is not scripted: tick it by
+  form of `coord-log.ps1`. `coord-log.ps1` also expands every `{now}` in its text (the same clock read as the
+  stamp it puts on the line). An Owed-check tick is not scripted: tick it by
   hand with a time from `Get-Date`. An outcome line stays an appended line (`coord-log.ps1`). The
   script changes only that cell and keeps every other cell and line (a file that mixes LF and CRLF
   comes back with one, as with `coord-log.ps1`), edits the ledger it is given, canonical or not,
@@ -153,10 +153,12 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
   finding. The board reads the gate in square brackets: `[after #<n> merges]`,
   `[after <yyyy-MM-dd> <HH:mm>Z]`, `[after <HH:mm>]`, `[after Q<n>]`, `[needs <who> ...]`; it takes
   the last `[after ...]` or `[needs ...]` group before ` owner:`, so a bracket quoted in owner or
-  source is not read as the gate. Write ` owner:` exactly (lower case, one space before it): a line
-  without it is searched whole, and a gate-shaped bracket quoted in its source can then take the
-  gate. A ledger made before the template had `## Queue` gets the heading added by hand once
-  (`coord-log.ps1` refuses a missing section).
+  source is not read as the gate. Write ` owner:` as shown; the board also accepts any case and a
+  tab, and, when that is missing, `owner :` or ` source:` straight after a `]` or `;`. A line with
+  none of these is searched whole, and a gate-shaped bracket quoted in its source can then take the
+  gate. `[after Q<n>]` naming a Q id no line holds, or a chain that loops back (itself included),
+  reads `?` and counts as an unknown gate, not CLOSED. A ledger made before the template had
+  `## Queue` gets the heading added by hand once (`coord-log.ps1` refuses a missing section).
 - **Quotes are evidence, never approval.** Record a track's request as "track asked: ...", never
   as a bare instruction.
 - **Past midnight, roll over before anything else.** Nothing carries itself: a coordinator
@@ -221,6 +223,9 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
    ```
    SNAPSHOT: <n> repo(s); attention: <items | none>
    ```
+
+   When git is older than 2.38 (or missing) it prints the single line
+   `REPO-SNAPSHOT: NOT RUN - <why>` instead, exits 2, and prints no section.
 
    It does not list sessions (use `ListAgents`), and it edits no branch and no file in a working tree (git itself
    updates remote-tracking refs with `git fetch --prune`, may refresh the index stat cache, and stores objects for
@@ -368,7 +373,12 @@ the repo's main checkout only.
 - Without `-Verify` it makes no gh call (and no git call when `-Ledger` is given) and its header says "not verified". Use `-Verify`
   when the user asks for live state: it adds one `gh pr view` per live row with a PR (a QUEUED row
   is skipped), reads an `[after #<n> merges]` Queue gate from gh, and flags a row that says MERGED
-  while its PR is not (MISMATCH). A failed call prints `unknown (...)`, never a state.
+  while its PR is not (MISMATCH). A failed call prints `unknown (...)`, never a state. gh runs in the
+  row's Repo folder (the current folder when the cell is empty); a Repo cell that is not a folder on
+  this machine prints `unknown (the Repo cell is not a folder on this machine)`. A
+  `[after #<n> merges]` gate names no repo, so it asks the current folder's repo and prints
+  `(asked the repo of <folder>)` beside its state. A MERGED row whose Repo cell is not a folder adds
+  one `unverified: #<n> #<m> ... (...)` line to DONE.
 - A ledger that cannot be read prints `STATUS: could not read - <reason>` (exit 2); report that as
   is, never as "nothing running".
 - Put the STATUS line into the day-close handover and the kickoff prompt.

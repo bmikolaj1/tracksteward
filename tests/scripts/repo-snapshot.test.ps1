@@ -38,6 +38,14 @@
 #   N17 the newest handover is named (the newest .md file of .claude/handovers,
 #       README.md excluded); none, and no folder, read as such
 #   N18 the ledger and the handovers folder are byte-unchanged by a run
+#   N19 a -Repos path that is not a git repo is named in attention
+#   N20 an explicit -Ledger naming a missing file is an error and in attention,
+#       not "no ledger"
+#   N21 a finished (DONE / MERGED) row whose branch is gone is noted, not an
+#       attention item (a live row's missing branch still is: N18)
+#   N22 -Base <remote-tracking branch> is what heads are compared with
+#   N23 a -Base naming no remote-tracking ref is printed (NOT FOUND) and named
+#       in attention
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\repo-snapshot.test.ps1 [-ScriptPath <mutant copy>]
 # Exit: 0 = all passed, 1 = a case failed.
@@ -287,6 +295,59 @@ $r = Invoke-Snap -Cwd $fx3.Launch -Rules $quiet
 Assert-Has 'N18 the ledger was read' $r '\[T1\] nobranch: branch not found on origin or locally'
 $digestAfter = (Get-ChildItem -LiteralPath (Join-Path $fx3.Launch '.claude') -Recurse -File | Sort-Object FullName | ForEach-Object { "$($_.FullName) $((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)" }) -join "`n"
 Assert-Coord 'N18 the ledger is byte-unchanged by a run' ($digestAfter -ceq $digestBefore)
+
+# ---- N19-N22: not a repo, missing explicit ledger, finished row, -Base -----------
+Write-Host "(N19-N22) not a repo, missing -Ledger, finished row, -Base"
+$notRepo = Join-Path $root 'not-a-repo'
+[void][IO.Directory]::CreateDirectory($notRepo)
+$r = Invoke-Snap -Cwd $fx3.Launch -Extra "-Repos `"$($fx3.Launch)`",`"$notRepo`"" -Rules $quiet
+Assert-Has 'N19 the skip is printed' $r '(?m)^== .*not-a-repo : not a git repo \(skipped\)'
+Assert-Coord 'N19 attention names the path' ($r.Last.Contains("$notRepo not a git repo")) $r.Last
+
+$missingLedger = Join-Path $root 'no-such-ledger.md'
+$r = Invoke-Snap -Cwd $fx3.Launch -Extra "-Ledger `"$missingLedger`"" -Rules $quiet
+Assert-HasNot 'N20 not "no ledger"' $r '(?m)^-- tracks: no ledger'
+Assert-Has 'N20 shown as the ledger error' $r '(?m)^\s+ledger unreadable: .*not found'
+Assert-Coord 'N20 attention names it' ($r.Last.Contains('ledger not found')) $r.Last
+
+Set-SnapLedger (Join-Path $fx3.Launch ".claude\coordination\$today.md") @(
+    "| T1 | $($fx3.Launch) | s1 | c1 | goneb | docs/** | | DONE |",
+    "| T2 | $($fx3.Launch) | s2 | c2 | gonec | docs/** | | MERGED #5 |"
+)
+$r = Invoke-Snap -Cwd $fx3.Launch -Rules $quiet
+Assert-Has 'N21 DONE row, branch gone: noted' $r '\[T1\] goneb: branch gone'
+Assert-Has 'N21 MERGED row, branch gone: noted' $r '\[T2\] gonec: branch gone'
+Assert-HasNot 'N21 never "branch not found"' $r 'branch not found'
+Assert-Coord 'N21 not an attention item' ($r.Last -ceq 'SNAPSHOT: 1 repo(s); attention: none') $r.Last
+
+# N22: alt-base is the commit before pre-a landed on main, so trk-conf does not
+# conflict with it, while it does with origin/main (N2 T3).
+Invoke-HookTestGit $fx.Work @('push', '--quiet', 'origin', "${baseBefore}:refs/heads/alt-base")
+Set-SnapLedger $ledgerPath @("| T3 | $($fx.Launch) | s3 | c3 | trk-conf | src/** | | live |")
+$r = Invoke-Snap
+Assert-Has 'N22 default base is origin/main: T3 conflicts' $r '(?ms)\[T3\] trk-conf.*?conflict preview: 1 conflicted: src/app\.txt'
+$r = Invoke-Snap -Extra "-Base origin/alt-base"
+Assert-Has 'N22 -Base: the heading names it' $r '(?m)^-- origin/alt-base\s*$'
+Assert-Has 'N22 -Base: T3 no longer conflicts' $r '(?ms)\[T3\] trk-conf.*?conflict preview: no conflicts'
+Assert-HasNot 'N22 -Base: no conflict reported' $r 'conflict preview: 1 conflicted'
+
+# N23: a -Base that names no remote-tracking ref is said so and named in attention,
+# not "attention: none" over empty logs.
+$r = Invoke-Snap -Extra "-Base origin/nope"
+Assert-Has 'N23 a missing -Base is printed' $r '(?m)^-- base: origin/nope NOT FOUND'
+Assert-Coord 'N23 attention names the missing base' ($r.Last.Contains('base origin/nope not found') -and -not $r.Last.EndsWith('none')) $r.Last
+$r = Invoke-Snap
+Assert-HasNot 'N23 the default base is found: no NOT FOUND line' $r '(?-i)-- base: .* NOT FOUND'
+Assert-HasNot 'N23 the default base is found: attention does not name a base' $r 'base origin/main not found'
+
+Write-Host "(F5) git below 2.38 is refused at the start"
+$gitOldDir = Join-Path $root 'gitstub-floor-old'
+[void][IO.Directory]::CreateDirectory($gitOldDir)
+[System.IO.File]::WriteAllText((Join-Path $gitOldDir 'git.cmd'), "@echo off`r`necho git version 2.37.9.windows.1`r`nexit /b 0`r`n", [System.Text.Encoding]::ASCII)
+$gitOldEnv = @{ PATH = $gitOldDir + [System.IO.Path]::PathSeparator + $env:PATH }
+$x = Invoke-CoordScript -Name 'repo-snapshot.ps1' -Cwd $root -ScriptArgs '' -ExtraEnv $gitOldEnv -ScriptPath $ScriptPath
+$xOut = ([string]$x.Out).Trim()
+Assert-Coord 'F5 repo-snapshot: a git that answers 2.37.9 is refused with exit 2, one line starting "REPO-SNAPSHOT: NOT RUN - " that names git 2.37.9 and the 2.38 floor' ($x.Code -eq 2 -and $xOut.StartsWith('REPO-SNAPSHOT: NOT RUN - ', [System.StringComparison]::Ordinal) -and $xOut -notmatch '[\r\n]' -and $xOut.Contains('git 2.37.9 ') -and $xOut.Contains('2.38')) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ""

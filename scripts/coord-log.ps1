@@ -13,6 +13,9 @@
 # The sections edited in place (Baseline, Tracks, Merge slots, Owed checks) are
 # refused: they are rewritten, not appended to.
 #
+# {now} in the text (lower case, every one) is replaced by the same HH:mm as the
+# stamp, from one clock read, as coord-set.ps1 does for its cells.
+#
 # The text is refused (nothing written) when it is empty, holds a line break or
 # another control character (one line per event), or starts with a time of its
 # own (the stamp is this script's); so is any argument left over after the
@@ -35,8 +38,8 @@
 # recreated: the run is refused and the temp file, which holds the ledger as
 # read plus the new line, is kept and named. The lock, the read and decoding,
 # the section search and the swap are helpers in coord-common.ps1
-# (Enter-CoordLedgerLock, Read-CoordLedgerFile, Find-CoordSectionEnd,
-# Write-CoordLedgerSwap); this script words every refusal.
+# (Resolve-CoordLedgerArg, Enter-CoordLedgerLock, Read-CoordLedgerFile,
+# Find-CoordSectionEnd, Write-CoordLedgerSwap); this script words every refusal.
 #
 # Registration: the scope guard finds the day's ledgers
 # through its index, <index dir>/<yyyy-MM-dd>.ledgers (coord-common.ps1,
@@ -118,6 +121,8 @@ function Exit-NotWritten([string]$Reason) {
 if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
     Exit-NotWritten 'git is not on PATH (coord-log uses it to find the main checkout and the canonical ledger)'
 }
+$gitFloor = Test-CoordGitFloor
+if (-not $gitFloor.Ok) { Exit-NotWritten $gitFloor.Error }
 
 # Words left over mean the text was split on the way in: Windows PowerShell 5.1
 # drops the double quotes inside an argument it hands to powershell.exe, so
@@ -143,30 +148,12 @@ else {
     if ($line -match '^\d{1,2}:\d{2}(?!\d)') { Exit-NotWritten '-Text starts with a time; the script stamps it, drop yours' }
 }
 
-if (-not $Ledger) {
-    $here = (Get-Location).Path
-    $Ledger = Get-CoordLedgerPath $here
-    if (-not $Ledger) { Exit-NotWritten "$here is not in a git repository; pass -Ledger" }
-    $top = Invoke-CoordGit $here @('rev-parse', '--show-toplevel')
-    $main = Get-CoordMainRoot $here
-    if ($top.Code -ne 0 -or -not $top.Out.Count -or -not $main -or
-        -not [string]::Equals((ConvertTo-CoordFullPath $top.Out[0].Trim()), (ConvertTo-CoordFullPath $main), (Get-CoordPathComparison))) {
-        Exit-NotWritten "$here is not the repo's main checkout; pass -Ledger (the default would be $Ledger)"
-    }
-}
-# A relative -Ledger is resolved against the PowerShell location: in process,
-# `cd` moves that, not the process directory GetFullPath would use. Only a
-# FileSystem path is accepted (Env:\x or HKLM:\x would otherwise land under
-# the process directory).
-try {
-    $prov = $null
-    $drive = $null
-    $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Ledger, [ref]$prov, [ref]$drive)
-    if ($prov.Name -ne 'FileSystem') { Exit-NotWritten "-Ledger is not a file path (provider $($prov.Name)): $Ledger" }
-    $Ledger = [System.IO.Path]::GetFullPath($resolved)
-    $hasDir = Test-Path -LiteralPath (Split-Path -Parent $Ledger) -PathType Container
-}
-catch { Exit-NotWritten "-Ledger is not a usable path: $($_.Exception.Message)" }
+# The ledger, from -Ledger or (without it) today's, from the main checkout only (Resolve-CoordLedgerArg,
+# which also resolves a relative -Ledger against the PowerShell location and accepts only a FileSystem path).
+$res = Resolve-CoordLedgerArg -Ledger $Ledger
+if (-not $res.Ok) { Exit-NotWritten $res.Error }
+$Ledger = $res.Ledger
+$hasDir = $res.HasDir
 $noLedger = "no ledger at $Ledger (from another repo's checkout, pass -Ledger with the coordinator's ledger; only a new day's ledger is started from ledger-template.md)"
 if (-not $hasDir) { Exit-NotWritten $noLedger }
 
@@ -222,7 +209,9 @@ try {
     $sec = Find-CoordSectionEnd -Lines $lines -Name $name -Path $Ledger
     if (-not $sec.Ok) { Exit-NotWritten $sec.Error }
 
-    $stamped = (Get-Date).ToString('HH:mm', [System.Globalization.CultureInfo]::InvariantCulture) + ' ' + $line
+    # The one clock read: the stamp and every {now} in the text (Expand-CoordNow, as coord-set.ps1).
+    $at = Get-Date
+    $stamped = (Get-CoordStamp $at) + ' ' + (Expand-CoordNow $line $at)
     $lines.Insert($sec.Insert, $stamped)
 
     $swap = Write-CoordLedgerSwap -Path $Ledger -Expected $read.Bytes -Text ($lines -join $read.Newline) -Bom $read.Bom -Added 'the new line'

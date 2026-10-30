@@ -2,52 +2,67 @@
 #
 # repo-snapshot.ps1 - the coordinator's start-of-window read, one screen per repo.
 #
-# Prints, per repo: origin/main head, local branch + dirty count, open PRs with their
+# Prints, per repo: the -Base ref (default origin/main) head, local branch + dirty count, open PRs with their
 # non-passing checks, remote branches, worktrees, the newest handover, and the latest
 # CI run on main with the zero-step red run (an Actions billing or runner block) called out, so a red run
 # is not misread as code. It edits no branch and no working-tree file: its git writes
 # are `git fetch --prune` (remote-tracking refs, FETCH_HEAD, followed tags), the index
 # stat cache that `git status` may refresh, and the tree and blob objects
-# `git merge-tree --write-tree` stores for the conflict preview (git 2.38+; with an
-# older git the preview reads "preview failed").
+# `git merge-tree --write-tree` stores for the conflict preview (git 2.38+ is required:
+# an older git is refused before any section, see the NOT RUN line below).
+# -Base (default origin/main) is the remote-tracking branch every head is compared
+# with: the heads shown, ahead/behind, files, conflict preview, stale-branch test.
 #
 # Beyond the plain per-repo read it prints:
 #   - `-- tracks`: for each row of the coordination ledger's Tracks table that
 #     belongs to this repo and names a Branch: the branch head, its PR (head sha,
 #     state, checks), its files against the row's Scope globs, and a
-#     `git merge-tree` conflict preview against origin/main. Open PRs whose branch
+#     `git merge-tree` conflict preview against -Base. Open PRs whose branch
 #     is in no row are marked "not in ledger" and get the same files/checks/preview
 #     lines without a scope, read at the PR's headRefOid.
 #   - `-- stale merged local branches`: local branches whose PR is MERGED (squash
-#     merges included) AND whose tip is that PR's head or already on origin/main;
+#     merges included) AND whose tip is that PR's head or already on the -Base ref;
 #     a reused name with other commits is shown, not flagged. Marked when a
 #     worktree holds them.
 #   - A failed `git fetch` is printed and flagged: every head below may be stale.
-#   - Every comparison uses refs/remotes/origin/<b>, never a bare origin/<b>,
-#     which a local branch or tag of that name would shadow.
+#   - Every comparison uses refs/remotes/<-Base> (refs/remotes/origin/main by
+#     default), never a bare origin/<b>, which a local branch or tag of that
+#     name would shadow.
 #   - `-- worktrees` with lock state; a lock reason carrying "(pid N)" (Claude Code
 #     writes "claude session <name> (pid N)") is checked for a live process.
 #   - ONE last line: SNAPSHOT: <n> repo(s); attention: <items | none>.
+#     A refusal (git older than 2.38, or no git) prints instead the one line
+#     `REPO-SNAPSHOT: NOT RUN - <why>`, exit 2, before any section.
 # A failed gh call or invalid gh output prints "unknown (...)", and a failed preview
 # "preview failed": never "(none)" or "no conflicts".
 #
+# A -Repos path that is not a git repo is skipped but named in attention
+# ("<repo> not a git repo"). A finished (MERGED or DONE) Tracks row whose branch is
+# gone is noted ("branch gone (row is finished)"), not an attention item.
+#
 # Ledger: -Ledger <path>, default today's ledger at the canonical location
 # (<main checkout of the current directory's repo>/.claude/coordination/<date>.md),
-# when it exists. A Tracks row's Repo is a full path, or a folder name that exactly
+# when it exists. An explicit -Ledger naming a file that does not exist is an
+# error ("ledger unreadable: ..."), named in attention, not "no ledger". A Tracks row's Repo is a full path, or a folder name that exactly
 # one of -Repos has; a folder name shared by several is an "ambiguous ledger row".
 #
-# Usage: powershell.exe -ExecutionPolicy Bypass -File repo-snapshot.ps1 -Repos <repo>,<repo> [-Ledger <path>]
+# Usage: powershell.exe -ExecutionPolicy Bypass -File repo-snapshot.ps1 -Repos <repo>,<repo> [-Ledger <path>] [-Base origin/main]
 #        (default: the current directory). `gh` is optional; PR/CI sections say so when it is absent.
 # Sessions are NOT listed here: ask the harness (Claude Code: ListAgents) for that half.
 
 param(
     [string[]]$Repos = @((Get-Location).Path),
-    [string]$Ledger = ''
+    [string]$Ledger = '',
+    [string]$Base = 'origin/main'
 )
 
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'coord-common.ps1')
 Initialize-CoordConsole
+
+# git below 2.38 (or none) is refused before any section is printed: a one-line error, exit 2.
+$gitFloor = Test-CoordGitFloor
+if (-not $gitFloor.Ok) { Write-Output "REPO-SNAPSHOT: NOT RUN - $($gitFloor.Error)"; exit 2 }
 $gh = Get-Command gh -ErrorAction SilentlyContinue
 
 # `powershell.exe -File` hands a comma list over as ONE string, so split it here.
@@ -55,6 +70,7 @@ $Repos = @($Repos | ForEach-Object { $_ -split '[,;]' } | ForEach-Object { $_.Tr
 $repoFull = @($Repos | ForEach-Object { $rp = $_; try { ConvertTo-CoordFullPath $rp } catch { $rp } })
 
 $attention = New-Object System.Collections.Generic.List[string]
+$baseRef = "refs/remotes/$Base"   # not $base: PowerShell variable names are case-insensitive
 
 # ---- ledger ---------------------------------------------------------------
 $ledgerPath = $Ledger
@@ -65,6 +81,7 @@ if ($ledgerPath -and (Test-Path -LiteralPath $ledgerPath -PathType Leaf)) {
     try { $ledgerRows = @(Read-CoordLedgerTracks $ledgerPath) }
     catch { $ledgerError = "$_"; $attention.Add('ledger unreadable') }
 }
+elseif ($Ledger) { $ledgerError = "ledger file not found: $Ledger"; $attention.Add('ledger not found') }
 $rowsByRepo = @{}
 $otherRows = 0
 if ($null -ne $ledgerRows) {
@@ -118,7 +135,7 @@ function Format-Checks($Rollup) {
 function Get-HeadDetail {
     param([string]$Repo, [string]$Head, [string[]]$Globs, [string]$Indent)
     $lines = New-Object System.Collections.Generic.List[string]
-    $cf = Get-CoordChangedFiles $Repo 'refs/remotes/origin/main' $Head
+    $cf = Get-CoordChangedFiles $Repo $baseRef $Head
     $outside = @()
     if (-not $cf.Ok) { $lines.Add("${Indent}files: unknown ($($cf.Error))") }
     elseif ($null -eq $Globs) { $lines.Add("${Indent}files: $($cf.Files.Count) changed (no scope declared)") }
@@ -131,7 +148,7 @@ function Get-HeadDetail {
         }
         $lines.Add("${Indent}files: $($cf.Files.Count) changed, $($outside.Count) out of scope$tail")
     }
-    $pv = Get-CoordConflictPreview $Repo 'refs/remotes/origin/main' $Head
+    $pv = Get-CoordConflictPreview $Repo $baseRef $Head
     switch ($pv.State) {
         'clean' { $lines.Add("${Indent}conflict preview: no conflicts") }
         'conflicts' { $lines.Add("${Indent}conflict preview: $($pv.Files.Count) conflicted: $($pv.Files -join ', ')") }
@@ -141,7 +158,7 @@ function Get-HeadDetail {
 }
 
 foreach ($repo in $Repos) {
-    if (-not (Test-Path (Join-Path $repo '.git'))) { Write-Output "== $repo : not a git repo (skipped)"; continue }
+    if (-not (Test-Path (Join-Path $repo '.git'))) { Write-Output "== $repo : not a git repo (skipped)"; $attention.Add("$repo not a git repo"); continue }
     $repoKey = ConvertTo-CoordFullPath $repo
     $leaf = Split-Path -Leaf $repoKey
     Write-Output "================================================================"
@@ -152,14 +169,19 @@ foreach ($repo in $Repos) {
         Write-Output "-- fetch: FAILED (exit $($fetch.Code)) - every origin ref below may be stale"
         $attention.Add("$leaf fetch failed")
     }
+    $baseOk = Invoke-CoordGit $repo @('rev-parse', '--verify', '--quiet', "${baseRef}^{commit}")
+    if ($baseOk.Code -ne 0 -or -not $baseOk.Out.Count) {
+        Write-Output "-- base: $Base NOT FOUND (no such remote-tracking commit) - the heads, ahead/behind, files and previews below compare against nothing"
+        $attention.Add("$leaf base $Base not found")
+    }
     $originUrl = (Invoke-CoordGit $repo @('remote', 'get-url', 'origin')).Out | Select-Object -First 1
 
-    Write-Output "-- origin/main"
-    (Invoke-CoordGit $repo @('log', '--oneline', '-3', 'refs/remotes/origin/main')).Out | ForEach-Object { Write-Output $_ }
+    Write-Output "-- $Base"
+    (Invoke-CoordGit $repo @('log', '--oneline', '-3', $baseRef)).Out | ForEach-Object { Write-Output $_ }
     $branch = (Invoke-CoordGit $repo @('branch', '--show-current')).Out | Select-Object -First 1
     $dirty = @((Invoke-CoordGit $repo @('status', '--short')).Out | Where-Object { $_ }).Count
-    $ab = (Invoke-CoordGit $repo @('rev-list', '--left-right', '--count', 'refs/remotes/origin/main...HEAD')).Out | Select-Object -First 1
-    Write-Output "-- local: branch=$branch dirty=$dirty (behind/ahead origin/main: $ab)"
+    $ab = (Invoke-CoordGit $repo @('rev-list', '--left-right', '--count', "$baseRef...HEAD")).Out | Select-Object -First 1
+    Write-Output "-- local: branch=$branch dirty=$dirty (behind/ahead ${Base}: $ab)"
 
     # Ledger rows for this repo, by branch.
     # .ToArray(), not @(...): wrapping a generic List in @() inside an if
@@ -222,8 +244,11 @@ foreach ($repo in $Repos) {
             $where = 'local only'
         }
         if ($hr.Code -ne 0 -or -not $hr.Out.Count) {
-            Write-Output "   [$name] $($t.Branch): branch not found on origin or locally"
-            $attention.Add("$name branch not found")
+            if (Test-CoordRowTerminal $t.Status) { Write-Output "   [$name] $($t.Branch): branch gone (row is finished)" }
+            else {
+                Write-Output "   [$name] $($t.Branch): branch not found on origin or locally"
+                $attention.Add("$name branch not found")
+            }
             continue
         }
         $head = $hr.Out[0].Trim()
@@ -308,9 +333,9 @@ foreach ($repo in $Repos) {
                 $prs = $byRef[$b].ToArray()
                 $nums = ($prs | ForEach-Object { "#$($_.number)" }) -join ', '
                 # Stale only when its work is merged: the tip IS a merged PR's
-                # head, or is already contained in origin/main.
+                # head, or is already contained in the -Base ref (default origin/main).
                 $same = @($prs | Where-Object { [string]$_.headRefOid -ceq $tip }).Count -gt 0
-                $onMain = (Invoke-CoordGit $repo @('merge-base', '--is-ancestor', $tip, 'refs/remotes/origin/main')).Code -eq 0
+                $onMain = (Invoke-CoordGit $repo @('merge-base', '--is-ancestor', $tip, $baseRef)).Code -eq 0
                 $held = if ($heldBy.ContainsKey($b)) { ", held by worktree $($heldBy[$b])" } else { '' }
                 if ($same -or $onMain) {
                     $found++
