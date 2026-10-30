@@ -29,7 +29,8 @@ Fixes the open items of the 0.2.0 port; no new commands.
   with known limits: `-Verify` can ask the current repository when a Repo cell is a relative folder
   name that exists under the current folder, and a UNC Repo cell can block; a Queue item whose text
   contains `Owner:` before its gate loses the gate (reads `?`); the suites' real-index fence flags only
-  what names the run's scratch folder; the `unverified:` line is cut at 140 characters. More in the
+  what names the run's scratch folder (a rewrite of an index file in another text encoding is not seen); the
+  test `gh` stub does not record its working folder, so the `-Verify` folder choice is not pinned; the `unverified:` line is cut at 140 characters. More in the
   README, "What is not done".
 
 - **Port notes**: `coord-set`'s Repo-cell path check (`Get-RepoFull`) is stricter than the private source on purpose: it rejects `, ; ( )`, device

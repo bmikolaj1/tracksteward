@@ -241,8 +241,9 @@ Assert-Coord 'T6e an indented and a wide-spaced odd mark are counted as unrecogn
 # pins the source)
 $srcPath = if ($ScriptPath) { [System.IO.Path]::GetFullPath($ScriptPath) } else { Join-Path (Split-Path -Parent $testsDir) 'scripts\coord-status.ps1' }
 $code = @([IO.File]::ReadAllLines($srcPath) | Where-Object { $_ -notmatch '^\s*#' })
-$reads = @($code | Where-Object { $_ -match 'Read-CoordLedgerFile|Read-CoordLedgerTracks' }).Count
-Assert-Coord 'T6f the script reads the ledger once (one Read-CoordLedgerFile, no Read-CoordLedgerTracks)' ($reads -eq 1 -and @($code | Where-Object { $_ -match 'Read-CoordLedgerFile' }).Count -eq 1) "reads=$reads"
+$codeText = $code -join "`n"
+$reads = [regex]::Matches($codeText, 'Read-CoordLedgerFile|Read-CoordLedgerTracks').Count
+Assert-Coord 'T6f the script reads the ledger once (one Read-CoordLedgerFile call, no Read-CoordLedgerTracks; counted per occurrence, not per line)' ($reads -eq 1 -and [regex]::Matches($codeText, 'Read-CoordLedgerFile').Count -eq 1) "reads=$reads"
 $l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00'), (Get-Row 'b' 'BLOCKED 10:05'))
 $r = Invoke-Board $l
 Assert-Coord 'T6g the Tracks rows built from the one read keep their ledger line numbers' ((((Get-GroupBlock $r 'RUNNING') -join "`n") -match 'a .*L11') -and (((Get-GroupBlock $r 'BLOCKED') -join "`n") -match 'b .*L12')) $r.Out
