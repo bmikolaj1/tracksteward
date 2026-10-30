@@ -44,6 +44,8 @@
 #   N21 a finished (DONE / MERGED) row whose branch is gone is noted, not an
 #       attention item (a live row's missing branch still is: N18)
 #   N22 -Base <remote-tracking branch> is what heads are compared with
+#   N23 a -Base naming no remote-tracking ref is printed (NOT FOUND) and named
+#       in attention
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\repo-snapshot.test.ps1 [-ScriptPath <mutant copy>]
 # Exit: 0 = all passed, 1 = a case failed.
@@ -328,6 +330,15 @@ $r = Invoke-Snap -Extra "-Base origin/alt-base"
 Assert-Has 'N22 -Base: the heading names it' $r '(?m)^-- origin/alt-base\s*$'
 Assert-Has 'N22 -Base: T3 no longer conflicts' $r '(?ms)\[T3\] trk-conf.*?conflict preview: no conflicts'
 Assert-HasNot 'N22 -Base: no conflict reported' $r 'conflict preview: 1 conflicted'
+
+# N23: a -Base that names no remote-tracking ref is said so and named in attention,
+# not "attention: none" over empty logs.
+$r = Invoke-Snap -Extra "-Base origin/nope"
+Assert-Has 'N23 a missing -Base is printed' $r '(?m)^-- base: origin/nope NOT FOUND'
+Assert-Coord 'N23 attention names the missing base' ($r.Last.Contains('base origin/nope not found') -and -not $r.Last.EndsWith('none')) $r.Last
+$r = Invoke-Snap
+Assert-HasNot 'N23 the default base is found: no NOT FOUND line' $r '(?-i)-- base: .* NOT FOUND'
+Assert-HasNot 'N23 the default base is found: attention does not name a base' $r 'base origin/main not found'
 
 Write-Host "(F5) git below 2.38 is refused at the start"
 $gitOldDir = Join-Path $root 'gitstub-floor-old'

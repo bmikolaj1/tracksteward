@@ -165,8 +165,8 @@ Assert-Coord 'C1 Test-CoordTypedTime: a typed H:mm / HH:mm is found, with or wit
 $fwColon = [string][char]0xFF1A
 Assert-Coord 'C1 Test-CoordTypedTime: a time with the fullwidth colon (U+FF1A) is found, also glued to letters' ((Test-CoordTypedTime ('at 10' + $fwColon + '22')) -and (Test-CoordTypedTime ('ACK9' + $fwColon + '05pm')))
 Assert-Coord 'C1 Test-CoordTypedTime: 10h22 is found, also glued to letters' ((Test-CoordTypedTime 'at 10h22') -and (Test-CoordTypedTime 'ACK08h40.'))
-Assert-Coord 'C1 Test-CoordTypedTime: 10.22 is found, also glued to letters or at the end of a sentence' ((Test-CoordTypedTime 'at 10.22') -and (Test-CoordTypedTime 'done at 9.05.') -and (Test-CoordTypedTime 'T10.22'))
-Assert-Coord 'C1 Test-CoordTypedTime: a longer dotted or h number is no time (1.10.22, 110.22, 1.5.3, 100h22, 10h225, 10.225)' (-not ((Test-CoordTypedTime 'v1.10.22') -or (Test-CoordTypedTime 'ip 110.22') -or (Test-CoordTypedTime 'v1.5.3') -or (Test-CoordTypedTime '100h22') -or (Test-CoordTypedTime '10h225') -or (Test-CoordTypedTime '10.225')))
+Assert-Coord 'C1 Test-CoordTypedTime: a dotted number is no time (Opus 4.15, git 2.38, cost 0.25, v2.10, 10.22)' (-not ((Test-CoordTypedTime 'Opus 4.15') -or (Test-CoordTypedTime 'git 2.38') -or (Test-CoordTypedTime 'cost 0.25') -or (Test-CoordTypedTime 'v2.10') -or (Test-CoordTypedTime 'at 10.22')))
+Assert-Coord 'C1 Test-CoordTypedTime: a longer h number is no time (100h22, 10h225)' (-not ((Test-CoordTypedTime '100h22') -or (Test-CoordTypedTime '10h225')))
 Assert-Coord 'C1 Test-CoordTypedTime: no time in {now}, 1.5, v1:2, 10:420 or a file:line reference' (-not ((Test-CoordTypedTime 'merged {now}') -or (Test-CoordTypedTime '1.5 days') -or (Test-CoordTypedTime 'v1:2') -or (Test-CoordTypedTime '10:420 is no time') -or (Test-CoordTypedTime 'see coord-brief.ps1:96') -or (Test-CoordTypedTime 'x.ps1:80') -or (Test-CoordTypedTime 'at coord-log.ps1:217')))
 
 Write-Host "(C2) Tracks table"
@@ -1269,7 +1269,9 @@ foreach ($c in @(
         @('empty', ''),
         @('a version without the git prefix', '2.45.1'),
         @('only a major', 'git version 2'),
-        @('a letter for the major', 'git version x.45.1')
+        @('a letter for the major', 'git version x.45.1'),
+        @('a major too large for an int', 'git version 99999999999.1'),
+        @('a patch too large for an int', 'git version 2.45.99999999999')
     )) {
     $x = Test-CoordGitFloor -VersionText $c[1]
     Assert-Coord "C25 unparseable ($($c[0])): refused, one line saying it could not be read and naming 2.38" (-not $x.Ok -and $x.Error -notmatch '[\r\n]' -and $x.Error.Contains('could not be read') -and $x.Error.Contains('2.38')) "ok=$($x.Ok) error=$($x.Error)"

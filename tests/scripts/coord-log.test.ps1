@@ -487,7 +487,7 @@ $r = Invoke-Log 'Log' 'ACK at {now}, again {now} {x} {NOW}' $p
 $gotL = Read-Lines $p
 $mL = @($gotL | ForEach-Object { [regex]::Match($_, '^(\d\d:\d\d) ACK at (\d\d:\d\d), again (\d\d:\d\d) \{x\} \{NOW\}$') } | Where-Object { $_.Success })
 $okL = ($mL.Count -eq 1) -and ($mL[0].Groups[1].Value -ceq $mL[0].Groups[2].Value) -and ($mL[0].Groups[1].Value -ceq $mL[0].Groups[3].Value) -and ((Get-Stamps $r) -contains $mL[0].Groups[1].Value)
-Assert-Coord 'L35 every {now} in -Text becomes the stamp''s HH:mm (one clock read); {x} and {NOW} stay as typed' ($r.Code -eq 0 -and $okL -and $gotL.Count -eq ($sample.Count + 2)) "code=$($r.Code) out=$($r.Out)`n$($gotL -join "`n")"
+Assert-Coord 'L35 every {now} in -Text becomes the stamp''s HH:mm; {x} and {NOW} stay as typed' ($r.Code -eq 0 -and $okL -and $gotL.Count -eq ($sample.Count + 2)) "code=$($r.Code) out=$($r.Out)`n$($gotL -join "`n")"
 Assert-Coord 'L35 the printed line shows the expanded text' ($r.Out -match '\[Log\]: \d\d:\d\d ACK at \d\d:\d\d, again \d\d:\d\d \{x\}') $r.Out
 
 Write-Host "(L15) parallel runs"

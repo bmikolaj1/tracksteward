@@ -207,12 +207,15 @@ $p = New-Ledger $sample
 $r = Invoke-Set @{ Track = 'T1'; Repo = $alphaRepo; Text = 'ACK {now}, ready {now} {x} {NOW}'; Ledger = $p }
 Test-Changed 'S2 every {now} is the clock''s HH:mm; {x} and {NOW} stay' $r $p $sample @{ 13 = ($r13 -replace 'briefed 08:32 \|$', 'ACK {S}, ready {S} {x} {NOW} |') }
 foreach ($c in @(@('ACK 08:40', 'ACK 08:40'), @('at 9:05', 'at 9:05'), @('{now} and 14:10', '{now} and 14:10'), @('time first', '23:59 done'), @('pm', 'done 9:05pm'), @('Z', 'at 09:12Z'), @('seconds', 'at 09:12:30'),
-        @('fullwidth colon (U+FF1A)', ('at 10' + [char]0xFF1A + '22')), @('10h22', 'at 10h22'), @('10.22', 'at 10.22'))) {
+        @('fullwidth colon (U+FF1A)', ('at 10' + [char]0xFF1A + '22')), @('10h22', 'at 10h22'))) {
     Invoke-Refused "S2 a typed time is refused: $($c[0])" @{ Track = 'T1'; Text = $c[1] } -Why 'typed time|\{now\}'
 }
 $p = New-Ledger $sample
 $r = Invoke-Set @{ Track = 'T1'; Repo = $alphaRepo; Text = 'v1:2 and 1.5 and 10:420 and coord-brief.ps1:96'; Ledger = $p }
 Test-Changed 'S2 text that only looks like a time is written as typed' $r $p $sample @{ 13 = ($r13 -replace 'briefed 08:32 \|$', 'v1:2 and 1.5 and 10:420 and coord-brief.ps1:96 |') }
+$p = New-Ledger $sample
+$r = Invoke-Set @{ Track = 'T1'; Repo = $alphaRepo; Cell = 'Model'; Text = 'Opus 4.15 high'; Ledger = $p }
+Test-Changed 'S2 a dotted number (Model "Opus 4.15 high") is no typed time and is written as typed' $r $p $sample @{ 13 = ($r13 -replace 'Opus 5.5 high \|', 'Opus 4.15 high |') }
 
 Write-Host '(S3) -Append'
 $p = New-Ledger $sample

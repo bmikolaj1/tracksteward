@@ -222,6 +222,9 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
    SNAPSHOT: <n> repo(s); attention: <items | none>
    ```
 
+   When git is older than 2.38 (or missing) it prints the single line
+   `REPO-SNAPSHOT: NOT RUN - <why>` instead, exits 2, and prints no section.
+
    It does not list sessions (use `ListAgents`), and it edits no branch and no file in a working tree (git itself
    updates remote-tracking refs with `git fetch --prune`, may refresh the index stat cache, and stores objects for
    the conflict preview).

@@ -85,8 +85,8 @@ function Expand-CoordNow([string]$Text, [datetime]$At) {
 # True when $Text holds a time somebody typed: H:mm or HH:mm that is not part
 # of a longer number, so "9:05pm", "09:12Z", "T10:22", "ACK08:40" and the start
 # of "09:12:30" count. So do the same shapes with the fullwidth colon (U+FF1A),
-# with an h ("10h22") and with a dot ("10.22"; not inside a longer dotted number
-# such as "1.10.22"): a decimal "0.25" or a version "2.10" IS refused, rephrase.
+# and with an h ("10h22"). A dotted "10.22" is NOT a time here: a decimal
+# ("0.25") or a version ("git 2.38", "Opus 4.15") must pass.
 # A caller refuses it and says to write {now}; "1.5",
 # "v1:2" and "10:420" are not times, and neither is the line number of a file
 # reference such as "coord-brief.ps1:96" (a dot and a word right before the
@@ -95,8 +95,7 @@ function Expand-CoordNow([string]$Text, [datetime]$At) {
 # dotted word ("done.T10:22"), because that shape cannot be told from
 # "x.ps1:96".
 function Test-CoordTypedTime([string]$Text) {
-    return (($Text -match '(?<![\d:\uFF1A])(?<!\.\w+)\d{1,2}(?:[:\uFF1A]|h)\d{2}(?!\d)') -or
-        ($Text -match '(?<![\d:.\uFF1A])(?<!\.\w+)\d{1,2}\.\d{2}(?!\d|\.\d)'))
+    return ($Text -match '(?<![\d:\uFF1A])(?<!\.\w+)\d{1,2}(?:[:\uFF1A]|h)\d{2}(?!\d)')
 }
 
 function Test-CoordSha40([string]$Value) {
@@ -131,7 +130,8 @@ function Invoke-CoordGitWith {
 # Invoke-CoordGit finds it), or the text given as -VersionText (a test passes
 # one; an empty one is "unreadable"). Returns { Ok; Version; Error }: Ok is
 # false when git is missing, its answer is not "git version <major>.<minor>...",
-# or it is older than 2.38; Error is one line naming the version found and the
+# a number in it is too large for an int (read as unreadable), or it is older
+# than 2.38; Error is one line naming the version found and the
 # floor. "git version 2.45.1.windows.1" reads as 2.45.1.
 function Test-CoordGitFloor {
     param([string]$VersionText = $null)
@@ -147,15 +147,21 @@ function Test-CoordGitFloor {
         catch { $VersionText = '' }
         finally { $ErrorActionPreference = $prev }
     }
-    $m = [regex]::Match([string]$VersionText, '^git version (\d+)\.(\d+)(?:\.(\d+))?')
+    $m = [regex]::Match([string]$VersionText, '^git version ([0-9]+)\.([0-9]+)(?:\.([0-9]+))?')
     if (-not $m.Success) {
         $shown = ([string]$VersionText).Trim()
         if (-not $shown) { $shown = 'nothing' }
         return [pscustomobject]@{ Ok = $false; Version = ''; Error = "git version could not be read (git --version gave '$shown'); git $floorText or newer is required" }
     }
-    $maj = [int]$m.Groups[1].Value
-    $min = [int]$m.Groups[2].Value
-    $found = "$maj.$min" + $(if ($m.Groups[3].Success) { '.' + [int]$m.Groups[3].Value } else { '' })
+    $maj = 0
+    $min = 0
+    $pat = 0
+    # A part too large for an int (git version 99999999999.1) is as unreadable as no version.
+    if (-not ([int]::TryParse($m.Groups[1].Value, [ref]$maj) -and [int]::TryParse($m.Groups[2].Value, [ref]$min) -and
+            (-not $m.Groups[3].Success -or [int]::TryParse($m.Groups[3].Value, [ref]$pat)))) {
+        return [pscustomobject]@{ Ok = $false; Version = ''; Error = "git version could not be read (git --version gave '$(([string]$VersionText).Trim())', a number too large); git $floorText or newer is required" }
+    }
+    $found = "$maj.$min" + $(if ($m.Groups[3].Success) { ".$pat" } else { '' })
     if ($maj -lt 2 -or ($maj -eq 2 -and $min -lt 38)) {
         return [pscustomobject]@{ Ok = $false; Version = $found; Error = "git $found is older than the $floorText floor; git $floorText or newer is required" }
     }

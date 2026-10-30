@@ -46,8 +46,8 @@
 # reference ("coord-brief.ps1:96") is not a time; a ratio, a port map and an id
 # with a colon ("F3:12") are refused too (Test-CoordTypedTime): rephrase. NOT
 # caught: a time glued right after a dotted word ("done.T10:22"). Also refused as
-# typed: the fullwidth colon (U+FF1A), "10h22" and "10.22" (so a decimal such as
-# "0.25" is refused too: rephrase).
+# typed: the fullwidth colon (U+FF1A) and "10h22". A dotted "10.22" is not
+# refused (a decimal or a version such as "Opus 4.15" is written as typed).
 # -Text is refused (nothing written) when empty, when it holds a pipe (it would
 # split the table cell), a line break or another control character, a BOM
 # (U+FEFF) or a bidi mark (U+200E, U+200F, U+202A-U+202E, U+2066-U+2069); surrounding

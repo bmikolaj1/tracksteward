@@ -2,14 +2,14 @@
 #
 # repo-snapshot.ps1 - the coordinator's start-of-window read, one screen per repo.
 #
-# Prints, per repo: origin/main head, local branch + dirty count, open PRs with their
+# Prints, per repo: the -Base ref (default origin/main) head, local branch + dirty count, open PRs with their
 # non-passing checks, remote branches, worktrees, the newest handover, and the latest
 # CI run on main with the zero-step red run (an Actions billing or runner block) called out, so a red run
 # is not misread as code. It edits no branch and no working-tree file: its git writes
 # are `git fetch --prune` (remote-tracking refs, FETCH_HEAD, followed tags), the index
 # stat cache that `git status` may refresh, and the tree and blob objects
-# `git merge-tree --write-tree` stores for the conflict preview (git 2.38+; with an
-# older git the preview reads "preview failed").
+# `git merge-tree --write-tree` stores for the conflict preview (git 2.38+ is required:
+# an older git is refused before any section, see the NOT RUN line below).
 # -Base (default origin/main) is the remote-tracking branch every head is compared
 # with: the heads shown, ahead/behind, files, conflict preview, stale-branch test.
 #
@@ -21,7 +21,7 @@
 #     is in no row are marked "not in ledger" and get the same files/checks/preview
 #     lines without a scope, read at the PR's headRefOid.
 #   - `-- stale merged local branches`: local branches whose PR is MERGED (squash
-#     merges included) AND whose tip is that PR's head or already on origin/main;
+#     merges included) AND whose tip is that PR's head or already on the -Base ref;
 #     a reused name with other commits is shown, not flagged. Marked when a
 #     worktree holds them.
 #   - A failed `git fetch` is printed and flagged: every head below may be stale.
@@ -31,6 +31,8 @@
 #   - `-- worktrees` with lock state; a lock reason carrying "(pid N)" (Claude Code
 #     writes "claude session <name> (pid N)") is checked for a live process.
 #   - ONE last line: SNAPSHOT: <n> repo(s); attention: <items | none>.
+#     A refusal (git older than 2.38, or no git) prints instead the one line
+#     `REPO-SNAPSHOT: NOT RUN - <why>`, exit 2, before any section.
 # A failed gh call or invalid gh output prints "unknown (...)", and a failed preview
 # "preview failed": never "(none)" or "no conflicts".
 #
@@ -166,6 +168,11 @@ foreach ($repo in $Repos) {
     if ($fetch.Code -ne 0) {
         Write-Output "-- fetch: FAILED (exit $($fetch.Code)) - every origin ref below may be stale"
         $attention.Add("$leaf fetch failed")
+    }
+    $baseOk = Invoke-CoordGit $repo @('rev-parse', '--verify', '--quiet', "${baseRef}^{commit}")
+    if ($baseOk.Code -ne 0 -or -not $baseOk.Out.Count) {
+        Write-Output "-- base: $Base NOT FOUND (no such remote-tracking commit) - the heads, ahead/behind, files and previews below compare against nothing"
+        $attention.Add("$leaf base $Base not found")
     }
     $originUrl = (Invoke-CoordGit $repo @('remote', 'get-url', 'origin')).Out | Select-Object -First 1
 
@@ -326,7 +333,7 @@ foreach ($repo in $Repos) {
                 $prs = $byRef[$b].ToArray()
                 $nums = ($prs | ForEach-Object { "#$($_.number)" }) -join ', '
                 # Stale only when its work is merged: the tip IS a merged PR's
-                # head, or is already contained in origin/main.
+                # head, or is already contained in the -Base ref (default origin/main).
                 $same = @($prs | Where-Object { [string]$_.headRefOid -ceq $tip }).Count -gt 0
                 $onMain = (Invoke-CoordGit $repo @('merge-base', '--is-ancestor', $tip, $baseRef)).Code -eq 0
                 $held = if ($heldBy.ContainsKey($b)) { ", held by worktree $($heldBy[$b])" } else { '' }
