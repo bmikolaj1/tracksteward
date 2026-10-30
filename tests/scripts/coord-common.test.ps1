@@ -7,7 +7,9 @@
 # ruling differs, the row is changed (C12: the session token, 8 private cases
 # became 54 cases for the "only ids bind" rule) or the example data is made
 # generic (paths, names).
-# The real-profile fence (C21) lists and hashes the user's real index folder
+# The real-profile fence (C21) snapshots the user's real index folder and flags what this run wrote (a removed file,
+# a changed earlier byte, added text naming this run's scratch root; a live coordinator's appends are tolerated)
+# - the folder is
 # (COORD_INDEX_DIR as it was before this run, else $HOME/.claude/coordination):
 # every file and folder in it except the sessions/ subfolder, which a live
 # scope guard on the host writes to at random.
@@ -47,7 +49,7 @@
 #   C11 the optional Model column: read by name, '' when absent; a row of the
 #       template's Tracks table that lacks the Model cell is ragged and throws
 #   The scope guard helpers. The whole run uses a scratch COORD_INDEX_DIR and
-#   ends by comparing the real index folder with its digest from the start:
+#   ends by checking the real index folder against its snapshot from the start:
 #   C12 Get-CoordIndexDir, Get-CoordIndexPath, Get-CoordSessionToken,
 #       Test-CoordWindows
 #   C13 Invoke-CoordGitBounded: success, failure, UTF-8, a hung git (stub
@@ -64,7 +66,7 @@
 #   C19 Read-CoordLedgerTracksBounded: 16 KiB, 78 KiB, 900 KiB, after the cap,
 #       cut by the cap, no end before EOF, missing column, ragged row
 #   C20 Test-CoordInScope -IgnoreCase
-#   C21 the real index folder is byte-unchanged at the end of the run
+#   C21 the run left nothing of its own in the real index folder
 #   C22 -TimeoutMs on Get-CoordIndexedLedgers and Read-CoordLedgerTracksBounded:
 #       a normal read under a bound is unchanged; 0 or negative is TimedOut, no read
 #   C23 Read-CoordStreamBounded on a pipe whose read never completes (TimedOut
@@ -73,6 +75,8 @@
 #   C24 (S2) Get-CoordLedgerDate (anchored with z), ConvertTo-CoordRootedPath,
 #       Test-CoordLocalFixedPath, ConvertTo-CoordArgLine (a backslash before a
 #       final LF is not doubled)
+#   C25 (F5) Test-CoordGitFloor: 2.37.9 refused, 2.38.0 and 2.45.1.windows.1 ok,
+#       garbage and empty refused (-VersionText), and a stub git.cmd on PATH
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\coord-common.test.ps1 [-ScriptPath <mutant copy of coord-common.ps1>]
 #       (-CommonPath is an alias of -ScriptPath)
@@ -92,7 +96,7 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('coord-common-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void][IO.Directory]::CreateDirectory($root)
 # Nothing in this run may reach the real index folder.
-$realIndexBefore = Get-CoordRealIndexDigest
+$realIndexBefore = Get-CoordRealIndexSnapshot
 $null = New-CoordScratchIndex $root
 
 Write-Host "(C1) globs"
@@ -160,6 +164,11 @@ $t0 = [datetime]::new(2026, 10, 22, 9, 5, 0)
 Assert-Coord 'C1 Get-CoordStamp: HH:mm, two digits, from the given time' ((Get-CoordStamp $t0) -ceq '09:05')
 Assert-Coord 'C1 Expand-CoordNow: every {now} becomes the stamp; other braces stay' ((Expand-CoordNow 'a {now} b {now} {x} {NOW}' $t0) -ceq 'a 09:05 b 09:05 {x} {NOW}')
 Assert-Coord 'C1 Test-CoordTypedTime: a typed H:mm / HH:mm is found, with or without {now} beside it, also glued to letters or seconds, and an id or port with a colon' ((Test-CoordTypedTime 'ACK 08:40') -and (Test-CoordTypedTime 'at 9:05.') -and (Test-CoordTypedTime '{now} then 14:10 Sonnet') -and (Test-CoordTypedTime '9:05pm') -and (Test-CoordTypedTime '09:12Z') -and (Test-CoordTypedTime 'T10:22') -and (Test-CoordTypedTime 'ACK08:40') -and (Test-CoordTypedTime '09:12:30') -and (Test-CoordTypedTime 'F3:12') -and (Test-CoordTypedTime '80:80'))
+$fwColon = [string][char]0xFF1A
+Assert-Coord 'C1 Test-CoordTypedTime: a time with the fullwidth colon (U+FF1A) is found, also glued to letters' ((Test-CoordTypedTime ('at 10' + $fwColon + '22')) -and (Test-CoordTypedTime ('ACK9' + $fwColon + '05pm')))
+Assert-Coord 'C1 Test-CoordTypedTime: 10h22 is found, also glued to letters' ((Test-CoordTypedTime 'at 10h22') -and (Test-CoordTypedTime 'ACK08h40.'))
+Assert-Coord 'C1 Test-CoordTypedTime: a dotted number is no time (Opus 4.15, git 2.38, cost 0.25, v2.10, 10.22)' (-not ((Test-CoordTypedTime 'Opus 4.15') -or (Test-CoordTypedTime 'git 2.38') -or (Test-CoordTypedTime 'cost 0.25') -or (Test-CoordTypedTime 'v2.10') -or (Test-CoordTypedTime 'at 10.22')))
+Assert-Coord 'C1 Test-CoordTypedTime: a longer h number is no time (100h22, 10h225)' (-not ((Test-CoordTypedTime '100h22') -or (Test-CoordTypedTime '10h225')))
 Assert-Coord 'C1 Test-CoordTypedTime: no time in {now}, 1.5, v1:2, 10:420 or a file:line reference' (-not ((Test-CoordTypedTime 'merged {now}') -or (Test-CoordTypedTime '1.5 days') -or (Test-CoordTypedTime 'v1:2') -or (Test-CoordTypedTime '10:420 is no time') -or (Test-CoordTypedTime 'see coord-brief.ps1:96') -or (Test-CoordTypedTime 'x.ps1:80') -or (Test-CoordTypedTime 'at coord-log.ps1:217')))
 
 Write-Host "(C2) Tracks table"
@@ -1238,36 +1247,87 @@ foreach ($c in @(
     Assert-Coord ("C24 ConvertTo-CoordArgLine '" + (& $show $c[0]) + "' -> " + (& $show $c[1])) ($got -ceq $c[1]) ("got " + (& $show $got))
 }
 
-Write-Host "(C21-pre) what the real-index digest covers"
-# The digest function itself, pointed at a scratch folder through the fixture's
-# $coordRealIndexDir (restored right after). It must change when a top-level
-# file or another folder changes, and stay the same when only sessions/ changes.
+Write-Host "(C25) Test-CoordGitFloor"
+# The parser: -VersionText stands in for the output of `git --version`.
+foreach ($c in @(
+        @('2.37.9', 'git version 2.37.9', $false, '2.37.9'),
+        @('2.37.9 with a Windows suffix', 'git version 2.37.9.windows.1', $false, '2.37.9'),
+        @('2.9.5 (the minor is a number, not text)', 'git version 2.9.5', $false, '2.9.5'),
+        @('1.9.0', 'git version 1.9.0', $false, '1.9.0'),
+        @('2.38.0', 'git version 2.38.0', $true, '2.38.0'),
+        @('2.38 with no patch', 'git version 2.38', $true, '2.38'),
+        @('2.45.1.windows.1', 'git version 2.45.1.windows.1', $true, '2.45.1'),
+        @('2.100.0 (the minor is a number, not text)', 'git version 2.100.0', $true, '2.100.0'),
+        @('3.0.0', 'git version 3.0.0', $true, '3.0.0'),
+        @('Apple suffix', 'git version 2.39.3 (Apple Git-145)', $true, '2.39.3')
+    )) {
+    $x = Test-CoordGitFloor -VersionText $c[1]
+    Assert-Coord "C25 '$($c[0])': Ok is $($c[2]), Version $($c[3])" ($x.Ok -eq $c[2] -and $x.Version -ceq $c[3]) "ok=$($x.Ok) version=$($x.Version) error=$($x.Error)"
+    if ($c[2]) { Assert-Coord "C25 '$($c[0])': no error text" ($x.Error -ceq '') $x.Error }
+    else { Assert-Coord "C25 '$($c[0])': one line naming the version found and the 2.38 floor" ($x.Error -notmatch '[\r\n]' -and $x.Error.Contains("git $($c[3]) ") -and $x.Error.Contains('2.38')) $x.Error }
+}
+foreach ($c in @(
+        @('garbage', 'banana'),
+        @('empty', ''),
+        @('a version without the git prefix', '2.45.1'),
+        @('only a major', 'git version 2'),
+        @('a letter for the major', 'git version x.45.1'),
+        @('a major too large for an int', 'git version 99999999999.1'),
+        @('a patch too large for an int', 'git version 2.45.99999999999')
+    )) {
+    $x = Test-CoordGitFloor -VersionText $c[1]
+    Assert-Coord "C25 unparseable ($($c[0])): refused, one line saying it could not be read and naming 2.38" (-not $x.Ok -and $x.Error -notmatch '[\r\n]' -and $x.Error.Contains('could not be read') -and $x.Error.Contains('2.38')) "ok=$($x.Ok) error=$($x.Error)"
+}
+# Without -VersionText it runs the first git on PATH: a stub git.cmd answers.
+function Invoke-GitFloorWithStub([string]$StubDir) {
+    $prev = $env:PATH
+    try {
+        $env:PATH = $StubDir + [System.IO.Path]::PathSeparator + $prev
+        return (Test-CoordGitFloor)
+    }
+    finally { $env:PATH = $prev }
+}
+$stubOld = New-GitStub 'floor-old' @('@echo off', 'echo git version 2.37.9.windows.1', 'exit /b 0')
+$stubNew = New-GitStub 'floor-new' @('@echo off', 'echo git version 2.45.1.windows.1', 'exit /b 0')
+$stubJunk = New-GitStub 'floor-junk' @('@echo off', 'echo not a version', 'exit /b 0')
+$x = Invoke-GitFloorWithStub $stubOld
+Assert-Coord 'C25 the git on PATH answers 2.37.9: refused, naming 2.37.9 and 2.38' (-not $x.Ok -and $x.Error.Contains('git 2.37.9 ') -and $x.Error.Contains('2.38')) "ok=$($x.Ok) error=$($x.Error)"
+$x = Invoke-GitFloorWithStub $stubNew
+Assert-Coord 'C25 the git on PATH answers 2.45.1.windows.1: ok' ($x.Ok -and $x.Version -ceq '2.45.1') "ok=$($x.Ok) version=$($x.Version) error=$($x.Error)"
+$x = Invoke-GitFloorWithStub $stubJunk
+Assert-Coord 'C25 the git on PATH answers text that is no version: refused as unreadable' (-not $x.Ok -and $x.Error.Contains('could not be read')) "ok=$($x.Ok) error=$($x.Error)"
+
+Write-Host "(C21-pre) what the real-index snapshot and leak rule cover"
+# The snapshot and leak functions themselves, pointed at a scratch folder through the fixture's
+# $coordRealIndexDir (restored right after). A live coordinator's append or new file is tolerated; a removal, a
+# rewrite and added text naming the marker are leaks; sessions/ is not read at all.
 $savedRealIndexDir = $coordRealIndexDir
 try {
     $dg = Join-Path $root 'digest-idx'
+    $dgMarker = Join-Path $root 'scratch-repo'
     $coordRealIndexDir = $dg
-    Assert-Coord 'C21 digest of a folder that does not exist: absent' ((Get-CoordRealIndexDigest) -ceq 'index folder: absent')
+    Assert-Coord 'C21 snapshot of a folder that does not exist: empty, and no leak while it stays absent' ((@((Get-CoordRealIndexSnapshot).Keys).Count -eq 0) -and ((Get-CoordRealIndexLeak -Before (Get-CoordRealIndexSnapshot) -Marker $dgMarker) -ceq ''))
     Set-CoordTextFile (Join-Path $dg 'a.ledgers') "one`n"
     Set-CoordTextFile (Join-Path $dg 'other.txt') "x`n"
     Set-CoordTextFile (Join-Path $dg 'sub\f.txt') "y`n"
     Set-CoordTextFile (Join-Path $dg 'sessions\s1.json') "{}`n"
-    $d0 = Get-CoordRealIndexDigest
-    Set-CoordTextFile (Join-Path $dg 'sessions\s1.json') "{ changed }`n"
+    $d0 = Get-CoordRealIndexSnapshot
+    Set-CoordTextFile (Join-Path $dg 'sessions\s1.json') "{ changed $dgMarker }`n"
     Set-CoordTextFile (Join-Path $dg 'sessions\s2.json') "{}`n"
-    Assert-Coord 'C21 a file changed or added only under sessions/ does not change the digest' ((Get-CoordRealIndexDigest) -ceq $d0)
-    Set-CoordTextFile (Join-Path $dg 'a.ledgers') "two`n"
-    $d1 = Get-CoordRealIndexDigest
-    Assert-Coord 'C21 a changed top-level *.ledgers file changes the digest' ($d1 -cne $d0)
+    Assert-Coord 'C21 a file changed or added only under sessions/ is not read: no leak' ((Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker) -ceq '') (Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker)
+    [IO.File]::AppendAllText((Join-Path $dg 'a.ledgers'), "two`n")
+    Set-CoordTextFile (Join-Path $dg 'new.txt') "z`n"
+    Assert-Coord 'C21 a line appended to a top-level *.ledgers file and a new file, neither naming the marker: no leak' ((Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker) -ceq '') (Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker)
     Set-CoordTextFile (Join-Path $dg 'other.txt') "xx`n"
-    Assert-Coord 'C21 a changed top-level file that is not *.ledgers changes the digest' ((Get-CoordRealIndexDigest) -cne $d1)
-    $d2 = Get-CoordRealIndexDigest
+    Assert-Coord 'C21 a changed top-level file that is not *.ledgers is a leak (rewritten)' ((Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker) -match 'rewritten: .*other\.txt') (Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker)
+    Set-CoordTextFile (Join-Path $dg 'other.txt') "x`n"
     Set-CoordTextFile (Join-Path $dg 'sub\f.txt') "yy`n"
-    Assert-Coord 'C21 a changed file in another subfolder changes the digest' ((Get-CoordRealIndexDigest) -cne $d2)
+    Assert-Coord 'C21 a changed file in another subfolder is a leak (rewritten)' ((Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker) -match 'rewritten: .*f\.txt') (Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker)
 }
 finally { $coordRealIndexDir = $savedRealIndexDir }
 
 Write-Host "(C21) the real index folder"
-Assert-Coord 'C21 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination: its listing and the SHA-256 of every file outside sessions/, or still absent) is unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
+Assert-Coord 'C21 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
 Write-CoordUncheckedSummary
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

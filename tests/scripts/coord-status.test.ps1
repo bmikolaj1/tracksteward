@@ -6,7 +6,7 @@
 # this repo): output within 2,000 characters, the done count and the unticked Owed checks against an independent
 # count of the file. T12 (a synthetic ledger over the cap) and T2 (counts of a known ledger) stay. The Repo
 # cells of the example rows are generic, and the private repo name in the Queue example became a generic title.
-# Added: a fence that the runner's real index folder is unchanged by this run (T14 runs coord-log.ps1).
+# Added: a fence that this run left nothing of its own in the runner's real index folder (T14 runs coord-log.ps1).
 #
 #   T1   unreadable: no ledger file, a ragged Tracks table, a doubled '## Merge slots' heading, a ledger with no
 #        '## Tracks' -> ONE line `STATUS: could not read - ...`, exit 2, nothing else
@@ -15,7 +15,8 @@
 #        lower-case `merged` and `NOT MERGED` stay live
 #   T4   BRIEFED older than 15 minutes with no ACK says so, with the minutes; a fresh one does not
 #   T5   Findings: F<n> with no later `F<n> outcome:` is PENDING; F1 is not closed by F10's outcome
-#   T6   Owed checks: unticked listed ("(from ...)" tail dropped), ticked not, odd box shapes counted as unrecognised
+#   T6   Owed checks: unticked listed ("(from ...)" tail dropped), ticked not, odd box shapes counted as unrecognised;
+#        indented or oddly spaced boxes count like column-0 ones; the ledger is read once (source pin)
 #   T7   Merge slots: an open slot is printed on its row by PR number; one no live row carries is BLOCKED;
 #        MERGED, VOIDED and `slot free` are closed
 #   T8   Queue: gates read OPEN/CLOSED/? by the rules (time, local time, person, PR without -Verify, after Q<n>,
@@ -39,7 +40,12 @@
 #        (from ...) tails; a local gate and its UTC rewrite agree
 #   T18  the gate is the last gate-shaped group before " owner:", so a gate-shaped bracket quoted in owner/source
 #        does not take it over (and -Verify never asks gh about it); with no owner part, the last gate-shaped group
-#   T19  the real index folder is unchanged at the end of the run
+#   T19  the same holds when the writer slips the anchor ("Owner:", "owner :", a tab, "OWNER:me", no owner part but a
+#        " source:"): the quoted bracket after the slip does not take the gate
+#   T21  -Verify asks gh only in a folder it can name (a Repo cell that is a folder, or an empty one); a bare-name or
+#        off-machine Repo cell prints unknown / one unverified line; a PR gate prints the folder asked
+#   T22  [after Q<n>] naming no line, or a cycle, reads ? and counts unknown; a loop broken by a closed id is no loop
+#   T23  the real index folder shows no removal, rewrite or added text naming this run's scratch root
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\coord-status.test.ps1 [-ScriptPath <mutant copy>]
 #       (a mutant copy needs coord-common.ps1 next to it: it dot-sources it)
@@ -57,7 +63,7 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('coord-status-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void][IO.Directory]::CreateDirectory($root)
 # Nothing in this run may reach the real index folder (T14 runs coord-log.ps1).
-$realIndexBefore = Get-CoordRealIndexDigest
+$realIndexBefore = Get-CoordRealIndexSnapshot
 $null = New-CoordScratchIndex $root
 $caseN = 0
 $clock = '2026-10-27 12:00'
@@ -83,8 +89,9 @@ function New-Ledger {
     Set-CoordTextFile $p (($t -join "`n") + "`n")
     return [pscustomobject]@{ Dir = $dir; Path = $p }
 }
-function Get-Row([string]$Track, [string]$Status, [string]$Pr = '', [string]$Model = 'Opus 5.5') {
-    return "| $Track | C:\Fx\alpha | s | $Model | C:\w | b-$($Track -replace '\W', '') | docs/** | $Pr | $Status |"
+# The Repo cell is the scratch root (a folder that exists): -Verify asks gh only in a folder it can name (T21).
+function Get-Row([string]$Track, [string]$Status, [string]$Pr = '', [string]$Model = 'Opus 5.5', [string]$Repo = $root) {
+    return "| $Track | $Repo | s | $Model | C:\w | b-$($Track -replace '\W', '') | docs/** | $Pr | $Status |"
 }
 function Invoke-Board {
     param($L, [string]$ExtraArgs = '', [object[]]$Rules = @())
@@ -167,6 +174,48 @@ Assert-Coord 'T5a F1 stays PENDING when only F10 has an outcome line' (($wait -j
 Assert-Coord 'T5b F10 and F2 (outcome lines) are closed; cF3 is pending' (($wait -join "`n") -notmatch 'tenth thing' -and ($wait -join "`n") -notmatch 'second' -and ($wait -join "`n") -match 'cF3 b: cloud one.*PENDING') ($wait -join "`n")
 Assert-Coord 'T5c the STATUS line counts 2 findings pending' ($r.Last -match '; 2 findings pending') $r.Last
 
+# T5d (F13, 2026-10-29) an id may carry a parenthesised tag before "from" (a carry date, or a track tag as in "F9 (F-g) from F-e"):
+# still a finding, still closed by its own outcome line, with or without the tag on the outcome line
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F3 (2026-10-28) from a: carried thing | outcome: PENDING', '09:05 F4 (2026-10-28) from a: carried closed | outcome: PENDING', '09:10 F4 outcome: dropped',
+    '09:15 F5 (F-g) from b: tagged thing | outcome: PENDING', '09:20 F6 (2026-10-28) from a: tagged outcome closed | outcome: PENDING', '09:25 F6 (2026-10-28) outcome: done',
+    '09:30 F7 from a: tail carry | outcome: PENDING (from 2026-10-28)')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5d F3 (2026-10-28) shows in WAITING' ($wait -match 'F3 .*carried thing.*PENDING since 09:00') $wait
+Assert-Coord 'T5e F5 (F-g) and the tail-dated F7 show; F4 and F6 (outcome lines, tagged or not) do not' ($wait -match 'tagged thing' -and $wait -match 'tail carry' -and $wait -notmatch 'carried closed' -and $wait -notmatch 'tagged outcome closed') $wait
+Assert-Coord 'T5f the STATUS line counts 3 findings pending' ($r.Last -match '; 3 findings pending') $r.Last
+
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F1 (a (b)) from a: nested tag | outcome: PENDING', '09:05 F2 (a) (b) from a: double tag | outcome: PENDING', '09:10 F3 (2026-10-28) from a: untagged close | outcome: PENDING', '09:15 F3 outcome: done',
+    '09:20 F11 (2026-10-28) outcome: done', '09:25 F1x (2026-10-28) from a: not a finding id | outcome: PENDING')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5h a nested or double tag still lists the finding, an untagged outcome closes a tagged one, F11 does not close F1, and the tag stays off the board' ($wait -match 'nested tag' -and $wait -match 'double tag' -and $wait -notmatch 'untagged close' -and $wait -notmatch '\(a' -and $wait -notmatch '2026-10-28' -and $wait -notmatch 'not a finding id' -and $r.Last -match '; 2 findings pending') ($wait + "`n" + $r.Last)
+
+# T5i (F16, folded into F13) a finding needs no " from <track>": "F22 (coordinator, measured): ..." and "F23: ..." are findings too
+# (listed, closed by their own outcome line); a Log line, an id with trailing letters and a note that only mentions "F3:" are not
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F22 (coordinator, measured): hook took 24m | outcome: PENDING', '09:05 F23: bare colon form | outcome: PENDING', '09:10 F24: closed colon form | outcome: PENDING', '09:15 F24 outcome: done',
+    '09:20 F25x: not a finding id | outcome: PENDING', '09:25 note that F3: is mentioned here | outcome: PENDING') -Log @('09:30 F26: log line is never read | outcome: PENDING')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5i F22 (tag, colon) and F23 (colon) are pending; F24 is closed; F25x, a mention of F3: and a Log line are not' ($wait -match 'F22 .*hook took 24m.*PENDING since 09:00' -and $wait -match 'F23 .*bare colon form' -and $wait -notmatch 'closed colon form' -and $wait -notmatch 'not a finding id' -and $wait -notmatch 'is mentioned here' -and $wait -notmatch 'log line is never read' -and $r.Last -match '; 2 findings pending') ($wait + "`n" + $r.Last)
+
+# T5j (panel round 3) "F30: outcome: x" closes F30 like "F30 outcome: x"; a repeated id and an inline "| outcome: dropped" are known gaps (CHANGELOG, "Known and left"), not pinned
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F30 from a: closed by colon outcome | outcome: PENDING', '09:05 F30: outcome: done', '09:25 F33: real colon one | outcome: PENDING')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5j F30 colon outcome closes it, F33 lists; 1 pending' ($wait -notmatch 'closed by colon outcome' -and $wait -notmatch 'F30: outcome' -and $wait -match 'F33 .*real colon one' -and $r.Last -match '; 1 findings? pending') ($wait + "`n" + $r.Last)
+# T5g (F13 sibling) Queue ids carry a date tag: a tagged Q is queued, a tagged outcome line closes it; text that starts with parentheses stays
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Queue @(
+    '09:00 Q1 (2026-10-28) carried queue item [after 23:00] owner: a', '09:05 Q2 (2026-10-28) closed queue item [after 23:00] owner: a', '09:10 Q2 (2026-10-28) outcome: done',
+    '09:15 Q3 (urgent) fix thing [after Q1] owner: a', '09:20 Q4 (2026-10-28) gated item [after Q2] owner: a')
+$r = Invoke-Board $l
+$q = ((Get-GroupBlock $r 'QUEUED') -join "`n")
+Assert-Coord 'T5g tagged Q1 is queued, tagged Q2 with its outcome line is not, "(urgent)" stays in the text, a tagged item still reads its [after Q2] gate as OPEN' ($q -match 'Q1 .*carried queue item' -and $q -notmatch 'closed queue item' -and $q -match 'Q3 \(urgent\) fix thing' -and $q -match 'Q4 .*gate: after Q2\s+OPEN' -and $q -notmatch '2026-10-28') $q
+
 # ---- T6 owed checks
 $l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Owed @(
     '- [ ] User: restore the required checks (from 2026-10-16)', '- [x] (09:00 done) a ticked one', '- [ ] a coordinator item',
@@ -176,6 +225,28 @@ $wait = Get-GroupBlock $r 'WAITING'
 Assert-Coord 'T6a the two unticked "- [ ]" lines are WAITING, the "(from ...)" tail dropped' ($wait[0] -eq 'WAITING (2)' -and ($wait -join "`n") -match 'Owed: User: restore the required checks  L' -and ($wait -join "`n") -notmatch 'from 2026-10-16') ($wait -join "`n")
 Assert-Coord 'T6b a ticked line is not listed' (($wait -join "`n") -notmatch 'ticked one') ($wait -join "`n")
 Assert-Coord 'T6c three odd box shapes are counted as unrecognised, not guessed' ($r.Last -match '; 3 owed-check lines in an unrecognised box shape') $r.Last
+
+# T6d (item 17) an indented or oddly spaced unticked box is the same owed check as a column-0 one; an indented placeholder
+# is still not an item; an indented or oddly spaced unknown mark ("[?]") is counted as unrecognised
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Owed @(
+    '  - [ ] indented item (from 2026-10-16)', '-   [ ] wide spaced item', "`t- [ ] tab indented item", '  - [ ] (none) (from 2026-10-16)',
+    '  - [x] indented ticked', '  - [?] indented odd mark', '-  [~] spaced odd mark')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T6d indented, wide-spaced and tab-indented unticked boxes are WAITING (3), with the tail dropped; the indented placeholder and ticked box are not' ($wait -match 'WAITING \(3\)' -and $wait -match 'Owed: indented item  L' -and $wait -match 'Owed: wide spaced item' -and $wait -match 'Owed: tab indented item' -and $wait -notmatch 'from 2026-10-16' -and $wait -notmatch 'none' -and $wait -notmatch 'indented ticked') $wait
+Assert-Coord 'T6e an indented and a wide-spaced odd mark are counted as unrecognised' ($r.Last -match '; 2 owed-check lines in an unrecognised box shape') $r.Last
+
+# T6f (item 18) the ledger is read once: the script text calls neither Read-CoordLedgerFile twice nor Read-CoordLedgerTracks at all
+# (a swap of the file between two reads ended in "could not read"; a subprocess run cannot swap the file between two reads, so this
+# pins the source)
+$srcPath = if ($ScriptPath) { [System.IO.Path]::GetFullPath($ScriptPath) } else { Join-Path (Split-Path -Parent $testsDir) 'scripts\coord-status.ps1' }
+$code = @([IO.File]::ReadAllLines($srcPath) | Where-Object { $_ -notmatch '^\s*#' })
+$codeText = $code -join "`n"
+$reads = [regex]::Matches($codeText, 'Read-CoordLedgerFile|Read-CoordLedgerTracks').Count
+Assert-Coord 'T6f the script reads the ledger once (one Read-CoordLedgerFile call, no Read-CoordLedgerTracks; counted per occurrence, not per line)' ($reads -eq 1 -and [regex]::Matches($codeText, 'Read-CoordLedgerFile').Count -eq 1) "reads=$reads"
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00'), (Get-Row 'b' 'BLOCKED 10:05'))
+$r = Invoke-Board $l
+Assert-Coord 'T6g the Tracks rows built from the one read keep their ledger line numbers' ((((Get-GroupBlock $r 'RUNNING') -join "`n") -match 'a .*L11') -and (((Get-GroupBlock $r 'BLOCKED') -join "`n") -match 'b .*L12')) $r.Out
 
 # ---- T7 merge slots
 $l = New-Ledger -Rows @((Get-Row 'a' 'PR-OPEN 11:00' '#81'), (Get-Row 'b' 'RUNNING 11:00' '#82')) -Slots @(
@@ -351,14 +422,79 @@ $l = New-Ledger -Rows @((Get-Row 'live' 'RUNNING 10:00')) -Queue @(
 $r = Invoke-Board $l
 $q = (Get-GroupBlock $r 'QUEUED') -join "`n"
 Assert-Coord 'T18a a quoted "[after #99 merges]" in source does not take the gate: Q1 gate after 11:00 OPEN, text "port it"' ($q -match 'Q1 port it\s+gate: after 11:00  OPEN') $q
-Assert-Coord 'T18b a "[needs review]" in source does not take the gate: Q2 gate after Q9 CLOSED' ($q -match 'Q2 wait\s+gate: after Q9  CLOSED') $q
+Assert-Coord 'T18b a "[needs review]" in source does not take the gate: Q2 gate after Q9 (no such line, so ?)' ($q -match 'Q2 wait\s+gate: after Q9  \?') $q
 Assert-Coord 'T18c an "[after the retro]" link in source does not take the gate: Q3 gate after 11:00 OPEN' ($q -match 'Q3 port it\s+gate: after 11:00  OPEN') $q
 Assert-Coord 'T18d a line with no owner part: the last gate-shaped group, Q4 gate after 11:00 OPEN' ($q -match 'Q4 no owner part \[needs user\] then\s+gate: after 11:00  OPEN') $q
 $rv = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view 99\b' '{"state":"MERGED"}'))
 Assert-Coord 'T18e with -Verify, gh is never asked about the quoted #99 (the recorded calls), and #99 is not printed' (@($rv.Calls | Where-Object { "$_" -match '\b99\b' }).Count -eq 0 -and -not ($rv.Out -match '#99') -and (((Get-GroupBlock $rv 'QUEUED') -join "`n") -match 'Q1 port it\s+gate: after 11:00  OPEN')) $rv.Out
 
-# ---- T19 the real index folder
-Assert-Coord 'T19 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination: its listing and the SHA-256 of every file outside sessions/, or still absent) is unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
+# ---- T19 a writer slip in the " owner:" anchor ("Owner:", "owner :", a tab, no owner part) still ends the
+# gate search, so a gate-shaped bracket quoted after it does not take the gate; a line with only " source:" ends there too
+$l = New-Ledger -Rows @((Get-Row 'live' 'RUNNING 10:00')) -Queue @(
+    '08:00 Q1 port it [after 11:00] Owner: me; source: D3 "start it [after #130 merges]"',
+    "08:00 Q2 port it [after 11:00]`towner: me; source: D3 `"start it [after #130 merges]`"",
+    '08:00 Q3 port it [after 11:00] owner : me; source: D3 "start it [after #130 merges]"',
+    '08:00 Q4 port it [after 11:00] source: D3 "start it [after #130 merges]"',
+    '08:00 Q5 port it [after 11:00] OWNER:me; source: D3 "start it [after #130 merges]"',
+    '08:00 Q6 port it [after 11:00] Source : D3 "start it [after #130 merges]"')
+$r = Invoke-Board $l
+$q = (Get-GroupBlock $r 'QUEUED') -join "`n"
+foreach ($n in 1..6) {
+    Assert-Coord "T19$n a quoted [after #130 merges] after the slip does not take the gate: Q$n gate after 11:00 OPEN, text `"port it`"" ($q -match "Q$n port it\s+gate: after 11:00  OPEN") $q
+}
+$l2 = New-Ledger -Rows @((Get-Row 'live' 'RUNNING 10:00')) -Queue @(
+    '08:00 Q1 fix source: handling [after 11:00] owner: me; source: x',
+    '08:00 Q2 review [needs source: spec] owner: me',
+    '08:00 Q3 cleanup the owner :field [after 11:00] owner: me',
+    '08:00 Q4 fix source: handling [after 11:00]',
+    '08:00 Q5 tidy owner : field [after 11:00]')
+$q2 = (Get-GroupBlock (Invoke-Board $l2) 'QUEUED') -join "`n"
+Assert-Coord 'T19h "source:" or "owner :" inside the item text or the gate bracket does not end the gate search' (($q2 -match 'Q1 fix source: handling\s+gate: after 11:00  OPEN') -and ($q2 -match 'Q2 review\s+gate: needs source: spec') -and ($q2 -match 'Q3 cleanup the owner :field\s+gate: after 11:00  OPEN') -and ($q2 -match 'Q4 fix source: handling\s+gate: after 11:00  OPEN') -and ($q2 -match 'Q5 tidy owner : field\s+gate: after 11:00  OPEN')) $q2
+$rv = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view 130\b' '{"state":"MERGED"}'))
+Assert-Coord 'T19g with -Verify, gh is never asked about the quoted #130 on any of the six slips' (@($rv.Calls | Where-Object { "$_" -match '\b130\b' }).Count -eq 0) $rv.Out
+
+# ---- T21 -Verify asks gh only in a folder it can name; a gate PR is labelled with the folder asked
+$bare = Get-Row 'bare' 'RUNNING 10:00' '#50' 'Opus 5.5' 'RenewCue'
+$bareM = Get-Row 'bare-merged' 'MERGED 10:00 #51 as abcdef1234567' '#51' 'Opus 5.5' 'D:\nowhere\RenewCue'
+$l = New-Ledger -Rows @($bare, $bareM, (Get-Row 'here' 'RUNNING 10:00' '#52')) -Queue @('08:00 Q1 pr gate [after #116 merges] owner: me; source: x')
+$r = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view \d+\b' '{"state":"MERGED","headRefOid":"abcdef1234567890","mergeStateStatus":"CLEAN"}'))
+Assert-Coord 'T21a a bare-name or off-machine Repo cell prints "verified: #n unknown (the Repo cell is not a folder", gh is never asked about #50 or #51, and no MISMATCH' ((Test-Has $r 'verified: #50 unknown \(the Repo cell is not a folder') -and @($r.Calls | Where-Object { "$_" -match '\b5[01]\b' }).Count -eq 0 -and (Test-Has $r 'unverified: #51 \(the Repo cell is not a folder') -and -not (Test-Has $r 'MISMATCH')) $r.Out
+Assert-Coord 'T21b a Repo cell that is a folder is still asked: #52 verified' ((Test-Has $r 'verified: #52 MERGED') -and @($r.Calls | Where-Object { "$_" -match '\b52\b' }).Count -ge 1) $r.Out
+Assert-Coord 'T21c the PR gate [after #116 merges] under -Verify says which folder gh was asked in' ((Get-GroupBlock $r 'QUEUED') -join "`n" -match 'after #116 merges\s+OPEN \(asked the repo of \S+\)') $r.Out
+
+$many = @(1..60 | ForEach-Object { Get-Row "m$_" "MERGED 10:00 #$(200 + $_) as abcdef1234567" "#$(200 + $_)" 'Opus 5.5' 'D:\nowhere\RenewCue' })
+$l = New-Ledger -Rows $many
+$r = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view \d+\b' '{"state":"MERGED","headRefOid":"abcdef1234567890","mergeStateStatus":"CLEAN"}'))
+Assert-Coord 'T21d 60 MERGED rows with an off-machine Repo cell give ONE budgeted unverified line, the board stays within 2,000 characters' (@(Get-Lines $r | Where-Object { $_ -match 'unverified:' }).Count -eq 1 -and $r.Out.Length -le 2000) "$($r.Out.Length) chars"
+
+# ---- T22 [after Q<n>] naming no line, or a cycle, reads ? and counts unknown, not CLOSED for good
+$l = New-Ledger -Rows @((Get-Row 'live' 'RUNNING 10:00')) -Queue @(
+    '08:00 Q1 names nothing [after Q99] owner: me; source: x',
+    '08:00 Q2 pair a [after Q3] owner: me; source: x',
+    '08:00 Q3 pair b [after Q2] owner: me; source: x',
+    '08:00 Q4 itself [after Q4] owner: me; source: x',
+    '08:00 Q5 into the pair [after Q2] owner: me; source: x',
+    '08:00 Q6 waits on a plain line [after Q7] owner: me; source: x',
+    '08:00 Q7 plain owner: me; source: x',
+    '08:00 Q8 chain end done [after Q9] owner: me; source: x',
+    '08:00 Q9 outcome: dropped')
+$r = Invoke-Board $l
+$q = (Get-GroupBlock $r 'QUEUED') -join "`n"
+Assert-Coord 'T22a Q1 (no Q99), Q2/Q3 (a pair), Q4 (itself) and Q5 (into the pair) read ?' (($q -match 'Q1 names nothing\s+gate: after Q99  \?') -and ($q -match 'Q2 pair a\s+gate: after Q3  \?') -and ($q -match 'Q3 pair b\s+gate: after Q2  \?') -and ($q -match 'Q4 itself\s+gate: after Q4  \?') -and ($q -match 'Q5 into the pair\s+gate: after Q2  \?')) $q
+Assert-Coord 'T22b Q6 waiting on an open plain line stays CLOSED, Q8 after a closed Q9 reads OPEN' (($q -match 'Q6 waits on a plain line\s+gate: after Q7  CLOSED') -and ($q -match 'Q8 chain end done\s+gate: after Q9  OPEN')) $q
+Assert-Coord 'T22d a Queue item with no gate keeps its text: "Q7 plain owner: me; source: x   gate: none  ?", the whole line as before, not blank' ($q -match 'Q7 plain owner: me; source: x\s+gate: none  \?') $q
+$l = New-Ledger -Rows @((Get-Row 'live' 'RUNNING 10:00')) -Queue @(
+    '08:00 Q1 a [after Q2] owner: me; source: x', '08:00 Q2 b [after Q3] owner: me; source: x',
+    '08:00 Q3 c [after Q1] owner: me; source: x', '08:00 Q3 outcome: done')
+$qb = (Get-GroupBlock (Invoke-Board $l) 'QUEUED') -join "`n"
+Assert-Coord 'T22e a loop broken by a closed id is no loop: Q2 after the closed Q3 is OPEN, Q1 after the open Q2 is CLOSED' (($qb -match 'Q2 b\s+gate: after Q3  OPEN') -and ($qb -match 'Q1 a\s+gate: after Q2  CLOSED')) $qb
+$l = New-Ledger -Rows @((Get-Row 'live' 'RUNNING 10:00')) -Queue @('08:00 Q1 a [after Q2 ] owner: me; source: x', '08:00 Q2 b [after Q1] owner: me; source: x')
+$qs = (Get-GroupBlock (Invoke-Board $l) 'QUEUED') -join "`n"
+Assert-Coord 'T22f a trailing space in the gate ([after Q2 ]) still joins the loop: both read ?' (($qs -match 'Q1 a\s+gate: after Q2   ?\?') -and ($qs -match 'Q2 b\s+gate: after Q1  \?')) $qs
+Assert-Coord 'T22c the STATUS line counts six unknown gates (the five above and Q7, which has no gate)' ($r.Last -match '6 unknown') $r.Last
+
+# ---- T23 the real index folder
+Assert-Coord 'T23 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-CoordUncheckedSummary
