@@ -21,7 +21,10 @@
 # `(from <date>)` tails) are not items. QUEUED also takes the `Q<n>` lines of the Queue section with no `Q<n> outcome:`
 # line (a Queue id and its outcome line take no tag or exactly one `(yyyy-MM-dd)` tag, ignored and not printed); the gate is the LAST bracket group shaped like one, `[after ...]` or `[needs ...]`, before ` owner:` (the
 # whole line when it has no ` owner:`; with no such group there, the first group there), read OPEN, CLOSED or ? (only these shapes: after #<n> merges, after <yyyy-MM-dd> <HH:mm>Z (UTC), after
-# <HH:mm> (local), after Q<n>, needs <who> ...). The line shows the text before the gate, cut.
+# <HH:mm> (local), after Q<n>, needs <who> ...). The ` owner:` anchor tolerates a writer's slip: any case and a tab; with
+# none, `owner :` or ` source:` straight after a `]` or `;` ends the search. `[after Q<n>]` naming a Q id no line holds,
+# or a chain of `[after Q<n>]` gates that comes back to a line already seen (itself included), reads ? and counts
+# unknown, not CLOSED. The line shows the text before the gate, cut.
 #
 # Last line, always: STATUS <yyyy-MM-dd HH:mm>: <counts>. A ledger that cannot be read prints ONE line,
 # `STATUS: could not read - <reason>`, exit 2, nothing else (never "none" for a failure).
@@ -29,7 +32,11 @@
 # -Verify: for each live row with a PR that is not in the QUEUED group, `gh pr view` (state, head, mergeStateStatus)
 #   printed under the row; a row that says MERGED while its PR is not counts as MISMATCH; a Queue gate
 #   `[after #<n> merges]` is read from gh as well (OPEN once the PR is merged). A failed call prints
-#   `unknown (<why>)`, never a state. Branch heads are not fetched here (slot-check.ps1 owns them).
+#   `unknown (<why>)`, never a state. Branch heads are not fetched here (slot-check.ps1 owns them). gh runs in the row's
+#   Repo folder (the current folder when the cell is empty); a Repo cell that is not a folder on this machine prints
+#   `unknown (the Repo cell is not a folder on this machine)` and gh is not asked. A `[after #<n> merges]` gate names no
+#   repo, so it asks the repo of the current folder and prints `(asked the repo of <folder>)` beside its state. A MERGED
+#   row whose Repo cell is not a folder adds one `unverified: #<n> ... (...)` line to DONE.
 # -Full: no 2,000-character cap. -Group <name>: only that group, uncapped.
 # -Now 'yyyy-MM-dd HH:mm': the clock (tests); default the local clock.
 # Without -Ledger: today's ledger, from the repo's MAIN checkout only (from a linked worktree or another repo pass
@@ -130,6 +137,13 @@ function Get-PrNumber([string]$Cell) {
     if ($Cell -match '/pull/(\d+)') { return [int]$Matches[1] }
     return 0
 }
+# The folder gh runs in for a row under -Verify: the Repo cell when it is a folder here, the current folder when the cell
+# is empty, $null (ask nobody) when the cell names something else, a bare name or a path of another machine.
+function Get-VerifyCwd([string]$Repo) {
+    if (-not $Repo) { return (Get-Location).Path }
+    if (Test-Path -LiteralPath $Repo -PathType Container) { return $Repo }
+    return $null
+}
 function Get-Trunc([string]$Text, [int]$Max) {
     if ($Text.Length -le $Max) { return $Text }
     return $Text.Substring(0, $Max - 3) + '...'
@@ -195,7 +209,11 @@ for ($i = 0; $i -lt $rows.Count; $i++) {
     $gCount[$key]++
     $g[$key] += $line
     if ($Verify -and $pr -and $key -ne 'queued') {
-        $cwd = if ($r.Repo -and (Test-Path -LiteralPath $r.Repo -PathType Container)) { $r.Repo } else { (Get-Location).Path }
+        $cwd = Get-VerifyCwd $r.Repo
+        if ($null -eq $cwd) {
+            $g[$key] += "    verified: #$pr unknown (the Repo cell is not a folder on this machine)"
+            continue
+        }
         Push-Location -LiteralPath $cwd
         try { $j = Invoke-CoordGhJson @('pr', 'view', "$pr", '--json', 'state,headRefOid,mergeStateStatus') }
         finally { Pop-Location }
@@ -209,13 +227,15 @@ for ($i = 0; $i -lt $rows.Count; $i++) {
 }
 # MISMATCH: a MERGED row whose PR is not merged (only checked with -Verify)
 if ($Verify) {
+    $unverified = @()
     for ($i = 0; $i -lt $rows.Count; $i++) {
         $r = $rows[$i]
         if ($r.Status -cnotmatch '^\s*MERGED') { continue }
         $pr = Get-PrNumber $r.PR
         if (-not $pr) { $pr = Get-PrNumber $r.Status }
         if (-not $pr) { continue }
-        $cwd = if ($r.Repo -and (Test-Path -LiteralPath $r.Repo -PathType Container)) { $r.Repo } else { (Get-Location).Path }
+        $cwd = Get-VerifyCwd $r.Repo
+        if ($null -eq $cwd) { $unverified += "#$pr"; continue }
         Push-Location -LiteralPath $cwd
         try { $j = Invoke-CoordGhJson @('pr', 'view', "$pr", '--json', 'state,headRefOid,mergeStateStatus') }
         finally { Pop-Location }
@@ -224,6 +244,8 @@ if ($Verify) {
             $g.done += "    MISMATCH: #$pr is $($j.Data.state), the row says MERGED (L$($rowLine[$i]))"
         }
     }
+    # one line for all of them: a MERGED row whose Repo cell is no folder here cannot be checked, and says so once
+    if ($unverified.Count) { $g.done += (Get-Trunc ('    unverified: ' + ($unverified -join ' ') + ' (the Repo cell is not a folder on this machine)') 140) }
 }
 
 # open slots no live row carries
@@ -269,12 +291,45 @@ foreach ($e in (Get-SectionLines $secOwed)) {
     elseif ($t -cmatch '^\s*([*+]|\d+\.)\s+\[.\]' -or $t -cmatch '^\s*-\s+\[[^ xX]\]') { $unrecognised++ }
 }
 
+# The bracket group a Queue line's gate is read from: one Match, or nothing. Callers wrap the call in @().
+function Get-QueueGatePick([string]$rest) {
+    # the gate is the LAST bracket group shaped like a gate, "[after ...]" or "[needs ...]", BEFORE " owner:" (the
+    # line shape: Q<n> <what> [<gate>] owner: ...; source: ...): a bracket in the text ("fix [F3]
+    # regression"), an unclosed "[", or any bracket after " owner:" (a quoted "[after #99 merges]" in source) does not
+    # take it over. A line with no owner or source part is searched whole. With no gate-shaped group the first group is
+    # the gate, printed as is with ?. The anchor tolerates a writer's slip: any case and a tab for "owner:"; with no such
+    # anchor, "owner :" or " source:" straight after a "]" or ";" ends the search (a bare "source:" or "owner :" inside
+    # the item text does not: "fix source: handling [after 11:00]" keeps its gate)
+    $ownerAt = -1
+    $ic = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    $anchor = [regex]::Match($rest, '\s+owner:', $ic)
+    if (-not $anchor.Success) { $anchor = [regex]::Match($rest, '(?<=[\];])\s+(?:owner|source)\s*:', $ic) }
+    if ($anchor.Success) { $ownerAt = $anchor.Index }
+    $scope = if ($ownerAt -ge 0) { $rest.Substring(0, $ownerAt) } else { $rest }
+    $groups = @([regex]::Matches($scope, '\[([^\[\]]*)\]'))
+    $pick = @($groups | Where-Object { $_.Groups[1].Value -match '^\s*(after|needs)\s' } | Select-Object -Last 1)
+    if (-not $pick.Count -and $groups.Count) { $pick = @($groups[0]) }
+    return $pick
+}
+
 # ---- Queue: Q<n> lines with no later "Q<n> outcome:" line
 $gatesOpen = 0
 $gatesUnknown = 0
 $queueEntries = Get-SectionLines $secQueue
 $qClosed = @{}
-foreach ($e in $queueEntries) { if ($e[1] -match '^\d\d:\d\d\s+(Q\d+)(?:\s+\(\d{4}-\d\d-\d\d\))?\s+outcome:') { $qClosed[$Matches[1]] = $true } }
+$qKnown = @{}
+$qAfter = @{}
+foreach ($e in $queueEntries) {
+    if ($e[1] -match '^\d\d:\d\d\s+(Q\d+)(?:\s+\(\d{4}-\d\d-\d\d\))?\s+outcome:') { $qClosed[$Matches[1]] = $true; $qKnown[$Matches[1]] = $true }
+}
+# the Q id each item's "[after Q<n>]" gate names, closed items included (a closed target is OPEN before the walk starts),
+# for the cycle check
+foreach ($e in $queueEntries) {
+    if ($e[1] -notmatch '^\d\d:\d\d\s+(Q\d+)(?:\s+\(\d{4}-\d\d-\d\d\))?\s+(?!outcome:)(.*)$') { continue }
+    $qk = $Matches[1]; $qKnown[$qk] = $true
+    $p0 = @(Get-QueueGatePick $Matches[2])
+    if ($p0.Count -and $p0[0].Groups[1].Value -match '^after\s+(Q\d+)\s*$') { $qAfter[$qk] = $Matches[1] }
+}
 foreach ($e in $queueEntries) {
     if ($e[1] -notmatch '^\d\d:\d\d\s+(Q\d+)(?:\s+\(\d{4}-\d\d-\d\d\))?\s+(?!outcome:)(.*)$') { continue }
     $qid = $Matches[1]
@@ -282,22 +337,16 @@ foreach ($e in $queueEntries) {
     if ($qClosed.ContainsKey($qid)) { continue }
     $gate = ''
     $state = '?'
+    $stateNote = ''
     $what = $rest
-    # the gate is the LAST bracket group shaped like a gate, "[after ...]" or "[needs ...]", BEFORE " owner:" (the
-    # line shape: Q<n> <what> [<gate>] owner: ...; source: ...): a bracket in the text ("fix [F3]
-    # regression"), an unclosed "[", or any bracket after " owner:" (a quoted "[after #99 merges]" in source) does not
-    # take it over. A line with no " owner:" is searched whole. With no gate-shaped group the first group is the gate,
-    # printed as is with ?
-    $ownerAt = $rest.IndexOf(' owner:', [System.StringComparison]::Ordinal)
-    $scope = if ($ownerAt -ge 0) { $rest.Substring(0, $ownerAt) } else { $rest }
-    $groups = @([regex]::Matches($scope, '\[([^\[\]]*)\]'))
-    $pick = @($groups | Where-Object { $_.Groups[1].Value -match '^\s*(after|needs)\s' } | Select-Object -Last 1)
-    if (-not $pick.Count -and $groups.Count) { $pick = @($groups[0]) }
+    $pick = @(Get-QueueGatePick $rest)
     if ($pick.Count) {
         $what = $rest.Substring(0, $pick[0].Index).TrimEnd()
         $gate = $pick[0].Groups[1].Value
         if ($gate -match '^after\s+#(\d+)\s+merges$') {
             if ($Verify) {
+                # the gate names no repo, so gh asks the repo of the folder this script runs in; printed beside the state
+                $stateNote = " (asked the repo of $(Split-Path -Leaf (Get-Location).Path))"
                 $j = Invoke-CoordGhJson @('pr', 'view', $Matches[1], '--json', 'state')
                 $state = if ($j.Ok) { if ([string]$j.Data.state -eq 'MERGED') { 'OPEN' } else { 'CLOSED' } } else { '?' }
             }
@@ -312,13 +361,28 @@ foreach ($e in $queueEntries) {
             $when = $at.Date.AddHours([int]$Matches[1]).AddMinutes([int]$Matches[2])
             $state = if ($at -ge $when) { 'OPEN' } else { 'CLOSED' }
         }
-        elseif ($gate -match '^after\s+(Q\d+)$') {
-            $state = if ($qClosed.ContainsKey($Matches[1])) { 'OPEN' } else { 'CLOSED' }
+        elseif ($gate -match '^after\s+(Q\d+)\s*$') {
+            # a Q id no line names, or a chain that comes back to a line already seen (itself included), can never open:
+            # "?" and counted unknown, not CLOSED for good
+            $target = $Matches[1]
+            if ($qClosed.ContainsKey($target)) { $state = 'OPEN' }
+            elseif (-not $qKnown.ContainsKey($target)) { $state = '?' }
+            else {
+                $seen = @{ $qid = $true }
+                $cur = $target
+                $cycle = $false
+                while ($cur -and -not $qClosed.ContainsKey($cur)) {
+                    if ($seen.ContainsKey($cur)) { $cycle = $true; break }
+                    $seen[$cur] = $true
+                    $cur = $qAfter[$cur]
+                }
+                $state = if ($cycle) { '?' } else { 'CLOSED' }
+            }
         }
     }
     if ($state -eq 'OPEN') { $gatesOpen++ } elseif ($state -eq '?') { $gatesUnknown++ }
     $gCount.queued++
-    $g.queued += ('  {0} {1}   gate: {2}  {3}  L{4}' -f $qid, (Get-Trunc $what 46), $(if ($gate) { Get-Trunc $gate 30 } else { 'none' }), $state, $e[0])
+    $g.queued += ('  {0} {1}   gate: {2}  {3}  L{4}' -f $qid, (Get-Trunc $what 46), $(if ($gate) { Get-Trunc $gate 30 } else { 'none' }), "$state$stateNote", $e[0])
 }
 
 # ---- Output

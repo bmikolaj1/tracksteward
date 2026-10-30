@@ -12,7 +12,7 @@
 # host the fixture names; S21 reads this repo's SKILL.md (two rows of the
 # private suite pinned prose this repo does not have: its rules for starting a
 # session from a message or a card; they are dropped); S22 pins this repo's
-# SKILL.md, ledger-template.md and the script header; S0 compares the real index
+# SKILL.md, ledger-template.md and the script header; S0 checks the real index
 # folder as the other suites do.
 #
 #   S1  Status: the cell is replaced, every other cell and line is unchanged;
@@ -76,7 +76,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('coord-set-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void][IO.Directory]::CreateDirectory($root)
-$realIndexBefore = Get-CoordRealIndexDigest
+$realIndexBefore = Get-CoordRealIndexSnapshot
 $null = New-CoordScratchIndex $root
 
 $alphaRepo = 'C:'+[char]92+'Fx'+[char]92+'alpha'
@@ -540,7 +540,7 @@ $bareDup[16] = $bare[16].Replace('| beta |', '| alpha |')
 Invoke-Refused 'S23 a bare -Repo that two same-name rows hold is still refused as ambiguous' @{ Track = 'T1'; Repo = 'alpha'; Text = 'x' } -Lines $bareDup -Why 'share a repo|rename'
 Invoke-Refused 'S23 control: no -Repo on two same-name bare-Repo rows is refused, naming how to pick' @{ Track = 'T1'; Text = 'x' } -Lines $bare -Why 'pass -Repo <full path, or the Repo cell''s text>'
 
-Assert-Coord 'S0 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination) is byte-unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
+Assert-Coord 'S0 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
 Write-CoordUncheckedSummary
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

@@ -79,7 +79,7 @@
 #       another day) is appended to and not registered
 #   L29 -Register: registers and writes nothing to the ledger; not canonical,
 #       a full index, -Section/-Text, a linked worktree: exit 2
-#   L30 the real index folder is unchanged at the end of the run
+#   L30 the run left nothing of its own in the real index folder
 #   L31 git failing on a canonical-shaped ledger: exit 2, "cannot tell whether", ledger
 #       and index unchanged; control: a stale worktree copy is still appended
 #   L32 the Bash form shown in the script header and in SKILL.md (same text),
@@ -114,7 +114,7 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('coord-log-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void][IO.Directory]::CreateDirectory($root)
 # Nothing in this run may reach the real index folder.
-$realIndexBefore = Get-CoordRealIndexDigest
+$realIndexBefore = Get-CoordRealIndexSnapshot
 $null = New-CoordScratchIndex $root
 
 $sample = @(
@@ -860,7 +860,7 @@ else {
     Assert-Coord 'L32 control: without MSYS_NO_PATHCONV=1 MSYS rewrites the leading / (exit 0, a mangled line): why the form needs it' ($form -and $x.Code -eq 0 -and @($lines -match '^\d\d:\d\d /review-code panel$').Count -eq 0 -and @($lines -match '^\d\d:\d\d .*review-code panel$').Count -eq 1) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
 }
 Write-Host "(L30) the real index folder"
-Assert-Coord 'L30 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination: its listing and the SHA-256 of every file outside sessions/, or still absent) is unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
+Assert-Coord 'L30 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
 Write-Host "(F5) git below 2.38 is refused at the start"
 $gitOldDir = Join-Path $root 'gitstub-floor-old'
 [void][IO.Directory]::CreateDirectory($gitOldDir)

@@ -7,7 +7,9 @@
 # ruling differs, the row is changed (C12: the session token, 8 private cases
 # became 54 cases for the "only ids bind" rule) or the example data is made
 # generic (paths, names).
-# The real-profile fence (C21) lists and hashes the user's real index folder
+# The real-profile fence (C21) snapshots the user's real index folder and flags what this run wrote (a removed file,
+# a changed earlier byte, added text naming this run's scratch root; a live coordinator's appends are tolerated)
+# - the folder is
 # (COORD_INDEX_DIR as it was before this run, else $HOME/.claude/coordination):
 # every file and folder in it except the sessions/ subfolder, which a live
 # scope guard on the host writes to at random.
@@ -47,7 +49,7 @@
 #   C11 the optional Model column: read by name, '' when absent; a row of the
 #       template's Tracks table that lacks the Model cell is ragged and throws
 #   The scope guard helpers. The whole run uses a scratch COORD_INDEX_DIR and
-#   ends by comparing the real index folder with its digest from the start:
+#   ends by checking the real index folder against its snapshot from the start:
 #   C12 Get-CoordIndexDir, Get-CoordIndexPath, Get-CoordSessionToken,
 #       Test-CoordWindows
 #   C13 Invoke-CoordGitBounded: success, failure, UTF-8, a hung git (stub
@@ -64,7 +66,7 @@
 #   C19 Read-CoordLedgerTracksBounded: 16 KiB, 78 KiB, 900 KiB, after the cap,
 #       cut by the cap, no end before EOF, missing column, ragged row
 #   C20 Test-CoordInScope -IgnoreCase
-#   C21 the real index folder is byte-unchanged at the end of the run
+#   C21 the run left nothing of its own in the real index folder
 #   C22 -TimeoutMs on Get-CoordIndexedLedgers and Read-CoordLedgerTracksBounded:
 #       a normal read under a bound is unchanged; 0 or negative is TimedOut, no read
 #   C23 Read-CoordStreamBounded on a pipe whose read never completes (TimedOut
@@ -94,7 +96,7 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('coord-common-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void][IO.Directory]::CreateDirectory($root)
 # Nothing in this run may reach the real index folder.
-$realIndexBefore = Get-CoordRealIndexDigest
+$realIndexBefore = Get-CoordRealIndexSnapshot
 $null = New-CoordScratchIndex $root
 
 Write-Host "(C1) globs"
@@ -1295,36 +1297,37 @@ Assert-Coord 'C25 the git on PATH answers 2.45.1.windows.1: ok' ($x.Ok -and $x.V
 $x = Invoke-GitFloorWithStub $stubJunk
 Assert-Coord 'C25 the git on PATH answers text that is no version: refused as unreadable' (-not $x.Ok -and $x.Error.Contains('could not be read')) "ok=$($x.Ok) error=$($x.Error)"
 
-Write-Host "(C21-pre) what the real-index digest covers"
-# The digest function itself, pointed at a scratch folder through the fixture's
-# $coordRealIndexDir (restored right after). It must change when a top-level
-# file or another folder changes, and stay the same when only sessions/ changes.
+Write-Host "(C21-pre) what the real-index snapshot and leak rule cover"
+# The snapshot and leak functions themselves, pointed at a scratch folder through the fixture's
+# $coordRealIndexDir (restored right after). A live coordinator's append or new file is tolerated; a removal, a
+# rewrite and added text naming the marker are leaks; sessions/ is not read at all.
 $savedRealIndexDir = $coordRealIndexDir
 try {
     $dg = Join-Path $root 'digest-idx'
+    $dgMarker = Join-Path $root 'scratch-repo'
     $coordRealIndexDir = $dg
-    Assert-Coord 'C21 digest of a folder that does not exist: absent' ((Get-CoordRealIndexDigest) -ceq 'index folder: absent')
+    Assert-Coord 'C21 snapshot of a folder that does not exist: empty, and no leak while it stays absent' ((@((Get-CoordRealIndexSnapshot).Keys).Count -eq 0) -and ((Get-CoordRealIndexLeak -Before (Get-CoordRealIndexSnapshot) -Marker $dgMarker) -ceq ''))
     Set-CoordTextFile (Join-Path $dg 'a.ledgers') "one`n"
     Set-CoordTextFile (Join-Path $dg 'other.txt') "x`n"
     Set-CoordTextFile (Join-Path $dg 'sub\f.txt') "y`n"
     Set-CoordTextFile (Join-Path $dg 'sessions\s1.json') "{}`n"
-    $d0 = Get-CoordRealIndexDigest
-    Set-CoordTextFile (Join-Path $dg 'sessions\s1.json') "{ changed }`n"
+    $d0 = Get-CoordRealIndexSnapshot
+    Set-CoordTextFile (Join-Path $dg 'sessions\s1.json') "{ changed $dgMarker }`n"
     Set-CoordTextFile (Join-Path $dg 'sessions\s2.json') "{}`n"
-    Assert-Coord 'C21 a file changed or added only under sessions/ does not change the digest' ((Get-CoordRealIndexDigest) -ceq $d0)
-    Set-CoordTextFile (Join-Path $dg 'a.ledgers') "two`n"
-    $d1 = Get-CoordRealIndexDigest
-    Assert-Coord 'C21 a changed top-level *.ledgers file changes the digest' ($d1 -cne $d0)
+    Assert-Coord 'C21 a file changed or added only under sessions/ is not read: no leak' ((Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker) -ceq '') (Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker)
+    [IO.File]::AppendAllText((Join-Path $dg 'a.ledgers'), "two`n")
+    Set-CoordTextFile (Join-Path $dg 'new.txt') "z`n"
+    Assert-Coord 'C21 a line appended to a top-level *.ledgers file and a new file, neither naming the marker: no leak' ((Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker) -ceq '') (Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker)
     Set-CoordTextFile (Join-Path $dg 'other.txt') "xx`n"
-    Assert-Coord 'C21 a changed top-level file that is not *.ledgers changes the digest' ((Get-CoordRealIndexDigest) -cne $d1)
-    $d2 = Get-CoordRealIndexDigest
+    Assert-Coord 'C21 a changed top-level file that is not *.ledgers is a leak (rewritten)' ((Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker) -match 'rewritten: .*other\.txt') (Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker)
+    Set-CoordTextFile (Join-Path $dg 'other.txt') "x`n"
     Set-CoordTextFile (Join-Path $dg 'sub\f.txt') "yy`n"
-    Assert-Coord 'C21 a changed file in another subfolder changes the digest' ((Get-CoordRealIndexDigest) -cne $d2)
+    Assert-Coord 'C21 a changed file in another subfolder is a leak (rewritten)' ((Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker) -match 'rewritten: .*f\.txt') (Get-CoordRealIndexLeak -Before $d0 -Marker $dgMarker)
 }
 finally { $coordRealIndexDir = $savedRealIndexDir }
 
 Write-Host "(C21) the real index folder"
-Assert-Coord 'C21 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination: its listing and the SHA-256 of every file outside sessions/, or still absent) is unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
+Assert-Coord 'C21 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
 Write-CoordUncheckedSummary
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

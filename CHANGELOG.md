@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.2.1 - 2026-10-30
+
+Fixes the open items of the 0.2.0 port; no new commands.
+
+- **coord-status**: lists a finding whose id carries a tag or a carry date (`F3 (2026-10-28) from ...`,
+  `F22 (coordinator): ...`) and a Queue id with a `(yyyy-MM-dd)` tag; reads the ledger once; lists an
+  indented or oddly spaced unticked Owed check; the Queue gate is found after `Owner:`, `owner :`, a
+  tab or `source:`; an `[after Q<n>]` gate that names no line, or sits in a cycle, reads `?`; under
+  `-Verify` a Repo cell that is not a folder on this machine reads `unknown` (no longer the current
+  folder's repository), and a PR gate says which repository was asked.
+- **repo-snapshot**: a `-Repos` path that is not a git repo, an explicit `-Ledger` that is missing and
+  a `-Base` ref that does not exist each add attention; a finished track whose branch is gone no
+  longer does; `-Base` (default `origin/main`) names the base.
+- **Git floor**: `coord-brief`, `coord-handoff`, `coord-log`, `merge-verify`, `slot-check` and
+  `repo-snapshot` refuse to start on a git older than 2.38 or one whose version cannot be read.
+- **coord-handoff**: a `-NewSession` name made only of the Hangul fillers, U+034F, U+FE0F or U+17B5 is refused.
+- **coord-log**: expands every `{now}` in its text (as `coord-set` does) and reuses the shared ledger-argument check.
+- **coord-set**: refuses a fullwidth-colon time and `10h22`; refuses U+FEFF and bidi marks in a cell;
+  `-Repo` matches a bare-name Repo cell by its text.
+- **Tests**: the six script suites no longer fail when a live coordinator appends to the real index (their
+  fence flags what the run wrote, not every byte; the scope-guard suite still compares the real index byte for byte).
+- **Known and left**: in `coord-status` a `#<n>` in the Status text is still taken as the row's PR
+  when the PR cell is empty, a repeated finding id is listed once per line, and an inline
+  `| outcome: dropped` does not close a finding; `coord-set` does not refuse a dotted `10.22`;
+  `coord-log` has no way to write a literal `{now}` and writes bidi and BOM characters as typed;
+  `coord-set` and `coord-status` do not check the git floor. Ported as merged upstream,
+  with known limits: `-Verify` can ask the current repository when a Repo cell is a relative folder
+  name that exists under the current folder, and a UNC Repo cell can block; a Queue item whose text
+  contains `Owner:` before its gate loses the gate (reads `?`); the suites' real-index fence flags only
+  what names the run's scratch folder; the `unverified:` line is cut at 140 characters. More in the
+  README, "What is not done".
+
+- **Port notes**: `coord-set`'s Repo-cell path check (`Get-RepoFull`) is stricter than the private source on purpose: it rejects `, ; ( )`, device
+  paths and a bare drive root, and accepts `/...` paths off Windows.
+
 ## 0.2.0 - 2026-10-29
 
 The mechanical checks are code now. Adds PowerShell scripts and an edit-time scope guard hook, with
@@ -34,7 +69,7 @@ where PowerShell is missing.
 - **Tests** (`tests/`): one suite per script and for the guard, a scrub suite for private content,
   and `run.ps1`. They run under Windows PowerShell 5.1.
 - **Requirements**: git 2.38 or later; PowerShell. Verified on Windows 11 with Windows PowerShell
-  5.1 only. **PowerShell 7, macOS and Linux are unverified.** The git floor is not checked at start.
+  5.1 only. **PowerShell 7, macOS and Linux are unverified.** The git floor is not checked at start (0.2.0 only; 0.2.1 checks it in six scripts).
 - **Known and left**: a `-NewSession` name made only of characters that draw nothing (a Hangul
   filler, a variation selector) is not refused. `repo-snapshot` can read a clean repo when a
   `-Repos` path is a typo or an explicit `-Ledger` is missing (`attention none`); a finished track

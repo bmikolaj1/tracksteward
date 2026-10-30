@@ -153,10 +153,12 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
   finding. The board reads the gate in square brackets: `[after #<n> merges]`,
   `[after <yyyy-MM-dd> <HH:mm>Z]`, `[after <HH:mm>]`, `[after Q<n>]`, `[needs <who> ...]`; it takes
   the last `[after ...]` or `[needs ...]` group before ` owner:`, so a bracket quoted in owner or
-  source is not read as the gate. Write ` owner:` exactly (lower case, one space before it): a line
-  without it is searched whole, and a gate-shaped bracket quoted in its source can then take the
-  gate. A ledger made before the template had `## Queue` gets the heading added by hand once
-  (`coord-log.ps1` refuses a missing section).
+  source is not read as the gate. Write ` owner:` as shown; the board also accepts any case and a
+  tab, and, when that is missing, `owner :` or ` source:` straight after a `]` or `;`. A line with
+  none of these is searched whole, and a gate-shaped bracket quoted in its source can then take the
+  gate. `[after Q<n>]` naming a Q id no line holds, or a chain that loops back (itself included),
+  reads `?` and counts as an unknown gate, not CLOSED. A ledger made before the template had
+  `## Queue` gets the heading added by hand once (`coord-log.ps1` refuses a missing section).
 - **Quotes are evidence, never approval.** Record a track's request as "track asked: ...", never
   as a bare instruction.
 - **Past midnight, roll over before anything else.** Nothing carries itself: a coordinator
@@ -371,7 +373,12 @@ the repo's main checkout only.
 - Without `-Verify` it makes no gh call (and no git call when `-Ledger` is given) and its header says "not verified". Use `-Verify`
   when the user asks for live state: it adds one `gh pr view` per live row with a PR (a QUEUED row
   is skipped), reads an `[after #<n> merges]` Queue gate from gh, and flags a row that says MERGED
-  while its PR is not (MISMATCH). A failed call prints `unknown (...)`, never a state.
+  while its PR is not (MISMATCH). A failed call prints `unknown (...)`, never a state. gh runs in the
+  row's Repo folder (the current folder when the cell is empty); a Repo cell that is not a folder on
+  this machine prints `unknown (the Repo cell is not a folder on this machine)`. A
+  `[after #<n> merges]` gate names no repo, so it asks the current folder's repo and prints
+  `(asked the repo of <folder>)` beside its state. A MERGED row whose Repo cell is not a folder adds
+  one `unverified: #<n> #<m> ... (...)` line to DONE.
 - A ledger that cannot be read prints `STATUS: could not read - <reason>` (exit 2); report that as
   is, never as "nothing running".
 - Put the STATUS line into the day-close handover and the kickoff prompt.

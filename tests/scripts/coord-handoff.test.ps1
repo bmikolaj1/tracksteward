@@ -62,7 +62,8 @@
 #       Write-CoordLedgerSwap call; a refused handoff leaves the ledger
 #       byte-unchanged (every Test-Refused row above)
 #   H17 no temp or lock files, no global functions left (runs last)
-#   H18 the real index folder is byte-unchanged
+#   H18 the real index folder shows no removal, rewrite or added text naming this run's scratch root; a live
+#       coordinator's append or new file is tolerated (H18a-g check the rule)
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\coord-handoff.test.ps1 [-ScriptPath <mutant copy>]
 #       (a mutant copy needs coord-common.ps1 next to it: it dot-sources it)
@@ -88,7 +89,7 @@ $global:hDateHook = $null
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('coord-handoff-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void][IO.Directory]::CreateDirectory($root)
 # Nothing in this run may reach the real index folder.
-$realIndexBefore = Get-CoordRealIndexDigest
+$realIndexBefore = Get-CoordRealIndexSnapshot
 $null = New-CoordScratchIndex $root
 
 $script:caseN = 0
@@ -1170,7 +1171,35 @@ Assert-Coord 'H17 no global git, gh, Get-Date or Start-Sleep function is left be
 
 # =============================================================================
 Write-Host "(H18) the real index folder"
-Assert-Coord 'H18 the real index folder ($HOME\.claude\coordination, *.ledgers and sessions\) is byte-unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
+# The rule, on a scratch folder first: a live coordinator appending a line or registering a file while the suite runs
+# is tolerated; a removal, a rewrite, or any added text that names this run's scratch root is a leak. sessions\ is not
+# read by the snapshot (a live scope guard writes there), so the files under test sit in sub\.
+$h18Dir = Join-Path $root 'h18-index'
+[void][IO.Directory]::CreateDirectory((Join-Path $h18Dir 'sub'))
+[void][IO.Directory]::CreateDirectory((Join-Path $h18Dir 'sessions'))
+[IO.File]::WriteAllText((Join-Path $h18Dir '2026-10-30.ledgers'), "C:\Fx\a\.claude\coordination\2026-10-30.md`n")
+[IO.File]::WriteAllText((Join-Path $h18Dir 'sub\s1'), "one`n")
+$h18Snap = Get-CoordRealIndexSnapshot -Dir $h18Dir
+$h18Marker = Join-Path $root 'scratch-repo'
+function Get-H18Leak { param([string]$Marker = $h18Marker) Get-CoordRealIndexLeak -Before $h18Snap -Marker $Marker -Dir $h18Dir }
+Assert-Coord 'H18a nothing changed: no leak' ((Get-H18Leak) -ceq '') (Get-H18Leak)
+[IO.File]::AppendAllText((Join-Path $h18Dir '2026-10-30.ledgers'), "C:\Fx\b\.claude\coordination\2026-10-30.md`n")
+[IO.File]::WriteAllText((Join-Path $h18Dir 'sub\s2'), "two`n")
+Assert-Coord 'H18b a live coordinator appending a line and registering a new file (neither names the scratch root): no leak' ((Get-H18Leak) -ceq '') (Get-H18Leak)
+[IO.File]::AppendAllText((Join-Path $h18Dir 'sub\s1'), "$h18Marker\x`n")
+Assert-Coord 'H18c an appended line that names the scratch root (marker in another case) is a leak' ((Get-H18Leak $h18Marker.ToUpper()) -match 'names this run.*s1') (Get-H18Leak $h18Marker.ToUpper())
+[IO.File]::WriteAllText((Join-Path $h18Dir 'sub\s1'), "one`n")
+[IO.File]::WriteAllText((Join-Path $h18Dir 'sub\s3'), "x $($h18Marker.Replace('\','/'))/y`n")
+Assert-Coord 'H18d a new file that names the scratch root with forward slashes is a leak' ((Get-H18Leak) -match 'names this run.*s3') (Get-H18Leak)
+Remove-Item -LiteralPath (Join-Path $h18Dir 'sub\s3')
+[IO.File]::WriteAllText((Join-Path $h18Dir 'sub\s1'), "ONE`n")
+Assert-Coord 'H18e an earlier line rewritten is a leak' ((Get-H18Leak) -match 'rewritten: .*s1') (Get-H18Leak)
+Remove-Item -LiteralPath (Join-Path $h18Dir 'sub\s1')
+Assert-Coord 'H18f a removed file is a leak' ((Get-H18Leak) -match 'removed: .*s1') (Get-H18Leak)
+[IO.File]::WriteAllText((Join-Path $h18Dir 'sub\s1'), "one`n")
+[IO.File]::WriteAllText((Join-Path $h18Dir 'sessions\g1'), "$h18Marker`n")
+Assert-Coord 'H18g a file under sessions\ that names the scratch root is not read: no leak' ((Get-H18Leak) -ceq '') (Get-H18Leak)
+Assert-Coord 'H18 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
 Write-Host "(F5) git below 2.38 is refused at the start"
 $gitOldDir = Join-Path $root 'gitstub-floor-old'
 [void][IO.Directory]::CreateDirectory($gitOldDir)

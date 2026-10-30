@@ -77,7 +77,7 @@
 #       has a Tracks table that ends the file or starts after 1 MiB; passes a
 #       900 KiB ledger; the index's own limits (8 entries, 64 KiB, torn last line,
 #       case and separators, CRLF)
-#   B17 the real index folder is byte-unchanged at the end of the run
+#   B17 the run left nothing of its own in the real index folder
 #   B18 the public walkthrough end to end in a fixture: the ledger from the
 #       real template, coord-log.ps1 -Register, a Baseline row and a Tracks row,
 #       render, fill every slot the way the skill says, -Check prints the pointer
@@ -103,7 +103,7 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path ([System.IO.Path]::GetTempPath()) ('coord-brief-test-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void][IO.Directory]::CreateDirectory($root)
 # Nothing in this run may reach the real index folder.
-$realIndexBefore = Get-CoordRealIndexDigest
+$realIndexBefore = Get-CoordRealIndexSnapshot
 $null = New-CoordScratchIndex $root
 # Every call runs from inside this repo, so a default ledger could only ever be
 # the fixture's own.
@@ -937,7 +937,7 @@ foreach ($v in $variants) {
 # ---------------------------------------------------------------- B17 the real index folder
 # After every row that registers a ledger (B18's coord-log.ps1 -Register, B20), as the header says.
 Write-Host '(B17) the real index folder'
-Assert-Coord 'B17 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination: its listing and the SHA-256 of every file outside sessions/, or still absent) is unchanged by this run' ((Get-CoordRealIndexDigest) -ceq $realIndexBefore) "before:`n$realIndexBefore`nafter:`n$(Get-CoordRealIndexDigest)"
+Assert-Coord 'B17 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
 
 Write-Host "(F5) git below 2.38 is refused at the start"
 $gitOldDir = Join-Path $root 'gitstub-floor-old'
