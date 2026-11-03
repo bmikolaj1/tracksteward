@@ -85,7 +85,10 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
   `-Repo <full path>` picks the row when a name is on rows of two repos). From Bash use the
   `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/coord-set.ps1")" ...`
   form of `coord-log.ps1`. `coord-log.ps1` also expands every `{now}` in its text (the same clock read as the
-  stamp it puts on the line). An Owed-check tick is not scripted: tick it by
+  stamp it puts on the line). In both scripts `{{now}}` (lower case, exactly) is the escape: it is
+  written as the literal `{now}`. Both refuse a `-Text` that holds a BOM (U+FEFF) or a bidi mark
+  (U+200E, U+200F, U+202A-U+202E, U+2066-U+2069), since those draw nothing or reorder the line;
+  retype it without them. An Owed-check tick is not scripted: tick it by
   hand with a time from `Get-Date`. An outcome line stays an appended line (`coord-log.ps1`). The
   script changes only that cell and keeps every other cell and line (a file that mixes LF and CRLF
   comes back with one, as with `coord-log.ps1`), edits the ledger it is given, canonical or not,
