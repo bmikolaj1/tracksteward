@@ -47,7 +47,8 @@
 #     group that closes on its line, such as a glob lib/{location,auth}/**,
 #     is not a slot; see Get-OpenSlots), every fixed line of the template (TRACK, THIS FILE, MERGE ORDER,
 #     ACK, WIP, REPORT BACK ...; not the optional SUPERSEDES and CROSS-REPO) is
-#     still there, the row's Repo cell is a full path on a local fixed disk (the guard binds
+#     still there and every such label still has text after it (on its line or the lines right under it, up to a blank
+#     line or the next label line; a label cut to its bare name, or its instructions removed, is refused), the row's Repo cell is a full path on a local fixed disk (the guard binds
 #     the row by it), and the ledger is one the scope guard reads: today's
 #     canonical ledger (Test-CoordLedgerCanonical), among the entries of
 #     today's index (Get-CoordIndexedLedgers; coord-log.ps1 -Register puts it
@@ -288,7 +289,7 @@ function Get-OpenSlots([string]$Text) {
 }
 # The labels the brief's fixed lines start with (TRACK, THIS FILE, FILE SCOPE,
 # MERGE ORDER, ACK, WIP, REPORT BACK ...). -Check wants each one at the start of
-# a line, so a brief cut down to its first line does not pass. SUPERSEDES and
+# a line with text after it (-Check), so a brief cut down to its first line, or to its labels, does not pass. SUPERSEDES and
 # CROSS-REPO are the template's optional lines.
 $tplLabels = @($tplBlock | ForEach-Object { if ($_ -cmatch '^([A-Z][A-Z -]{2,}?)\s*[:,(]') { $Matches[1] } } |
         Where-Object { $_ -cne 'SUPERSEDES' -and $_ -cne 'CROSS-REPO' } | Sort-Object -Unique -CaseSensitive)
@@ -301,6 +302,29 @@ if ($Check) {
     if ($first -cne $identity) { Exit-Refused "$briefPath does not belong to row '$trackCell' in $repoFull (its first line is '$first')" }
     $lost = @($tplLabels | Where-Object { $bt -cnotmatch ('(?m)^' + [regex]::Escape($_) + '\s*[:,(]') })
     if ($lost.Count) { Exit-Refused "$briefPath has lost the template's line(s): $($lost -join ', ')" }
+    # A label must also be filled: what follows it on its line (after the first colon when there is one, else after the label's
+    # delimiter) plus the lines up to the next blank line or label line may not be blank. Every line that starts with the label is
+    # judged. A label's text starts on its line or the lines right under it (a blank line ends the block). A brief cut down to its
+    # labels, instructions gone, kept every label above and passed.
+    $btLines = $bt -split '\r\n|\r|\n'
+    $empty = @($tplLabels | Where-Object {
+            $labRx = '^' + [regex]::Escape($_) + '\s*[:,(]'
+            $labEmpty = $false
+            for ($ci = 0; $ci -lt $btLines.Count; $ci++) {
+                $lm = [regex]::Match($btLines[$ci], $labRx)
+                if (-not $lm.Success) { continue }
+                # not $rest: that is the script's -Rest parameter, a string[]
+                $afterLabel = $btLines[$ci].Substring($lm.Length - 1)
+                $colonAt = $afterLabel.IndexOf(':')
+                $afterLabel = if ($colonAt -ge 0) { $afterLabel.Substring($colonAt + 1) } else { $afterLabel.Substring(1) }
+                $labBody = New-Object System.Collections.Generic.List[string]
+                $labBody.Add($afterLabel)
+                for ($cj = $ci + 1; $cj -lt $btLines.Count -and $btLines[$cj].Trim() -and $btLines[$cj] -cnotmatch '^[A-Z][A-Z -]{2,}?\s*[:,(]'; $cj++) { $labBody.Add($btLines[$cj]) }
+                if (-not (($labBody -join '').Trim())) { $labEmpty = $true }
+            }
+            $labEmpty
+        })
+    if ($empty.Count) { Exit-Refused "$briefPath has empty template line(s), their text removed: $($empty -join ', ')" }
     $left = @(Get-OpenSlots $bt)
     if ($left.Count) { Exit-Refused "$($left.Count) template slot(s) left in ${briefPath}: $(($left | ForEach-Object { '{' + $_ + '}' }) -join ', ')" }
     # The pointer goes out only for a ledger the scope guard reads: the same

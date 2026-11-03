@@ -15,10 +15,10 @@
 # after 15 minutes says so (the skill has an ACKed row set to RUNNING; a note such as "no ACK yet" is not an ACK); a
 # stamp later than the clock is yesterday's.
 # The ledger is read once; the Tracks table is parsed from those lines. A row's PR is its PR cell only (a `#<n>` in the
-# Status text is not taken). A finding id repeated on several lines is listed once, at its first open line; an inline
+# Status text is not taken). A finding (its id plus its carry date: `F3 (2026-10-28)` is not today's `F3`) repeated on several lines is listed once, at its first open line; an inline
 # `| outcome: <text>` that ends the line, its text not starting with PENDING, closes that line (a pipe after it leaves the line open).
 # Also WAITING: Findings F<n> (followed by `from <track>` or a colon) with no later `F<n> outcome:` line (an id may be followed by parenthesised tags, a carry
-# date or a track tag, nested at most two levels deep, ignored when matching and not printed), unticked Owed checks. Also BLOCKED: an open Merge
+# date or a track tag, nested at most two levels deep, not printed; the first yyyy-MM-dd in the tags is the carry date and is part of the finding's identity, any other tag text is ignored when matching, and an outcome line closes the finding whose date it repeats, `F3 outcome:` being today's F3), unticked Owed checks. Also BLOCKED: an open Merge
 # slot no live row carries. The template's placeholders `1. (none)` and `- [ ] (none)` (any case, with any number of
 # `(from <date>)` tails) are not items. QUEUED also takes the `Q<n>` lines of the Queue section with no `Q<n> outcome:`
 # line (a Queue id and its outcome line take no tag or exactly one `(yyyy-MM-dd)` tag, ignored and not printed); the gate is the LAST bracket group shaped like one, `[after ...]` or `[needs ...]`, before ` owner:` (the
@@ -38,7 +38,7 @@
 #   Repo folder (the current folder when the cell is empty); a Repo cell that is not a folder on this machine prints
 #   `unknown (the Repo cell is not a folder on this machine)` and gh is not asked. A `[after #<n> merges]` gate names no
 #   repo, so it asks the repo of the current folder and prints `(asked the repo of <folder>)` beside its state. A MERGED
-#   row whose Repo cell is not a folder adds one `unverified: #<n> ... (...)` line to DONE.
+#   row whose Repo cell is not a folder adds one `unverified: #<n> ... (...)` line to DONE; one whose gh call fails adds `unverified: #<n> (gh failed: <why>; L<n>)` there.
 # -Full: no 2,000-character cap. -Group <name>: only that group, uncapped.
 # -Now 'yyyy-MM-dd HH:mm': the clock (tests); default the local clock.
 # Without -Ledger: today's ledger, from the repo's MAIN checkout only (from a linked worktree or another repo pass
@@ -243,6 +243,10 @@ if ($Verify) {
             $mismatch++
             $g.done += "    MISMATCH: #$pr is $($j.Data.state), the row says MERGED (L$($rowLine[$i]))"
         }
+        elseif (-not $j.Ok) {
+            # a gh failure is not a pass: say so (the PR could not be checked), as the live rows do with "unknown"
+            $g.done += (Get-Trunc "    unverified: #$pr (gh failed: $($j.Error); L$($rowLine[$i]))" 140)
+        }
     }
     # one line for all of them: a MERGED row whose Repo cell is no folder here cannot be checked, and says so once
     if ($unverified.Count) { $g.done += (Get-Trunc ('    unverified: ' + ($unverified -join ' ') + ' (the Repo cell is not a folder on this machine)') 140) }
@@ -256,20 +260,30 @@ foreach ($s in $openSlots) {
     }
 }
 
-# ---- Findings: F<n> from ... or F<n>: ... with no later "<id> outcome:" line (F<n>: outcome: closes too); a repeated id is listed once (its first open line), and an inline "| outcome: <text>" ending the line, its text not starting with PENDING, closes that line
+# ---- Findings: F<n> from ... or F<n>: ... with no later "<id> outcome:" line (F<n>: outcome: closes too; the id includes its carry date, see Get-FindKey); a repeated id is listed once (its first open line), and an inline "| outcome: <text>" ending the line, its text not starting with PENDING, closes that line
 $pending = 0
 $findEntries = Get-SectionLines $secFind
+# A finding is keyed by its id AND its carry date: "F3 (2026-10-28)" is yesterday's F3, carried, and is a different finding from
+# today's "F3" (the numbers restart each day). The date is the first yyyy-MM-dd anywhere in the parenthesised tags (a second carry
+# keeps its first date), so "(2026-10-28, carried)" keys the same; a tag with no date ("(F-g)", "(coordinator, measured)") is not part
+# of the key. An outcome line closes only the finding whose date it repeats: "F3 outcome:" is today's F3.
+function Get-FindKey([string]$Id, [string]$Tags) {
+    if ($Tags -match '(\d{4}-\d\d-\d\d)') { return "$Id ($($Matches[1]))" }
+    return $Id
+}
 $closed = @{}
 foreach ($e in $findEntries) {
-    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)(?:\s+\((?:[^()]|\([^()]*\))*\))*:?\s+outcome:') { $closed[$Matches[1]] = $true }
+    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)((?:\s+\((?:[^()]|\([^()]*\))*\))*):?\s+outcome:') { $closed[(Get-FindKey $Matches[1] $Matches[2])] = $true }
 }
 $listed = @{}
 foreach ($e in $findEntries) {
-    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)(?:\s+\((?:[^()]|\([^()]*\))*\))*(?:\s+from\s|:\s)' -and -not $closed.ContainsKey($Matches[1]) -and -not $listed.ContainsKey($Matches[1])) {
+    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)((?:\s+\((?:[^()]|\([^()]*\))*\))*)(?:\s+from\s|:\s)') {
         $id = $Matches[1]
+        $key = Get-FindKey $Matches[1] $Matches[2]
+        if ($closed.ContainsKey($key) -or $listed.ContainsKey($key)) { continue }
         # an inline tail "| outcome: <text>" (end of line, not starting with PENDING) closes this line (the template's own shape, edited in place)
         if ($e[1] -match '\|\s*outcome:\s*([^|]*)$' -and $Matches[1].Trim() -and $Matches[1].Trim() -notmatch '^PENDING') { continue }
-        $listed[$id] = $true
+        $listed[$key] = $true
         $since = if ($e[1] -match '^(\d\d:\d\d)') { $Matches[1] } else { '?' }
         $what = ($e[1] -replace '^\d\d:\d\d\s+c?F\d+(?:\s+\((?:[^()]|\([^()]*\))*\))*(?:\s+from\s+|:\s+)', '')
         $pending++

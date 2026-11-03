@@ -4,7 +4,8 @@
 # call, one verdict.
 #
 #   1. `gh pr view`: the PR must be MERGED (else NOT MERGED, nothing touched).
-#   2. `git fetch --prune origin`; the merge commit must be an ancestor of
+#   2. `git fetch --prune origin`, then the base alone by its exact name (a narrowed fetch
+#      refspec cannot leave origin/<base> stale); the merge commit must be an ancestor of
 #      refs/remotes/origin/<base>. Full refs everywhere: a local branch or tag
 #      named origin/<base> would otherwise win the name lookup.
 #   3. The remote head branch. Its tip is read by its exact ref (`git ls-remote
@@ -121,6 +122,10 @@ $baseRef = "refs/remotes/origin/$base"
 
 $f = Invoke-CoordGit $repoRoot @('fetch', '--quiet', '--prune', 'origin')
 if ($f.Code -ne 0) { Exit-CouldNotCheck "git fetch origin failed (exit $($f.Code))" }
+# The configured refspec may skip the base (a narrowed remote.origin.fetch): origin/<base> would then be
+# missing or stale and every check below would read it. Fetch the base by its exact name into its tracking ref.
+$fb = Invoke-CoordGit $repoRoot @('fetch', '--quiet', 'origin', "+refs/heads/${base}:$baseRef")
+if ($fb.Code -ne 0) { Exit-CouldNotCheck "git fetch of origin/$base failed (exit $($fb.Code))" }
 
 $problems = New-Object System.Collections.Generic.List[string]
 

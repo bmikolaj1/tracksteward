@@ -39,7 +39,7 @@
 #   B6  an existing brief: refused without -Force, unchanged; -Force keeps the
 #       old one as <file>.<stamp>.bak, a second -Force keeps both copies, and
 #       an existing .bak of the same second (a decoy) is never overwritten
-#   B7  -Check: names every slot left and exits 2; each coordinator slot of the
+#   B7  -Check (B7g: a brief with every label kept but its text removed, or a label cut to its bare delimiter, is refused): names every slot left and exits 2; each coordinator slot of the
 #       template, left alone, refuses by itself; a damaged slot (no closing
 #       brace, no opening brace, spaces, other case) still refuses; braces inside
 #       filled text do not; prints exactly one pointer line, and nothing else,
@@ -458,6 +458,40 @@ foreach ($bad in @('{their words', 'their words}', '{ their   words }', '{THEIR 
 [System.IO.File]::WriteAllText($p7, (Set-SlotsFilled $fresh7 -With 'quote their words as they came {see below}'), $coordUtf8)
 $r = Invoke-Brief @{ Track = 'T5'; Check = $true; Ledger = $L7 }
 Assert-Coord 'B7 filled text that holds the words of a slot, with no brace next to them, passes' (Test-CheckPointer $r $p7) $r.Out
+
+# B7g (F12) a brief that keeps the identity line and every label but loses what stands after the label (the instructions) is refused,
+# naming the empty labels; one gutted label alone refuses by itself
+function Get-GuttedBrief([string]$Text, [string[]]$Only = @())
+{
+    $out = New-Object System.Collections.Generic.List[string]
+    $skip = $false
+    foreach ($ln in ($Text -split '\r?\n')) {
+        if ($skip) { if ($ln.Trim() -and $ln -cnotmatch '^[A-Z][A-Z -]{2,}?\s*[:,(]') { continue } else { $skip = $false } }
+        if ($ln -cmatch '^([A-Z][A-Z -]{2,}?)\s*[:,(]' -and $Matches[1] -cne 'SUPERSEDES' -and $Matches[1] -cne 'CROSS-REPO' -and ($Only.Count -eq 0 -or $Only -ccontains $Matches[1])) {
+            $out.Add($ln.Substring(0, $ln.IndexOf(':') + 1)); $skip = $true; continue
+        }
+        $out.Add($ln)
+    }
+    return ($out -join "`n")
+}
+[System.IO.File]::WriteAllText($p7, (Get-GuttedBrief $filled7), $coordUtf8)
+$r = Invoke-Brief @{ Track = 'T5'; Check = $true; Ledger = $L7 }
+Assert-Coord 'B7g every label kept, every instruction gone: refused naming the empty labels (MERGE ORDER, WIP, REPORT BACK), no pointer line' ((Test-CheckRefused $r) -and $r.Out.Contains('MERGE ORDER') -and $r.Out.Contains('WIP') -and $r.Out.Contains('REPORT BACK')) $r.Out
+foreach ($lab in @('MERGE ORDER', 'WIP', 'REPORT BACK', 'BLOCKER', 'FILE SCOPE')) {
+    [System.IO.File]::WriteAllText($p7, (Get-GuttedBrief $filled7 -Only @($lab)), $coordUtf8)
+    $r = Invoke-Brief @{ Track = 'T5'; Check = $true; Ledger = $L7 }
+    Assert-Coord "B7g only $lab emptied: refused, naming it" ((Test-CheckRefused $r) -and $r.Out.Contains($lab)) $r.Out
+}
+# a label line cut to its bare delimiter (no colon at all) is empty too; a second, empty line of a label is judged as well
+[System.IO.File]::WriteAllText($p7, ((Get-GuttedBrief $filled7 -Only @('FILE SCOPE')).Replace('FILE SCOPE, yours:', 'FILE SCOPE,')), $coordUtf8)
+$r = Invoke-Brief @{ Track = 'T5'; Check = $true; Ledger = $L7 }
+Assert-Coord 'B7g FILE SCOPE cut to "FILE SCOPE," (no colon): refused, naming it' ((Test-CheckRefused $r) -and $r.Out.Contains('FILE SCOPE')) $r.Out
+[System.IO.File]::WriteAllText($p7, ($filled7 + "`nWIP:`n"), $coordUtf8)
+$r = Invoke-Brief @{ Track = 'T5'; Check = $true; Ledger = $L7 }
+Assert-Coord 'B7g a filled WIP line plus a second, empty "WIP:" line: refused, naming WIP' ((Test-CheckRefused $r) -and $r.Out.Contains('WIP')) $r.Out
+[System.IO.File]::WriteAllText($p7, $filled7, $coordUtf8)
+$r = Invoke-Brief @{ Track = 'T5'; Check = $true; Ledger = $L7 }
+Assert-Coord 'B7g control: the filled brief still passes' (Test-CheckPointer $r $p7) $r.Out
 
 # ---------------------------------------------------------------- B8 ledger problems
 Write-Host '(B8) ledger problems'
