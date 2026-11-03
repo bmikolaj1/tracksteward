@@ -88,6 +88,8 @@
 #       cygpath -w a /c/... script path is not found, without MSYS_NO_PATHCONV=1
 #       the leading / is rewritten (UNCHECKED without a Git Bash)
 #   L35 {now} in -Text: every one becomes the stamp's HH:mm (as coord-set.ps1)
+#   L36 {{now}} in -Text is written as a literal {now}, not expanded
+#   L37 a BOM or a bidi mark in -Text is refused, as coord-set.ps1 refuses it
 #   L34 the Queue section: a Q<n> line and an outcome line append like any
 #       other; a ledger with no ## Queue is refused; the section list names Queue
 #
@@ -489,6 +491,21 @@ $mL = @($gotL | ForEach-Object { [regex]::Match($_, '^(\d\d:\d\d) ACK at (\d\d:\
 $okL = ($mL.Count -eq 1) -and ($mL[0].Groups[1].Value -ceq $mL[0].Groups[2].Value) -and ($mL[0].Groups[1].Value -ceq $mL[0].Groups[3].Value) -and ((Get-Stamps $r) -contains $mL[0].Groups[1].Value)
 Assert-Coord 'L35 every {now} in -Text becomes the stamp''s HH:mm; {x} and {NOW} stay as typed' ($r.Code -eq 0 -and $okL -and $gotL.Count -eq ($sample.Count + 2)) "code=$($r.Code) out=$($r.Out)`n$($gotL -join "`n")"
 Assert-Coord 'L35 the printed line shows the expanded text' ($r.Out -match '\[Log\]: \d\d:\d\d ACK at \d\d:\d\d, again \d\d:\d\d \{x\}') $r.Out
+
+Write-Host "(L36) a literal {now}: {{now}}"
+$p = New-Ledger $sample
+$r = Invoke-Log 'Log' 'write {{now}} to stamp, now {now}, {{NOW}}' $p
+$gotL = Read-Lines $p
+$mL = @($gotL | ForEach-Object { [regex]::Match($_, '^(\d\d:\d\d) write \{now\} to stamp, now (\d\d:\d\d), \{\{NOW\}\}$') } | Where-Object { $_.Success })
+Assert-Coord 'L36 {{now}} is written as the literal {now} and not expanded; a bare {now} beside it is; {{NOW}} stays as typed' ($r.Code -eq 0 -and $mL.Count -eq 1 -and $mL[0].Groups[1].Value -ceq $mL[0].Groups[2].Value) "code=$($r.Code) out=$($r.Out)`n$($gotL -join "`n")"
+
+Write-Host "(L37) a BOM or a bidi mark in -Text is refused"
+foreach ($cp in @(0xFEFF, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069)) {
+    $p = New-Ledger $sample
+    $b = Get-Bytes $p
+    $r = Invoke-Log 'Log' ('ok' + [char]$cp + 'ok') $p
+    Assert-Coord ('L37 U+{0:X4} in -Text: refused (exit 2), ledger unchanged' -f $cp) ($r.Code -eq 2 -and $r.Out -match 'BOM character or a bidi mark' -and (Get-Bytes $p) -ceq $b) $r.Out
+}
 
 Write-Host "(L15) parallel runs"
 $p = New-Ledger $sample

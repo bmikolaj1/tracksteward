@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.2 - 2026-11-03
+
+Fixes the "Known and left" items of 0.2.1; no new commands.
+
+- **coord-status**: only the PR cell names a row's PR (a `#<n>` in the Status text no longer does, so a row
+  with its PR only there matches no open Merge slot (which then reads BLOCKED, no live row), reads `no PR`,
+  and a MERGED one shows its track name in DONE and is not checked under `-Verify`: put the PR in the PR cell); a repeated finding id is listed once, at its first open line; an
+  inline `| outcome: <text>` that ends the line, with text not starting with `PENDING`, closes that finding line
+  (so does any such tail, even a quoted one; a pipe after it leaves the line open).
+- **coord-log**: `{{now}}` is written as the literal `{now}` (`coord-set` does the same); refuses a BOM or bidi mark in its text, as `coord-set` does.
+- **Git floor**: `coord-set` and `coord-status` refuse to start on a git below 2.38 when they use git to
+  find the ledger (no `-Ledger`).
+- **Left as ruled**: `coord-set` still does not refuse a dotted `10.22` (it cannot be told from
+  "Opus 4.15" or "git 2.38"); the other limits listed under 0.2.1 stand.
+
 ## 0.2.1 - 2026-10-30
 
 Fixes the open items of the 0.2.0 port; no new commands.

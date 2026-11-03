@@ -14,7 +14,9 @@
 # agrees ("MERGED/x" is live for every other script, so it is unclassified here). BRIEFED with no "ACK HH:mm"
 # after 15 minutes says so (the skill has an ACKed row set to RUNNING; a note such as "no ACK yet" is not an ACK); a
 # stamp later than the clock is yesterday's.
-# The ledger is read once; the Tracks table is parsed from those lines.
+# The ledger is read once; the Tracks table is parsed from those lines. A row's PR is its PR cell only (a `#<n>` in the
+# Status text is not taken). A finding id repeated on several lines is listed once, at its first open line; an inline
+# `| outcome: <text>` that ends the line, its text not starting with PENDING, closes that line (a pipe after it leaves the line open).
 # Also WAITING: Findings F<n> (followed by `from <track>` or a colon) with no later `F<n> outcome:` line (an id may be followed by parenthesised tags, a carry
 # date or a track tag, nested at most two levels deep, ignored when matching and not printed), unticked Owed checks. Also BLOCKED: an open Merge
 # slot no live row carries. The template's placeholders `1. (none)` and `- [ ] (none)` (any case, with any number of
@@ -179,7 +181,6 @@ for ($i = 0; $i -lt $rows.Count; $i++) {
     $classified = $isTerminal -or $known
     if (-not $classified) { $unclassified++ }
     $pr = Get-PrNumber $r.PR
-    if (-not $pr) { $pr = Get-PrNumber $r.Status }
     $prText = if ($pr) { "PR #$pr" } else { 'no PR' }
     $status = $r.Status
     $extra = ''
@@ -232,7 +233,6 @@ if ($Verify) {
         $r = $rows[$i]
         if ($r.Status -cnotmatch '^\s*MERGED') { continue }
         $pr = Get-PrNumber $r.PR
-        if (-not $pr) { $pr = Get-PrNumber $r.Status }
         if (-not $pr) { continue }
         $cwd = Get-VerifyCwd $r.Repo
         if ($null -eq $cwd) { $unverified += "#$pr"; continue }
@@ -256,16 +256,20 @@ foreach ($s in $openSlots) {
     }
 }
 
-# ---- Findings: F<n> from ... or F<n>: ... with no later "<id> outcome:" line (F<n>: outcome: closes too); known gaps (CHANGELOG, "Known and left"): a repeated id is listed per line, and an inline `| outcome: dropped` does not close a line
+# ---- Findings: F<n> from ... or F<n>: ... with no later "<id> outcome:" line (F<n>: outcome: closes too); a repeated id is listed once (its first open line), and an inline "| outcome: <text>" ending the line, its text not starting with PENDING, closes that line
 $pending = 0
 $findEntries = Get-SectionLines $secFind
 $closed = @{}
 foreach ($e in $findEntries) {
     if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)(?:\s+\((?:[^()]|\([^()]*\))*\))*:?\s+outcome:') { $closed[$Matches[1]] = $true }
 }
+$listed = @{}
 foreach ($e in $findEntries) {
-    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)(?:\s+\((?:[^()]|\([^()]*\))*\))*(?:\s+from\s|:\s)' -and -not $closed.ContainsKey($Matches[1])) {
+    if ($e[1] -match '^\d\d:\d\d\s+(c?F\d+)(?:\s+\((?:[^()]|\([^()]*\))*\))*(?:\s+from\s|:\s)' -and -not $closed.ContainsKey($Matches[1]) -and -not $listed.ContainsKey($Matches[1])) {
         $id = $Matches[1]
+        # an inline tail "| outcome: <text>" (end of line, not starting with PENDING) closes this line (the template's own shape, edited in place)
+        if ($e[1] -match '\|\s*outcome:\s*([^|]*)$' -and $Matches[1].Trim() -and $Matches[1].Trim() -notmatch '^PENDING') { continue }
+        $listed[$id] = $true
         $since = if ($e[1] -match '^(\d\d:\d\d)') { $Matches[1] } else { '?' }
         $what = ($e[1] -replace '^\d\d:\d\d\s+c?F\d+(?:\s+\((?:[^()]|\([^()]*\))*\))*(?:\s+from\s+|:\s+)', '')
         $pending++

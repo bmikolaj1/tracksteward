@@ -77,9 +77,17 @@ function Get-CoordStamp([datetime]$At) {
 }
 
 # {now} in a text is the stamp of $At (lower case, exactly; {NOW} and other
-# braces stay as typed).
+# braces stay as typed). {{now}} (lower case, exactly) is the escape: it is
+# written as the literal {now}, not expanded.
 function Expand-CoordNow([string]$Text, [datetime]$At) {
-    return $Text.Replace('{now}', (Get-CoordStamp $At))
+    $stamp = Get-CoordStamp $At
+    return [regex]::Replace($Text, '\{\{now\}\}|\{now\}', { param($m) if ($m.Value -ceq '{{now}}') { '{now}' } else { $stamp } })
+}
+
+# True when $Text holds a BOM (U+FEFF) or a bidi mark (U+200E, U+200F, U+202A-U+202E,
+# U+2066-U+2069): they draw nothing or reorder the line. Written as escapes: this file stays ASCII.
+function Test-CoordBidiOrBom([string]$Text) {
+    return ($Text -match '[\uFEFF\u200E\u200F\u202A-\u202E\u2066-\u2069]')
 }
 
 # True when $Text holds a time somebody typed: H:mm or HH:mm that is not part
@@ -1336,6 +1344,9 @@ function Resolve-CoordLedgerArg {
     param([string]$Ledger)
     $fail = { param($Why) [pscustomobject]@{ Ok = $false; Ledger = $Ledger; HasDir = $false; Error = $Why } }
     if (-not $Ledger) {
+        # Without -Ledger git finds the ledger: it must be at the floor (with -Ledger it is not asked).
+        $floor = Test-CoordGitFloor
+        if (-not $floor.Ok) { return (& $fail $floor.Error) }
         $here = (Get-Location).Path
         $Ledger = Get-CoordLedgerPath $here
         if (-not $Ledger) { return (& $fail "$here is not in a git repository; pass -Ledger") }

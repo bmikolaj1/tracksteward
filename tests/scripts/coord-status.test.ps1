@@ -202,12 +202,34 @@ $r = Invoke-Board $l
 $wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
 Assert-Coord 'T5i F22 (tag, colon) and F23 (colon) are pending; F24 is closed; F25x, a mention of F3: and a Log line are not' ($wait -match 'F22 .*hook took 24m.*PENDING since 09:00' -and $wait -match 'F23 .*bare colon form' -and $wait -notmatch 'closed colon form' -and $wait -notmatch 'not a finding id' -and $wait -notmatch 'is mentioned here' -and $wait -notmatch 'log line is never read' -and $r.Last -match '; 2 findings pending') ($wait + "`n" + $r.Last)
 
-# T5j (panel round 3) "F30: outcome: x" closes F30 like "F30 outcome: x"; a repeated id and an inline "| outcome: dropped" are known gaps (CHANGELOG, "Known and left"), not pinned
+# T5j (panel round 3) "F30: outcome: x" closes F30 like "F30 outcome: x"; T5k to T5m pin a repeated id, an inline outcome and a "#<n>" in the Status text
 $l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
     '09:00 F30 from a: closed by colon outcome | outcome: PENDING', '09:05 F30: outcome: done', '09:25 F33: real colon one | outcome: PENDING')
 $r = Invoke-Board $l
 $wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
 Assert-Coord 'T5j F30 colon outcome closes it, F33 lists; 1 pending' ($wait -notmatch 'closed by colon outcome' -and $wait -notmatch 'F30: outcome' -and $wait -match 'F33 .*real colon one' -and $r.Last -match '; 1 findings? pending') ($wait + "`n" + $r.Last)
+# T5k a repeated finding id is listed once (its first line); T5l an inline "| outcome: <word>" other than PENDING closes that line
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F40 from a: first sighting | outcome: PENDING', '09:05 F40 from b: second sighting | outcome: PENDING', '09:10 F41 from a: closed inline | outcome: dropped, because noise',
+    '09:15 F42 from a: still open | outcome: PENDING (from 2026-10-28)', '09:20 F43 from a: no inline tail', '09:25 F44 from a: edited | outcome: widen scope: a, docs/**')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5k a repeated id is listed once, at its first line' ($wait -match 'first sighting' -and $wait -notmatch 'second sighting' -and @($wait -split "`n" | Where-Object { $_ -match '^  F40 ' }).Count -eq 1) $wait
+Assert-Coord 'T5l an inline "| outcome: dropped" or "| outcome: widen scope" closes the line; "PENDING (from ...)" and no tail stay open; 3 pending' ($wait -notmatch 'closed inline' -and $wait -notmatch 'edited' -and $wait -match 'still open' -and $wait -match 'no inline tail' -and $r.Last -match '; 3 findings pending') ($wait + "`n" + $r.Last)
+# T5l2 only the LAST "| outcome:" clause counts (finding text may quote one); a closed first sighting does not hide a later open one; an open one is not closed by a later inline-closed repeat
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    "09:00 F50 from a: board ignores '| outcome: dropped' in text | outcome: PENDING", '09:05 F51 from a: pendingx tail | outcome: PENDINGX',
+    '09:10 F52 from a: closed first | outcome: dropped', '09:15 F52 from b: reopened elsewhere | outcome: PENDING',
+    '09:20 F53 from a: open first | outcome: PENDING', '09:25 F53 from b: closed later | outcome: dropped')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5l2 quoted "| outcome: dropped" in the text stays open; "PENDINGX" stays open; F52 lists its later open line; F53 stays listed at its first line; 4 pending' ($wait -match 'F50 ' -and $wait -match 'pendingx tail' -and $wait -match 'reopened elsewhere' -and $wait -notmatch 'closed first' -and $wait -match 'open first' -and $wait -notmatch 'closed later' -and $r.Last -match '; 4 findings pending') ($wait + "`n" + $r.Last)
+# T5m only the PR cell names a row's PR: a "#<n>" in the Status text is not taken when the cell is empty
+$l = New-Ledger -Rows @((Get-Row 'noprcell' 'RUNNING 10:00 waits on #12'), (Get-Row 'withcell' 'RUNNING 10:00 waits on #12' '#7'), (Get-Row 'doneone' 'MERGED 10:00 as abc1234 (see #12)')) 
+$r = Invoke-Board $l
+$running = ((Get-GroupBlock $r 'RUNNING') -join "`n")
+$done = ($r.Out -split "`r?`n" | Where-Object { $_ -match 'DONE' }) -join "`n"
+Assert-Coord 'T5m a "#12" in the Status text is not the row''s PR: no PR for the empty cell, PR #7 for the cell, the DONE entry is the track name' ($running -match 'noprcell .*no PR' -and $running -match 'withcell .*PR #7' -and $done -match 'doneone' -and $done -notmatch '#12') ($running + "`n" + $done)
 # T5g (F13 sibling) Queue ids carry a date tag: a tagged Q is queued, a tagged outcome line closes it; text that starts with parentheses stays
 $l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Queue @(
     '09:00 Q1 (2026-10-28) carried queue item [after 23:00] owner: a', '09:05 Q2 (2026-10-28) closed queue item [after 23:00] owner: a', '09:10 Q2 (2026-10-28) outcome: done',
@@ -496,6 +518,20 @@ Assert-Coord 'T22c the STATUS line counts six unknown gates (the five above and 
 # ---- T23 the real index folder
 Assert-Coord 'T23 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
 
+Write-Host "(F5) git below 2.38 is refused at the start, when git would be reached"
+$gitOldDir = Join-Path $root 'gitstub-floor-old'
+[void][IO.Directory]::CreateDirectory($gitOldDir)
+[System.IO.File]::WriteAllText((Join-Path $gitOldDir 'git.cmd'), "@echo off
+echo git version 2.37.9.windows.1
+exit /b 0
+", [System.Text.Encoding]::ASCII)
+$gitOldEnv = @{ PATH = $gitOldDir + [System.IO.Path]::PathSeparator + $env:PATH }
+$x = Invoke-HookTestPowerShell -Script $srcPath -StartDir $root -ExtraEnv $gitOldEnv -ScriptArgs ""
+$xOut = ([string]$x.Out).Trim()
+Assert-Coord 'F5 coord-status without -Ledger: a git that answers 2.37.9 is refused (exit 2), the output names git 2.37.9 and the 2.38 floor' ($x.Code -eq 2 -and $xOut.Contains('git 2.37.9 ') -and $xOut.Contains('2.38')) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00'))
+$x = Invoke-HookTestPowerShell -Script $srcPath -StartDir $root -ExtraEnv $gitOldEnv -ScriptArgs ("-Ledger `"$($l.Path)`" -Now `"2026-10-27 12:00`"")
+Assert-Coord 'F5 coord-status with -Ledger: the same old git is not asked, the board prints (exit 0)' ($x.Code -eq 0 -and ([string]$x.Out) -match 'STATUS 2026-10-27') "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-CoordUncheckedSummary
 Write-Host ""
