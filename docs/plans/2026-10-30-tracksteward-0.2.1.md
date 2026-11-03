@@ -1,6 +1,6 @@
 # tracksteward 0.2.1 plan (2026-10-30)
 
-Baseline: main 8d47b42 (0.2.0). Scope: port standards #140 (640e520) and fix the open items of
+Baseline: main 8d47b42 (0.2.0). Scope: port standards #140 and fix the open items of
 `2026-10-18-script-port.md` section 9 (items 4-20, "All to 0.2.1"). No tag, no release, no announcement
 (the fresh-install check by someone else is still owed). Every slice is red first: the test row is written and seen failing, then the fix.
 
