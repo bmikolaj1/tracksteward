@@ -476,15 +476,15 @@ $rv = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view 130\b' '{"stat
 Assert-Coord 'T19g with -Verify, gh is never asked about the quoted #130 on any of the six slips' (@($rv.Calls | Where-Object { "$_" -match '\b130\b' }).Count -eq 0) $rv.Out
 
 # ---- T21 -Verify asks gh only in a folder it can name; a gate PR is labelled with the folder asked
-$bare = Get-Row 'bare' 'RUNNING 10:00' '#50' 'Opus 5.5' 'RenewCue'
-$bareM = Get-Row 'bare-merged' 'MERGED 10:00 #51 as abcdef1234567' '#51' 'Opus 5.5' 'D:\nowhere\RenewCue'
+$bare = Get-Row 'bare' 'RUNNING 10:00' '#50' 'Opus 5.5' 'SampleApp'
+$bareM = Get-Row 'bare-merged' 'MERGED 10:00 #51 as abcdef1234567' '#51' 'Opus 5.5' 'D:\nowhere\SampleApp'
 $l = New-Ledger -Rows @($bare, $bareM, (Get-Row 'here' 'RUNNING 10:00' '#52')) -Queue @('08:00 Q1 pr gate [after #116 merges] owner: me; source: x')
 $r = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view \d+\b' '{"state":"MERGED","headRefOid":"abcdef1234567890","mergeStateStatus":"CLEAN"}'))
 Assert-Coord 'T21a a bare-name or off-machine Repo cell prints "verified: #n unknown (the Repo cell is not a folder", gh is never asked about #50 or #51, and no MISMATCH' ((Test-Has $r 'verified: #50 unknown \(the Repo cell is not a folder') -and @($r.Calls | Where-Object { "$_" -match '\b5[01]\b' }).Count -eq 0 -and (Test-Has $r 'unverified: #51 \(the Repo cell is not a folder') -and -not (Test-Has $r 'MISMATCH')) $r.Out
 Assert-Coord 'T21b a Repo cell that is a folder is still asked: #52 verified' ((Test-Has $r 'verified: #52 MERGED') -and @($r.Calls | Where-Object { "$_" -match '\b52\b' }).Count -ge 1) $r.Out
 Assert-Coord 'T21c the PR gate [after #116 merges] under -Verify says which folder gh was asked in' ((Get-GroupBlock $r 'QUEUED') -join "`n" -match 'after #116 merges\s+OPEN \(asked the repo of \S+\)') $r.Out
 
-$many = @(1..60 | ForEach-Object { Get-Row "m$_" "MERGED 10:00 #$(200 + $_) as abcdef1234567" "#$(200 + $_)" 'Opus 5.5' 'D:\nowhere\RenewCue' })
+$many = @(1..60 | ForEach-Object { Get-Row "m$_" "MERGED 10:00 #$(200 + $_) as abcdef1234567" "#$(200 + $_)" 'Opus 5.5' 'D:\nowhere\SampleApp' })
 $l = New-Ledger -Rows $many
 $r = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view \d+\b' '{"state":"MERGED","headRefOid":"abcdef1234567890","mergeStateStatus":"CLEAN"}'))
 Assert-Coord 'T21d 60 MERGED rows with an off-machine Repo cell give ONE budgeted unverified line, the board stays within 2,000 characters' (@(Get-Lines $r | Where-Object { $_ -match 'unverified:' }).Count -eq 1 -and $r.Out.Length -le 2000) "$($r.Out.Length) chars"
