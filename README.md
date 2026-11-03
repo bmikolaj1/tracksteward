@@ -1,11 +1,15 @@
 # tracksteward
 
-**One thin coordinator session over many parallel Claude Code sessions.** It covers a daily ledger,
-scoped briefs, a findings protocol, and one verified merge at a time.
+**One thin coordinator session over many parallel Claude Code sessions.** It gives you a daily
+ledger, scoped briefs, a findings protocol, and one verified merge at a time.
 
-> **Status:** v0.2.1, 2026-10-30. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
+> **Status:** v0.2.2, 2026-11-03. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
 > for 10 coordination days: 57 merges verified, 127 findings with recorded outcomes, up to 16 tracks in
-> a day.
+> a day. The scripts and the scope guard came to this plugin in 0.2.0, after those days.
+>
+> **Platform:** the scripts and the scope guard are PowerShell, verified on Windows 11 with Windows
+> PowerShell 5.1 only. macOS, Linux and PowerShell 7 are not verified, and the scope guard is
+> Windows-only (see Requirements).
 >
 > The numbers come from the author's own ledgers. This is a pattern and its templates, published
 > as they are, with no support promise. It is not affiliated with or endorsed by Anthropic.
@@ -40,9 +44,9 @@ and the scope is checked against the PR's real file list before it merges. It th
 the ladder does not have: it serializes the **merge**, not the work. Every track develops in
 parallel. At merge time they go one at a time: a PR gets its slot only once it contains the newest
 main and its checks (if the repo has CI) have passed on that head, and each merge is verified on
-origin before the next slot opens. The price is queueing time, since after each merge every waiting track merges the new main
-and reruns its suites. The work itself stays parallel, and "merged" means merged. A ledger on disk
-keeps all of this intact through a day of compactions.
+origin before the next slot opens. The price is queueing time, since after each merge every
+waiting track merges the new main and reruns its suites. The work itself stays parallel, and
+"merged" means merged. A ledger on disk keeps all of this intact through a day of compactions.
 
 ## What this is, and what it is not
 
@@ -57,7 +61,8 @@ and the order. The human stays in the loop for every decision and every merge.
 - a merge bot. Nothing merges without the user's typed go.
 - Claude Code's agent teams. A team is a lead with teammates inside one session's lifetime. This
   pattern coordinates independent sessions, across repos, with its state in a file.
-- a service. It is a skill, four templates, a set of PowerShell scripts that do the mechanical checks, and an edit-time scope guard hook. Nothing runs in the background.
+- a service. It is a skill, four templates, a set of PowerShell scripts that do the mechanical
+  checks, and an edit-time scope guard hook. Nothing runs in the background.
 
 ### Terms
 
@@ -131,6 +136,9 @@ In each repo you coordinate, gitignore the live ledger, the worktrees and the ha
 
 ## Your first coordinated day
 
+Before you start: a repo with its `origin` on GitHub, `gh auth status` green (the merge checks need
+it), and three or more tasks whose files you can name, or one piece of work across two repos.
+
 1. **Start the coordinator** in the repo's main checkout: run `claude` there and say "coordinate
    these sessions" (or run `/coordinate:coordinate`). It creates today's ledger, snapshots the
    repo, and gives you a list of what is done, what is open, and a recommended order.
@@ -151,8 +159,8 @@ In each repo you coordinate, gitignore the live ledger, the worktrees and the ha
    becomes.
 6. **Merges go one at a time.** A track that is done reports its final head. The coordinator checks
    the PR's real files against the scope, checks that it contains the newest main and that CI
-   (if any) passed, and grants a slot naming that sha. You give the go in the track's window, the merge is
-   bound to that sha, and the coordinator verifies it on origin before releasing the next track
+   (if any) passed, and grants a slot naming that sha. You give the go in the track's window, the
+   merge is bound to that sha, and the coordinator verifies it on origin before releasing the next track
    with the new main sha.
 7. **Close the day.** The coordinator writes a handover from the ledger, with tomorrow's first
    message ready to paste, and archives a copy of the ledger and the day's briefs next to it.
@@ -187,9 +195,12 @@ busiest recorded day ran sixteen.
 
 ## Updates
 
-The version lives in `.claude-plugin/plugin.json`, and every change bumps it. Installed copies
-stay on their version until you update: `claude plugin update coordinate@tracksteward`, or turn on
-auto-update for this marketplace in `/plugin`. Releases are tagged `vX.Y.Z`.
+The version lives in `.claude-plugin/plugin.json`, and each release bumps it; the one exception is
+0.2.2, whose fixes merged while the file still said 0.2.1 (the bump followed; see the CHANGELOG).
+Installed copies stay on their version until you update: `claude plugin update
+coordinate@tracksteward`, or turn on auto-update for this marketplace in `/plugin`. 0.1.1 and 0.1.2
+are tagged `vX.Y.Z` (0.1.0 has no commit of its own); the 0.2 releases are not tagged yet, so the
+CHANGELOG is the record of what each one holds.
 
 ## Scripts and the scope guard
 
@@ -228,8 +239,8 @@ session under the index folder and prunes old ones. It is on when the plugin is 
 session; that is a convenience, not a lock, since anything that can set the environment or write
 Claude's settings can do the same. It does not cover edits made through a shell command, and a
 path outside every git working tree is allowed. If the hook's launcher fails before the script runs
-(probed once, with the plugin root unset), the edit goes ahead and the model is not told. It is Windows-only as shipped, and its stated limits are in the header of
-`hooks/coord-scope-guard.ps1`.
+(probed once, with the plugin root unset), the edit goes ahead and the model is not told. It is
+Windows-only as shipped, and its stated limits are in the header of `hooks/coord-scope-guard.ps1`.
 
 ## What is not done
 
