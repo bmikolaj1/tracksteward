@@ -755,6 +755,13 @@ $x = Invoke-CoordScript -Name 'merge-verify.ps1' -Cwd $root -ScriptArgs '-Pr 7' 
 $xOut = ([string]$x.Out).Trim()
 Assert-Coord 'F5 merge-verify: a git that answers 2.37.9 is refused with exit 2, one line starting "MERGE-VERIFY #7: COULD NOT CHECK - " that names git 2.37.9 and the 2.38 floor' ($x.Code -eq 2 -and $xOut.StartsWith('MERGE-VERIFY #7: COULD NOT CHECK - ', [System.StringComparison]::Ordinal) -and $xOut -notmatch '[\r\n]' -and $xOut.Contains('git 2.37.9 ') -and $xOut.Contains('2.38')) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
 
+Write-Host "(V24) a fetch refspec that skips the base: the base is still fetched exactly, never read stale"
+$c = New-MergedCase 'v24'
+Invoke-HookTestGit $c.Fx.Launch @('config', 'remote.origin.fetch', '+refs/heads/feat:refs/remotes/origin/feat')
+$r = Invoke-Verify $c (Get-MergedJson $c)
+Assert-Verify 'V24' $r 'OK' 0 @('merge', 'on origin/main', 'checkout ff')
+Assert-Coord 'V24 the launch checkout fast-forwarded to the merge commit (the base was fetched, not read from a stale origin/main)' ((Get-LaunchHead $c) -ceq $c.Merge) "head=$(Get-LaunchHead $c) merge=$($c.Merge)"
+
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "Passed: $script:coordPass  Failed: $script:coordFail"
