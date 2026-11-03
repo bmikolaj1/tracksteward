@@ -13,8 +13,11 @@
 #
 # Every run sets COORD_INDEX_DIR to a scratch folder and COORD_TODAY to a fixed
 # date (2026-03-05; yesterday is 2026-03-04), so no run can reach the runner's
-# real ~/.claude/coordination. The suite snapshots the real folder (names,
-# lengths, SHA-256) first and compares it at the end (group Z).
+# real ~/.claude/coordination (the COORD_INDEX_DIR value from before the suite overrides it, else
+# $HOME\.claude\coordination: the fixture's $coordRealIndexDir). The suite snapshots that folder first and checks it
+# at the end (group Z) with the fixture's Get-CoordRealIndexLeak, which tolerates a live coordinator's appends, and does not
+# read sessions\ (a live guard writes anchors there). sessions\ is checked apart, by Get-RealSessionsLeak, for content
+# naming this run's scratch root only: the hook under test writes its anchors there.
 #
 # Fixture (all under one scratch root in %TEMP%, no link in its path):
 #   repo A  main checkout + linked worktrees A1 (branch a1-branch) and A2
@@ -50,7 +53,7 @@
 #   S6 plugin wiring: hooks.json shape and launcher (space, brackets, backtick; a
 #      sibling folder is not run), the ..\scripts layout, the off switch, the
 #      anchor policy and pruning, name-only Session cells, no registered ledger
-#   Z  the real index folder is byte-unchanged
+#   Z  the real index folder shows no leak of this run (removal, rewrite, scratch-root text; sessions\ by scratch-root text only)
 #
 # NOT here (other suites own them): Register-CoordLedger, Test-CoordLedgerTrusted
 # called directly, Test-CoordInScope staying case-sensitive, Get-CoordIndexedLedgers
@@ -111,19 +114,29 @@ function Invoke-Group([string]$Name, [scriptblock]$Body) {
 }
 
 # ---------------------------------------------------------------------------
-# Real index folder: snapshot now, compare in group Z.
+# Real index folder: snapshot now, check in group Z.
 # ---------------------------------------------------------------------------
-function Get-DirSnapshot([string]$Dir) {
-    if (-not (Test-Path -LiteralPath $Dir)) { return 'absent' }
-    $items = @(Get-ChildItem -LiteralPath $Dir -Recurse -File -Force -ErrorAction SilentlyContinue | Sort-Object FullName)
-    $lines = foreach ($i in $items) {
-        $h = (Get-FileHash -LiteralPath $i.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
-        $i.FullName + '|' + $i.Length + '|' + $h
+# The real index folder is compared with the fixture's tolerant check (Get-CoordRealIndexLeak): a coordinator or a live guard
+# writing beside the suite (appended index text, a sessions\ anchor) is not a leak; a removed or rewritten file, or added text
+# naming this run's scratch root, is.
+$realSnapshotBefore = Get-CoordRealIndexSnapshot
+# sessions\ is outside that snapshot (see the header), so it is scanned by content: '' when no file there names $Marker
+# (this run's scratch root, either slash, any case), else one line per such file. Like the fixture check, it matches the scratch root as spelled in $root (not an 8.3 short form).
+function Get-RealSessionsLeak([string]$Marker, [string]$Dir = $coordRealIndexDir) {
+    $sd = Join-Path $Dir 'sessions'
+    if (-not (Test-Path -LiteralPath $sd -PathType Container)) { return '' }
+    $marks = @($Marker, $Marker.Replace('\', '/')) | Where-Object { $_ }
+    $hits = foreach ($f in @(Get-ChildItem -LiteralPath $sd -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        $text = $null
+        try {
+            $fs = [IO.File]::Open($f.FullName, 'Open', 'Read', 'ReadWrite')
+            try { $text = (New-Object IO.StreamReader($fs, (New-Object Text.UTF8Encoding($false)))).ReadToEnd() } finally { $fs.Dispose() }
+        } catch { }
+        if ($null -eq $text) { continue }
+        foreach ($m in $marks) { if ($text.IndexOf($m, [StringComparison]::OrdinalIgnoreCase) -ge 0) { "names this run's scratch root: $($f.FullName)"; break } }
     }
-    return (@($lines) -join "`n")
+    return (@($hits) -join "`n")
 }
-$realCoordDir = Join-Path $HOME '.claude\coordination'
-$realSnapshotBefore = Get-DirSnapshot $realCoordDir
 
 # ---------------------------------------------------------------------------
 # Process runner: like Invoke-HookTestPowerShell but it also returns the wall
@@ -1631,11 +1644,35 @@ Invoke-Group 'S6 plugin wiring' {
 }
 
 # ===========================================================================
-# Z the real index folder is byte-unchanged
+# Z the real index folder shows no leak of this run
 # ===========================================================================
 Invoke-Group 'Z real index' {
-    $after = Get-DirSnapshot $realCoordDir
-    Report ($after -ceq $realSnapshotBefore) 'Z-1 the real ~/.claude/coordination folder is byte-unchanged by this suite' ("before: [$(Get-Tail $realSnapshotBefore)] after: [$(Get-Tail $after)]")
+    $leak = Get-CoordRealIndexLeak -Before $realSnapshotBefore -Marker $root
+    Report ($leak -ceq '') 'Z-1 the real ~/.claude/coordination folder shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s or guard''s writes are tolerated)' $leak
+    # Z-2 the check itself, on a stand-in folder: tolerated writes pass, each kind of leak is flagged
+    $zDir = Join-Path $root 'z-index'
+    [void][IO.Directory]::CreateDirectory((Join-Path $zDir 'sessions'))
+    [IO.File]::WriteAllText((Join-Path $zDir 'a.ledgers'), "one`n")
+    [IO.File]::WriteAllText((Join-Path $zDir 'sessions\s1.anchor'), "x")
+    $zBefore = Get-CoordRealIndexSnapshot -Dir $zDir
+    [IO.File]::AppendAllText((Join-Path $zDir 'a.ledgers'), "two`n")
+    [IO.File]::WriteAllText((Join-Path $zDir 'sessions\s2.anchor'), "y")
+    [IO.File]::WriteAllText((Join-Path $zDir 'sessions\s1.anchor'), "changed")
+    Report ((Get-CoordRealIndexLeak -Before $zBefore -Marker $root -Dir $zDir) -ceq '') 'Z-2 an appended index line, a new anchor and a changed anchor in sessions\ are not a leak'
+    [IO.File]::AppendAllText((Join-Path $zDir 'a.ledgers'), "$root\x`n")
+    Report ((Get-CoordRealIndexLeak -Before $zBefore -Marker $root -Dir $zDir) -match "names this run's scratch root: .*a\.ledgers") 'Z-2 added text naming the scratch root is a leak'
+    [IO.File]::WriteAllText((Join-Path $zDir 'a.ledgers'), "rewritten`n")
+    Report ((Get-CoordRealIndexLeak -Before $zBefore -Marker $root -Dir $zDir) -match 'rewritten: .*a\.ledgers') 'Z-2 a rewritten index file is a leak'
+    Remove-Item -LiteralPath (Join-Path $zDir 'a.ledgers')
+    Report ((Get-CoordRealIndexLeak -Before $zBefore -Marker $root -Dir $zDir) -match 'removed: .*a\.ledgers') 'Z-2 a removed index file is a leak'
+    # Z-3 sessions\: the fixture check skips it, so a row that lost the scratch env and wrote its anchor there is found by content
+    Report ((Get-RealSessionsLeak -Marker $root -Dir $zDir) -ceq '') 'Z-3 sessions\ anchors that do not name the scratch root (a live guard''s) are not a leak'
+    [IO.File]::WriteAllText((Join-Path $zDir 'sessions\s3.anchor'), "anchor for " + $root.ToUpper() + "\repo")
+    Report ((Get-RealSessionsLeak -Marker $root -Dir $zDir) -match 'names this run''s scratch root: .*s3\.anchor') 'Z-3 a sessions\ anchor naming the scratch root (any case) is a leak'
+    [IO.File]::WriteAllText((Join-Path $zDir 'sessions\s3.anchor'), "anchor for " + $root.Replace('\', '/') + "/repo")
+    Report ((Get-RealSessionsLeak -Marker $root -Dir $zDir) -match 'names this run''s scratch root: .*s3\.anchor') 'Z-3 a sessions\ anchor naming the scratch root with forward slashes is a leak'
+    $sLeak = Get-RealSessionsLeak -Marker $root
+    Report ($sLeak -ceq '') 'Z-4 the real sessions\ folder holds no file naming this run''s scratch root' $sLeak
 }
 
 # ---------------------------------------------------------------------------
