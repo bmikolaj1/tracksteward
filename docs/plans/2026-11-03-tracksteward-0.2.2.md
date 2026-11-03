@@ -4,7 +4,7 @@ Baseline: main 806ecb8 (0.2.1). Scope: the README "What is not done" / CHANGELOG
 items that sit in `scripts/coord-{status,set,log,common}.ps1`. No tag, no release. Every slice is red
 first (the test row seen failing), then the fix.
 
-## Rulings (Bruno, this window, 2026-11-03)
+## Rulings (owner, this window, 2026-11-03)
 
 - Dotted `10.22`: coord-set keeps accepting it (documented, no code).
 - Literal `{now}`: `{{now}}` is written as `{now}` (shared `Expand-CoordNow`, so coord-log and coord-set agree).
