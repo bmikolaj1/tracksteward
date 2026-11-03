@@ -99,7 +99,8 @@ and the order. The human stays in the loop for every decision and every merge.
   run under it, and the guard hook always starts `powershell.exe`. macOS and Linux are not verified
   either, and the scope guard is Windows-only as shipped. Six scripts (`coord-brief`, `coord-handoff`,
   `coord-log`, `merge-verify`, `slot-check`, `repo-snapshot`) refuse to start on a git older than
-  2.38 (exit 2, one line); `coord-set`, `coord-status` and the guard hook do not check it.
+  2.38 (exit 2, one line); `coord-set` and `coord-status` do so when they use git to find the ledger
+  (no `-Ledger`); the guard hook does not check it.
 - Claude Code can hold a message from another session for your approval. Whether it does is set
   by "Messages from your other sessions" in `/config`. A message held by default is dropped after
   five minutes unless `dialogExpiry` says otherwise; one held by an explicit `hold` setting is
@@ -203,7 +204,8 @@ calls these from the plugin folder (`${CLAUDE_PLUGIN_ROOT}/scripts/`):
 - `merge-verify.ps1`: confirms the merge commit on origin, deletes the branch only when its tip is
   still the merged head, and checks the shared checkout and git config.
 - `coord-log.ps1`: appends to the ledger, stamping the time from the clock, expanding every `{now}`
-  in the text and refusing typed times; `-Register` records the day's ledger for the guard.
+  in the text (`{{now}}` writes a literal `{now}`) and refusing typed times, BOM and bidi marks;
+  `-Register` records the day's ledger for the guard.
 - `coord-brief.ps1`: renders a track's brief from the template and, with `-Check`, verifies it
   before the pointer line is printed.
 - `coord-handoff.ps1`: hands the coordinator role to a new session.
@@ -232,14 +234,9 @@ path outside every git working tree is allowed. If the hook's launcher fails bef
 ## What is not done
 
 - PowerShell 7, macOS and Linux are not verified (see Requirements).
-- `coord-set` and `coord-status` do not check the git 2.38 floor at start (they reach git only to
-  find a ledger).
-- `coord-set` refuses a typed time with a colon, a fullwidth colon or `10h22`, but not a dotted `10.22`
-  (that would also refuse "Opus 4.15" and "git 2.38"). `coord-log` expands every `{now}` and has no
-  way to write the token literally, and writes bidi and BOM characters as typed.
-- `coord-status`: a `#<n>` in the Status text is still taken as the row's PR when the PR cell is empty.
-  A repeated finding id is listed once per line, and an inline `| outcome: dropped` does not close a
-  finding. Both are for 0.2.2.
+- `coord-set` does not refuse a dotted time (`10.22`): that would also refuse "Opus 4.15" and "git 2.38". It
+  refuses a typed time with a colon, a fullwidth colon or `10h22`.
+- `coord-status` and `coord-set` check the git 2.38 floor only when they use git to find the ledger (no `-Ledger`).
 - No CI workflow ships: the tests run locally with `tests\run.ps1`.
 
 ## License

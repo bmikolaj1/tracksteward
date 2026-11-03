@@ -40,6 +40,7 @@
 #
 # Time: {now} in -Text is replaced by HH:mm from Get-Date, every one of them, from
 # one clock read. (coord-log.ps1 expands {now} in the line it appends the same way.)
+# {{now}} is the escape: it is written as the literal {now}.
 # A time typed by hand
 # (H:mm or HH:mm not inside a longer number: "9:05pm", "09:12Z", "T10:22" and
 # "09:12:30" all count) is refused: write {now}. The line number of a file
@@ -135,7 +136,7 @@ function Get-CheckedText([string]$Name, [string]$Value) {
     if ($Value -match ('[\x00-\x08\x0A-\x1F\x7F\x85' + [char]0x2028 + [char]0x2029 + ']')) { Exit-NotWritten "$Name holds a line break or a control character; one line per event" }
     if ($t.Contains('|')) { Exit-NotWritten "$Name holds a pipe; it would split the table cell" }
     # A BOM and the bidi marks draw nothing or reorder the cell: refused in the untrimmed value.
-    if ($Value -match '[\uFEFF\u200E\u200F\u202A-\u202E\u2066-\u2069]') { Exit-NotWritten "$Name holds a BOM character or a bidi mark (U+FEFF, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069)" }
+    if (Test-CoordBidiOrBom $Value) { Exit-NotWritten "$Name holds a BOM character or a bidi mark (U+FEFF, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069)" }
     if (Test-CoordTypedTime $t) { Exit-NotWritten "$Name holds a typed time; the script stamps it: write {now} where the time goes" }
     return $t
 }

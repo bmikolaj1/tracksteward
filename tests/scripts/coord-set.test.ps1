@@ -206,6 +206,9 @@ Write-Host '(S2) {now}'
 $p = New-Ledger $sample
 $r = Invoke-Set @{ Track = 'T1'; Repo = $alphaRepo; Text = 'ACK {now}, ready {now} {x} {NOW}'; Ledger = $p }
 Test-Changed 'S2 every {now} is the clock''s HH:mm; {x} and {NOW} stay' $r $p $sample @{ 13 = ($r13 -replace 'briefed 08:32 \|$', 'ACK {S}, ready {S} {x} {NOW} |') }
+$p = New-Ledger $sample
+$r = Invoke-Set @{ Track = 'T1'; Repo = $alphaRepo; Text = 'write {{now}}, at {now}'; Ledger = $p }
+Test-Changed 'S2 {{now}} is written as the literal {now}; a bare {now} beside it is the clock''s HH:mm' $r $p $sample @{ 13 = ($r13 -replace 'briefed 08:32 \|$', 'write {now}, at {S} |') }
 foreach ($c in @(@('ACK 08:40', 'ACK 08:40'), @('at 9:05', 'at 9:05'), @('{now} and 14:10', '{now} and 14:10'), @('time first', '23:59 done'), @('pm', 'done 9:05pm'), @('Z', 'at 09:12Z'), @('seconds', 'at 09:12:30'),
         @('fullwidth colon (U+FF1A)', ('at 10' + [char]0xFF1A + '22')), @('10h22', 'at 10h22'))) {
     Invoke-Refused "S2 a typed time is refused: $($c[0])" @{ Track = 'T1'; Text = $c[1] } -Why 'typed time|\{now\}'
@@ -541,6 +544,17 @@ Invoke-Refused 'S23 a bare -Repo that two same-name rows hold is still refused a
 Invoke-Refused 'S23 control: no -Repo on two same-name bare-Repo rows is refused, naming how to pick' @{ Track = 'T1'; Text = 'x' } -Lines $bare -Why 'pass -Repo <full path, or the Repo cell''s text>'
 
 Assert-Coord 'S0 the real index folder (COORD_INDEX_DIR as before this run, else $HOME/.claude/coordination, minus sessions/) shows no removal, rewrite or added text naming this run''s scratch root (a live coordinator''s appends are tolerated)' ((Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root) -ceq '') (Get-CoordRealIndexLeak -Before $realIndexBefore -Marker $root)
+Write-Host "(F5) git below 2.38 is refused at the start, when git would be reached"
+$gitOldDir = Join-Path $root 'gitstub-floor-old'
+[void][IO.Directory]::CreateDirectory($gitOldDir)
+[System.IO.File]::WriteAllText((Join-Path $gitOldDir 'git.cmd'), "@echo off
+echo git version 2.37.9.windows.1
+exit /b 0
+", [System.Text.Encoding]::ASCII)
+$gitOldEnv = @{ PATH = $gitOldDir + [System.IO.Path]::PathSeparator + $env:PATH }
+$x = Invoke-HookTestPowerShell -Script $ScriptPath -StartDir $root -ExtraEnv $gitOldEnv -ScriptArgs "-Track T1 -Text `"floor`""
+$xOut = ([string]$x.Out).Trim()
+Assert-Coord 'F5 coord-set without -Ledger: a git that answers 2.37.9 is refused (exit 2), the output names git 2.37.9 and the 2.38 floor' ($x.Code -eq 2 -and $xOut.Contains('git 2.37.9 ') -and $xOut.Contains('2.38')) "code=$($x.Code) out=$($x.Out) err=$($x.Err)"
 Write-CoordUncheckedSummary
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

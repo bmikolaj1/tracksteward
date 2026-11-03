@@ -14,7 +14,8 @@
 # refused: they are rewritten, not appended to.
 #
 # {now} in the text (lower case, every one) is replaced by the same HH:mm as the
-# stamp, from one clock read, as coord-set.ps1 does for its cells.
+# stamp, from one clock read, as coord-set.ps1 does for its cells. {{now}} is the escape: it is
+# written as the literal {now}.
 #
 # The text is refused (nothing written) when it is empty, holds a line break or
 # another control character (one line per event), or starts with a time of its
@@ -145,6 +146,8 @@ else {
     # (U+2028/9, built from [char]: the file stays ASCII for Windows PowerShell 5.1).
     # Checked on the untrimmed text: Trim() would drop a leading or trailing one.
     if ($Text -match ('[\x00-\x08\x0A-\x1F\x7F\x85' + [char]0x2028 + [char]0x2029 + ']')) { Exit-NotWritten '-Text holds a line break or a control character; one line per event' }
+    # A BOM and the bidi marks draw nothing or reorder the line (coord-set.ps1 refuses them too).
+    if (Test-CoordBidiOrBom $Text) { Exit-NotWritten '-Text holds a BOM character or a bidi mark (U+FEFF, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069)' }
     if ($line -match '^\d{1,2}:\d{2}(?!\d)') { Exit-NotWritten '-Text starts with a time; the script stamps it, drop yours' }
 }
 
