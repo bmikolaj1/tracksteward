@@ -14,7 +14,8 @@
 #   T3   a legacy Status cell is UNCLASSIFIED: listed under WAITING with its first word, counted on the STATUS line;
 #        lower-case `merged` and `NOT MERGED` stay live
 #   T4   BRIEFED older than 15 minutes with no ACK says so, with the minutes; a fresh one does not
-#   T5   Findings: F<n> with no later `F<n> outcome:` is PENDING; F1 is not closed by F10's outcome
+#   T5   Findings: F<n> with no later `F<n> outcome:` is PENDING; F1 is not closed by F10's outcome; a carried `F3 (<date>)` and
+#        today's F3 are two findings, each closed only by an outcome line with the same date (none for today's) (T5n, F10)
 #   T6   Owed checks: unticked listed ("(from ...)" tail dropped), ticked not, odd box shapes counted as unrecognised;
 #        indented or oddly spaced boxes count like column-0 ones; the ledger is read once (source pin)
 #   T7   Merge slots: an open slot is printed on its row by PR number; one no live row carries is BLOCKED;
@@ -23,6 +24,7 @@
 #        unknown text); a `Q<n> outcome:` closes the item; counts on the STATUS line
 #   T9   -Verify: a live row with a PR prints the gh state; a failing gh prints `unknown (...)`, never a state; a
 #        MERGED row whose PR is OPEN is a MISMATCH on the STATUS line; without -Verify gh is not called at all
+#   T9e  (F11) a MERGED row whose gh call fails prints an `unverified: #<n> (gh failed ...)` line, never nothing
 #   T10  the Log and Decisions sections are never read (poison lines there change nothing)
 #   T12  a big synthetic ledger is cut at the cap with `... <n> more; -Full or -Group <name>`; -Full lists all;
 #        -Group prints only that group, uncapped
@@ -175,9 +177,9 @@ Assert-Coord 'T5b F10 and F2 (outcome lines) are closed; cF3 is pending' (($wait
 Assert-Coord 'T5c the STATUS line counts 2 findings pending' ($r.Last -match '; 2 findings pending') $r.Last
 
 # T5d (F13, 2026-10-29) an id may carry a parenthesised tag before "from" (a carry date, or a track tag as in "F9 (F-g) from F-e"):
-# still a finding, still closed by its own outcome line, with or without the tag on the outcome line
+# still a finding, still closed by its own outcome line (a carry date must be on the outcome line too: see T5n)
 $l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
-    '09:00 F3 (2026-10-28) from a: carried thing | outcome: PENDING', '09:05 F4 (2026-10-28) from a: carried closed | outcome: PENDING', '09:10 F4 outcome: dropped',
+    '09:00 F3 (2026-10-28) from a: carried thing | outcome: PENDING', '09:05 F4 (2026-10-28) from a: carried closed | outcome: PENDING', '09:10 F4 (2026-10-28) outcome: dropped',
     '09:15 F5 (F-g) from b: tagged thing | outcome: PENDING', '09:20 F6 (2026-10-28) from a: tagged outcome closed | outcome: PENDING', '09:25 F6 (2026-10-28) outcome: done',
     '09:30 F7 from a: tail carry | outcome: PENDING (from 2026-10-28)')
 $r = Invoke-Board $l
@@ -186,12 +188,31 @@ Assert-Coord 'T5d F3 (2026-10-28) shows in WAITING' ($wait -match 'F3 .*carried 
 Assert-Coord 'T5e F5 (F-g) and the tail-dated F7 show; F4 and F6 (outcome lines, tagged or not) do not' ($wait -match 'tagged thing' -and $wait -match 'tail carry' -and $wait -notmatch 'carried closed' -and $wait -notmatch 'tagged outcome closed') $wait
 Assert-Coord 'T5f the STATUS line counts 3 findings pending' ($r.Last -match '; 3 findings pending') $r.Last
 
+# T5n (F10) a carried "F3 (<date>)" and today's "F3" are two findings: both list, and an outcome line closes only the one it names
 $l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
-    '09:00 F1 (a (b)) from a: nested tag | outcome: PENDING', '09:05 F2 (a) (b) from a: double tag | outcome: PENDING', '09:10 F3 (2026-10-28) from a: untagged close | outcome: PENDING', '09:15 F3 outcome: done',
+    '09:00 F3 (2026-10-28) from a: carried three | outcome: PENDING', '09:05 F3 from a: todays three | outcome: PENDING',
+    '09:10 F4 (2026-10-28) from a: carried four | outcome: PENDING', '09:15 F4 from a: todays four | outcome: PENDING', '09:20 F4 outcome: done',
+    '09:25 F5 (2026-10-28) from a: carried five | outcome: PENDING', '09:30 F5 from a: todays five | outcome: PENDING', '09:35 F5 (2026-10-28) outcome: done',
+    '09:40 F6 (2026-10-28) from a: carried six | outcome: PENDING', '09:45 F6 (2026-10-29) from a: other day six | outcome: PENDING')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5n a carried F3 and today''s F3 both list' ($wait -match 'carried three' -and $wait -match 'todays three') $wait
+Assert-Coord 'T5n "F4 outcome:" closes today''s F4 only; "F5 (2026-10-28) outcome:" closes the carried F5 only' ($wait -match 'carried four' -and $wait -notmatch 'todays four' -and $wait -notmatch 'carried five' -and $wait -match 'todays five') $wait
+Assert-Coord 'T5n the same id carried from two different days stays two findings; 6 pending' ($wait -match 'carried six' -and $wait -match 'other day six' -and $r.Last -match '; 6 findings pending') ($wait + "`n" + $r.Last)
+
+# T5o (F10) the carry date may sit among other words in its tag: "(2026-10-28, carried)" still keys as the dated F7, apart from today's F7
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F7 (2026-10-28, carried) from a: comma tag seven | outcome: PENDING', '09:05 F7 from a: todays seven | outcome: PENDING', '09:10 F7 outcome: done')
+$r = Invoke-Board $l
+$wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
+Assert-Coord 'T5o a "(2026-10-28, carried)" F7 stays open when only today''s F7 has an outcome line; 1 pending' ($wait -match 'comma tag seven' -and $wait -notmatch 'todays seven' -and $r.Last -match '; 1 findings? pending') ($wait + "`n" + $r.Last)
+
+$l = New-Ledger -Rows @((Get-Row 'a' 'RUNNING 10:00')) -Findings @(
+    '09:00 F1 (a (b)) from a: nested tag | outcome: PENDING', '09:05 F2 (a) (b) from a: double tag | outcome: PENDING', '09:10 F3 (F-g) from a: untagged close | outcome: PENDING', '09:15 F3 outcome: done',
     '09:20 F11 (2026-10-28) outcome: done', '09:25 F1x (2026-10-28) from a: not a finding id | outcome: PENDING')
 $r = Invoke-Board $l
 $wait = ((Get-GroupBlock $r 'WAITING') -join "`n")
-Assert-Coord 'T5h a nested or double tag still lists the finding, an untagged outcome closes a tagged one, F11 does not close F1, and the tag stays off the board' ($wait -match 'nested tag' -and $wait -match 'double tag' -and $wait -notmatch 'untagged close' -and $wait -notmatch '\(a' -and $wait -notmatch '2026-10-28' -and $wait -notmatch 'not a finding id' -and $r.Last -match '; 2 findings pending') ($wait + "`n" + $r.Last)
+Assert-Coord 'T5h a nested or double tag still lists the finding, an untagged outcome closes a finding tagged with a non-date tag, F11 does not close F1, and the tag stays off the board' ($wait -match 'nested tag' -and $wait -match 'double tag' -and $wait -notmatch 'untagged close' -and $wait -notmatch '\(a' -and $wait -notmatch '2026-10-28' -and $wait -notmatch 'not a finding id' -and $r.Last -match '; 2 findings pending') ($wait + "`n" + $r.Last)
 
 # T5i (F16, folded into F13) a finding needs no " from <track>": "F22 (coordinator, measured): ..." and "F23: ..." are findings too
 # (listed, closed by their own outcome line); a Log line, an id with trailing letters and a note that only mentions "F3:" are not
@@ -318,6 +339,9 @@ Assert-Coord 'T9a a live row with a PR prints "verified: #90 OPEN @<sha12>, CLEA
 Assert-Coord 'T9b the header says verified; a MERGED row whose PR is OPEN is a MISMATCH on its own line and on the STATUS line' (@(Get-Lines $r)[0] -match '; verified\)' -and (Test-Has $r 'MISMATCH: #92 is OPEN') -and $r.Last -match '; 1 MISMATCH' -and -not (Test-Has $r 'MISMATCH: #91')) $r.Out
 $r = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view 90\b' '' 1))
 Assert-Coord 'T9c a failing gh prints "unknown (...)" and never a state for that row' ((Test-Has $r 'verified: #90 unknown \(') -and -not (Test-Has $r 'verified: #90 OPEN')) $r.Out
+# T9e (F11) a MERGED row whose gh call fails is not silently skipped: it gets its own "unverified" line with the reason, and is no MISMATCH
+$r = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view 90\b' $prJson), (New-CoordRule '^pr view 91\b' 'boom' 1), (New-CoordRule '^pr view 92\b' $prJson))
+Assert-Coord 'T9e a MERGED row (#91) whose gh fails prints "unverified: #91 (gh failed ..." and counts no MISMATCH for it; #92 still MISMATCHes' ((Test-Has $r 'unverified: #91 \(gh') -and (Test-Has $r 'MISMATCH: #92 is OPEN') -and -not (Test-Has $r 'MISMATCH: #91') -and $r.Last -match '; 1 MISMATCH') $r.Out
 $r = Invoke-Board $l
 Assert-Coord 'T9d without -Verify gh is not called and the header says "not verified"' ($r.Calls.Count -eq 0 -and @(Get-Lines $r)[0] -match 'not verified\)') "$($r.Calls -join '; ')`n$($r.Out)"
 
