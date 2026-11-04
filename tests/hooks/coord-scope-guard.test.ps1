@@ -97,6 +97,16 @@ function Skip([string]$Name, [string]$Reason) {
     $script:skipped++
     Write-Host "  UNCHECKED: $Name ($Reason)"
 }
+# A G9 timing row: with TRACKSTEWARD_SKIP_TIMING=1 (set by the CI workflow; a
+# hosted runner is slower than the budgets) it is skipped, one SKIP line each,
+# never counted as passed; without it the row is reported as before.
+function Report-Timing([bool]$Ok, [string]$Name, [string]$Detail = '') {
+    if ($env:TRACKSTEWARD_SKIP_TIMING -ceq '1') {
+        Skip ('SKIP ' + ($Name -split ' ')[0] + ' timing') 'CI runner; TRACKSTEWARD_SKIP_TIMING=1'
+        return
+    }
+    Report $Ok $Name $Detail
+}
 function Get-Tail([string]$Text) {
     $t = ([string]$Text -replace "`r?`n", ' | ').Trim()
     if ($t.Length -gt 500) { $t = '...' + $t.Substring($t.Length - 500) }
@@ -1181,7 +1191,7 @@ Invoke-Group 'G9 runtime' {
     $processing = $sorted[1] - $baselineMs
     Write-Host ("info  four 78 KiB ledgers: wall-clock {0} ms (runs: {1}), start-up baseline {2} ms, processing about {3} ms" -f $sorted[1], ($ms -join '/'), $baselineMs, $processing)
     Test-Block 'G9-1 four listed 78 KiB ledgers: the call still blocks the out-of-scope path' $last @($stdScopeTail)
-    Report ((Test-Ran $last @('block')) -and $processing -lt 1000) 'G9-2 four listed 78 KiB ledgers: processing (median wall-clock minus the powershell.exe start-up baseline) under 1 s' "median wall-clock $($sorted[1]) ms, baseline $baselineMs ms"
+    Report-Timing ((Test-Ran $last @('block')) -and $processing -lt 1000) 'G9-2 four listed 78 KiB ledgers: processing (median wall-clock minus the powershell.exe start-up baseline) under 1 s' "median wall-clock $($sorted[1]) ms, baseline $baselineMs ms"
 
     # an index of 9 entries reads the first 8 and warns
     Reset-State
@@ -1204,7 +1214,7 @@ Invoke-Group 'G9 runtime' {
     $r = Invoke-Edit -Cwd $wtA1 -Path $outPath -StubDir $stubGeneric -ExtraEnv @{ CSG_REAL = $realGit; CSG_SLEEP_PINGS = '11'; CSG_SLEEP_ADDR = $addr }
     Write-Host ("info  git sleeping 10 s per call: wall-clock {0} ms (start-up baseline {1} ms)" -f $r.Ms, $baselineMs)
     Test-Warn 'G9-5 a git that sleeps 10 s: the call allows with the timeout warning' $r @('timed out after ', ' ms (', '); this edit is NOT guarded')
-    Report ((Test-Ran $r @('warn')) -and $r.Ms -lt $limit) 'G9-6 a git that sleeps 10 s: the call ends inside the 3 s budget (plus start-up and the kill)' "took $($r.Ms) ms, limit $limit ms"
+    Report-Timing ((Test-Ran $r @('warn')) -and $r.Ms -lt $limit) 'G9-6 a git that sleeps 10 s: the call ends inside the 3 s budget (plus start-up and the kill)' "took $($r.Ms) ms, limit $limit ms"
     Test-NoLeftover 'G9-7 a git that sleeps 10 s' @($addr, $stubGeneric) $r
 
     # a git that sleeps ~1 s per call: each call is under the 2 s bound, together past the 3 s budget
@@ -1212,7 +1222,7 @@ Invoke-Group 'G9 runtime' {
     $r = Invoke-Edit -Cwd $wtA1 -Path $outPath -StubDir $stubGeneric -ExtraEnv @{ CSG_REAL = $realGit; CSG_SLEEP_PINGS = '2'; CSG_SLEEP_ADDR = $addr }
     Write-Host ("info  git sleeping about 1 s per call: wall-clock {0} ms (start-up baseline {1} ms)" -f $r.Ms, $baselineMs)
     Test-Warn 'G9-8 a git that sleeps about 1 s per call: the budget runs out, the call allows with the deadline warning' $r @('timed out after ', ' ms (', '); this edit is NOT guarded')
-    Report ((Test-Ran $r @('warn')) -and $r.Ms -lt $limit) 'G9-9 a git that sleeps about 1 s per call: the call ends inside the budget' "took $($r.Ms) ms, limit $limit ms"
+    Report-Timing ((Test-Ran $r @('warn')) -and $r.Ms -lt $limit) 'G9-9 a git that sleeps about 1 s per call: the call ends inside the budget' "took $($r.Ms) ms, limit $limit ms"
     Test-NoLeftover 'G9-10 a git that sleeps about 1 s per call' @($addr, $stubGeneric) $r
 
     # the git call made through Get-CoordMainRoot is bounded the same way
@@ -1220,7 +1230,7 @@ Invoke-Group 'G9 runtime' {
     $r = Invoke-Edit -Cwd $wtA1 -Path $outPath -StubDir $stubGeneric -ExtraEnv @{ CSG_REAL = $realGit; CSG_SLEEP_PINGS = '11'; CSG_SLEEP_ADDR = $addr; CSG_SLEEP_MATCH = 'worktree list' }
     Write-Host ("info  only 'git worktree list' sleeping 10 s: wall-clock {0} ms" -f $r.Ms)
     Test-Warn 'G9-11 only the Get-CoordMainRoot call (worktree list) sleeps 10 s: timeout warning, edit allowed' $r @('timed out after ', '); this edit is NOT guarded')
-    Report ((Test-Ran $r @('warn')) -and $r.Ms -lt $limit) 'G9-12 only the worktree-list call sleeps 10 s: the call ends inside the budget' "took $($r.Ms) ms, limit $limit ms"
+    Report-Timing ((Test-Ran $r @('warn')) -and $r.Ms -lt $limit) 'G9-12 only the worktree-list call sleeps 10 s: the call ends inside the budget' "took $($r.Ms) ms, limit $limit ms"
     Test-NoLeftover 'G9-13 only the worktree-list call sleeps' @($addr, $stubGeneric) $r
 
     # a git that starts a child holding its stdout and exits at once
@@ -1229,7 +1239,7 @@ Invoke-Group 'G9 runtime' {
     $r = Invoke-Edit -Cwd $wtA1 -Path $outPath -StubDir $stubChild -ExtraEnv @{ CSG_LOG = $files.Log; CSG_CHILD_ADDR = $addr }
     Write-Host ("info  git leaving a child on its stdout (8 s): wall-clock {0} ms" -f $r.Ms)
     Test-NoBlock 'G9-14 a git whose child holds its stdout open' $r
-    Report ((Test-Ran $r @('allow', 'warn')) -and $r.Ms -lt $limit) 'G9-15 a git whose child holds its stdout open: the call returns inside the budget, not after the child ends (about 8 s)' "took $($r.Ms) ms, limit $limit ms"
+    Report-Timing ((Test-Ran $r @('allow', 'warn')) -and $r.Ms -lt $limit) 'G9-15 a git whose child holds its stdout open: the call returns inside the budget, not after the child ends (about 8 s)' "took $($r.Ms) ms, limit $limit ms"
     Report (Test-Path -LiteralPath $files.Log) 'G9-16 the child-holder stub was reached (the row exercises the stdout path)' 'the stub git was never called'
     Start-Sleep -Milliseconds 300
     $left = Get-LeftoverProcs @($addr)
