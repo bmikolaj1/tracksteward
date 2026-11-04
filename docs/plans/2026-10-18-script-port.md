@@ -166,7 +166,12 @@ library), each with a test that runs the script from the installed layout.
   `-Shell powershell|pwsh` picks the host when both exist.
 - **Fences rewritten:** the private suites assert the author's real `~/.claude/coordination` is
   byte-unchanged. The port points the index at a temp folder (`COORD_INDEX_DIR`) and asserts the
-  *runner's* real profile is untouched, with no name in it.
+  *runner's* real profile is untouched, with no name in it. (As first ported, the scope-guard suite
+  compared the real index byte for byte. Since #15 it uses the fixture's tolerant check
+  (`Get-CoordRealIndexLeak`): a removed file, a changed earlier byte, or added text naming the run's
+  scratch root is a leak; appended text and new files that name no scratch path (a live coordinator's)
+  are tolerated. `sessions\` is left out of that snapshot and scanned apart, for content naming the
+  run's scratch root. The six script suites used that tolerant fence from 0.2.1.)
 - **Dropped:** `coord-install.test.ps1` tests the private install script; it is replaced by a
   `hooks.json` shape test (matcher, timeout, exit forward, escaped path) if D3 (a) holds.
 - **Scrub suite, new:** fails on an absolute user path, a Desktop `local_` id, a 40-hex sha in a
