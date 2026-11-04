@@ -248,7 +248,10 @@ Windows-only as shipped, and its stated limits are in the header of `hooks/coord
 - `coord-set` does not refuse a dotted time (`10.22`): that would also refuse "Opus 4.15" and "git 2.38". It
   refuses a typed time with a colon, a fullwidth colon or `10h22`.
 - `coord-status` and `coord-set` check the git 2.38 floor only when they use git to find the ledger (no `-Ledger`).
-- No CI workflow ships: the tests run locally with `tests\run.ps1`.
+- One CI workflow ships (`.github/workflows/test.yml`): it runs `tests\run.ps1` under Windows PowerShell 5.1 on
+  pull requests and manual runs only (no push or schedule trigger). On the runner the scrub suite skips its
+  private-denylist rows and the guard suite skips its five G9 timing rows; both print as UNCHECKED, so a green
+  CI run does not cover them. Run `tests\run.ps1` locally for those.
 
 ## License
 
