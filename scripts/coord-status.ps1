@@ -245,7 +245,10 @@ if ($Verify) {
         }
         elseif (-not $j.Ok) {
             # a gh failure is not a pass: say so (the PR could not be checked), as the live rows do with "unknown"
-            $g.done += (Get-Trunc "    unverified: #$pr (gh failed: $($j.Error); L$($rowLine[$i]))" 140)
+            # the cut falls on the error text, never on the L<n> pointer the line ends in (F25)
+            $uHead = "    unverified: #$pr (gh failed: "
+            $uTail = "; L$($rowLine[$i]))"
+            $g.done += ($uHead + (Get-Trunc (([string]$j.Error) -replace '\s+', ' ') ([Math]::Max(4, 140 - $uHead.Length - $uTail.Length))) + $uTail)
         }
     }
     # one line for all of them: a MERGED row whose Repo cell is no folder here cannot be checked, and says so once
