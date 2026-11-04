@@ -17,7 +17,7 @@ With `scripts/coord-brief.ps1 -Track <name>` the script fills the slots the ledg
 and track names, repo, branch, session, this file's path, the Baseline row, the live tracks, your globs and the
 globs that are not yours) and leaves the others as they are here; `-Check` prints the pointer line only when
 none of the template's own slots is left and every fixed line (TRACK, THIS FILE, MERGE ORDER, ACK, WIP, REPORT BACK
-and the rest, apart from SUPERSEDES and CROSS-REPO) is still there. Without the script, fill all of them by hand. `-Check` looks for the
+and the rest, apart from SUPERSEDES and CROSS-REPO) is still there with text after it (on its line, or on the lines right under it up to a blank line or the next label line; a label cut to its bare name, or with its instructions removed, is refused). Without the script, fill all of them by hand. `-Check` looks for the
 slot names in this template, so keep the names when you edit it.
 
 ```
