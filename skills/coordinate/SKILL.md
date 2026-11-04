@@ -279,7 +279,9 @@ sessions is not available, the pointer line is what the user pastes.
    row of the repo, the live sibling tracks, and the scope lines. It lists the slots it left;
    replace those by hand, delete the SUPERSEDES line and the CROSS-REPO block unless they apply, then
    run `& "${CLAUDE_PLUGIN_ROOT}/scripts/coord-brief.ps1" -Track '<track>' -Check`. Only a brief with no
-   template slot left and every fixed line of the template still in it (only SUPERSEDES and
+   template slot left and every fixed line of the template still in it with text after it (on its
+   line, or on the lines right under it up to a blank line or the next label line; a label cut to
+   its bare name, or with its instructions removed, is refused; only SUPERSEDES and
    CROSS-REPO may go), for a ledger the scope guard can read (today's, registered with
    `coord-log.ps1 -Register`), makes it print the pointer line to send. Pass `-Repo <full path>`
    when two repos have a track of that name, and `-Force` to render again (the old file is kept as
@@ -368,7 +370,9 @@ with the same parameters (`-Ledger` written `C:/...`). Without `-Ledger` it read
 the repo's main checkout only.
 
 - Groups: RUNNING, WAITING (BRIEFED, flagged when it has no ACK after 15 minutes, WAIT-*, unticked Owed checks,
-  Findings with no later `F<n> outcome:` line, and any Status cell whose first word is not in the
+  Findings with no later `F<n> outcome:` line (a finding is its id plus its carry date: a carried
+  `F3 (2026-10-28)` and today's `F3` are two findings, and an outcome line closes the one whose
+  date it repeats, so `F3 outcome:` closes today's), and any Status cell whose first word is not in the
   vocabulary, listed as unclassified), QUEUED, BLOCKED (also an open Merge slot no live row
   carries), DONE. The last line is `STATUS <date> <time>: <counts>`.
 - Status vocabulary the board reads (first word, upper case): QUEUED, BRIEFED, RUNNING, PR-OPEN, WAIT-USER, WAIT-SLOT, WAIT-QUOTA, BLOCKED, MERGED, DONE. A ledger written before the vocabulary still renders; its live
@@ -381,7 +385,8 @@ the repo's main checkout only.
   this machine prints `unknown (the Repo cell is not a folder on this machine)`. A
   `[after #<n> merges]` gate names no repo, so it asks the current folder's repo and prints
   `(asked the repo of <folder>)` beside its state. A MERGED row whose Repo cell is not a folder adds
-  one `unverified: #<n> #<m> ... (...)` line to DONE.
+  one `unverified: #<n> #<m> ... (...)` line to DONE; a MERGED row whose gh call fails adds
+  `unverified: #<n> (gh failed: <why>; L<n>)` there, never a silent pass.
 - A ledger that cannot be read prints `STATUS: could not read - <reason>` (exit 2); report that as
   is, never as "nothing running".
 - Put the STATUS line into the day-close handover and the kickoff prompt.
@@ -491,7 +496,9 @@ window and the coordinator, at once, and stops until answered.
    With a merge queue, gh only enqueues: wait until `state` reads MERGED.
 5. **Verify on origin.** `gh pr view <n> --json state,mergeCommit` gives the merge sha. Then
    `git fetch origin` and `git merge-base --is-ancestor <merge sha> origin/main`: exit code 0
-   means it is on main. Log it.
+   means it is on main. Log it. (A narrowed `remote.origin.fetch` can leave `origin/main` stale
+   after that fetch; fetch the base by name too:
+   `git fetch origin +refs/heads/main:refs/remotes/origin/main`. The script does this itself.)
 6. **Delete the branch by its tip, atomically.** Delete the remote branch only while its tip is
    still the merged head, in one step:
    `git push --force-with-lease=refs/heads/<branch>:<head sha> origin :refs/heads/<branch>`.
@@ -511,7 +518,9 @@ window and the coordinator, at once, and stops until answered.
    the notification half of step 7 are one call, after the user's merge OK, from the coordinator's
    main checkout: `& "${CLAUDE_PLUGIN_ROOT}/scripts/merge-verify.ps1" -Pr <n>` (from Bash, through
    `MSYS_NO_PATHCONV=1 powershell.exe -ExecutionPolicy Bypass -File "$(cygpath -w "${CLAUDE_PLUGIN_ROOT}/scripts/merge-verify.ps1")" -Pr <n>`).
-   It checks that the merge commit is on `origin/<base>`, fast-forwards the launch checkout when
+   It checks that the merge commit is on `origin/<base>` (after `git fetch --prune origin` it fetches
+   the base alone by its exact name, so a narrowed fetch refspec cannot leave a stale `origin/<base>`
+   to be read; a failed base fetch is COULD NOT CHECK), fast-forwards the launch checkout when
    that is safe (`-NoFastForward` skips it), checks the git config, and prints one `NOTIFY` line
    per other live track of the repo, ready to paste (it sends nothing). **It deletes no branch
    unless you pass `-DeleteBranch`.** Without the flag it prints the delete command it would have

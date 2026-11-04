@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+Merged after 0.2.2; no version bump yet.
+
+- **merge-verify** (F9): after `git fetch --prune origin` the base is also fetched alone by its exact
+  name, so a narrowed fetch refspec cannot leave a stale `origin/<base>` to be read; a failed base
+  fetch is COULD NOT CHECK (exit 2).
+- **coord-status** (F10): a finding is keyed by its id and its carry date (the first `yyyy-MM-dd` in its
+  tags). A carried `F3 (2026-10-28)` and today's `F3` list separately and close separately; an undated
+  `F3 outcome:` no longer closes a dated carried finding.
+- **coord-status -Verify** (F11): a MERGED row whose gh call fails prints
+  `unverified: #<n> (gh failed: ...; L<n>)` under DONE instead of nothing.
+- **coord-brief -Check** (F12): refuses a brief in which a fixed label has no text after it (on its line,
+  or under it up to a blank line or the next label line), naming the labels; a brief cut down to its
+  labels used to pass.
+- **Tests**: the scope-guard suite no longer fails when a live coordinator or guard writes the real index
+  folder (#15); `sessions\` is scanned apart for content naming the run's scratch root.
+- **CI**: `.github/workflows/test.yml` runs `tests\run.ps1` under Windows PowerShell 5.1 on pull requests
+  and manual runs (#17). With `GITHUB_ACTIONS=true` the scrub suite skips its denylist rows when the
+  denylist is absent (UNCHECKED), and `TRACKSTEWARD_SKIP_TIMING=1`, which the workflow sets, skips the
+  guard suite's five G9 timing rows (UNCHECKED, not counted as passed). Otherwise an absent denylist
+  fails the scrub suite, and the timing rows run unless that variable is set. Issue templates added.
+- **Docs**: the skill and the brief template describe the F9-F12 behaviour above; the port plan's note on
+  the test fences matches the suites after #15.
+
 ## 0.2.2 - 2026-11-03
 
 Fixes the "Known and left" items of 0.2.1; no new commands.
