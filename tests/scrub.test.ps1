@@ -17,7 +17,11 @@
 #     $env:TRACKSTEWARD_SCRUB_DENYLIST (one entry per line, # comments and blank
 #     lines ignored). The denylist is private and lives outside this repo.
 #     If the variable is unset, the file is missing, or the file holds no
-#     entry, the denylist row is reported UNCHECKED (not passed).
+#     entry, the denylist is absent: in a GitHub Actions run ($env:GITHUB_ACTIONS
+#     is exactly 'true'; the runner has no copy of the private file) the
+#     denylist rows are skipped with an UNCHECKED "denylist absent" line (not
+#     passed); in every other run they FAIL, so a local run never passes
+#     without the denylist.
 #   - a token of 7 to 40 hex digits that is a commit of any repo listed in
 #     $env:TRACKSTEWARD_SCRUB_REPOS (paths separated by ';'), checked with
 #     git -C <repo> cat-file -e <hex>^{commit}. The repo paths are never
@@ -51,7 +55,7 @@
 # index version git cat-file could not read.
 #
 # Discovery that fails (git missing, not a work tree) or lists no file is a
-# FAIL, never UNCHECKED. A check that cannot run (no denylist, no repos, a NUL
+# FAIL, never UNCHECKED. A check that cannot run (no denylist in CI, no repos, a NUL
 # file, a skipped entry, a file name the file system refuses) is UNCHECKED; with
 # -Strict (or $env:TRACKSTEWARD_SCRUB_STRICT = 1) every UNCHECKED is a FAIL
 # instead.
@@ -60,7 +64,8 @@
 #      stays quiet where it should (the rule itself can fail); hex tokens
 # SG2  the denylist reader and matcher: comments and blanks skipped, whole word,
 #      case-insensitive; an unset variable, a missing file and an empty file
-#      have no denylist (UNCHECKED, not passed)
+#      have no denylist; an absent denylist is skipped only when GITHUB_ACTIONS
+#      is 'true', and fails otherwise
 # SG3  strict mode and the repo list (an unset variable gives an empty array)
 # SG4  the scanner on synthetic repos: discovery failures, git-quoted names,
 #      untracked and ignored files, UTF-16 and UTF-32, NUL files, the index
@@ -128,6 +133,22 @@ function Read-ScrubDenylist([string]$Path) {
     $entries = @([System.IO.File]::ReadAllLines($Path) | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
     if ($entries.Count -eq 0) { return $null }
     return , ([string[]]$entries)
+}
+# What an absent denylist counts as: SKIP (reported UNCHECKED) in a GitHub
+# Actions run, where the private file cannot be, and FAIL everywhere else, so
+# a local run never passes without it.
+function Get-ScrubDenylistAbsentVerdict([string]$GithubActions) {
+    if ($GithubActions -ceq 'true') { return 'SKIP' }
+    return 'FAIL'
+}
+function Write-ScrubDenylistAbsent([string]$Label) {
+    $reason = 'TRACKSTEWARD_SCRUB_DENYLIST is unset, the file is missing, or it holds no entry'
+    if ((Get-ScrubDenylistAbsentVerdict ([string]$env:GITHUB_ACTIONS)) -ceq 'SKIP') {
+        Write-ScrubUnchecked "$Label skipped: denylist absent (GitHub Actions run: the private denylist is not on the runner)" $reason
+    }
+    else {
+        Assert-Coord "${Label}: denylist absent (a run outside CI needs it: set TRACKSTEWARD_SCRUB_DENYLIST to the private denylist file)" $false $reason
+    }
 }
 function Get-ScrubDenyRegex([string]$Entry) {
     return [regex]::new('(?i)(?<![A-Za-z0-9_])' + [regex]::Escape($Entry) + '(?![A-Za-z0-9_])')
@@ -614,6 +635,9 @@ Assert-Coord 'SG2 a missing file has no denylist' ($null -eq (Read-ScrubDenylist
 $emptyFile = Join-Path $tmp 'empty.txt'
 [System.IO.File]::WriteAllText($emptyFile, "# only a comment`n`n", $coordUtf8)
 Assert-Coord 'SG2 a file with no entry has no denylist' ($null -eq (Read-ScrubDenylist $emptyFile))
+Assert-Coord 'SG2 an absent denylist is skipped in a GitHub Actions run (GITHUB_ACTIONS=true)' ((Get-ScrubDenylistAbsentVerdict 'true') -ceq 'SKIP')
+$offCi = @('', 'false', 'TRUE', '1', ' true')
+Assert-Coord 'SG2 an absent denylist fails outside GitHub Actions (unset, false, TRUE, 1, a padded true)' (@($offCi | Where-Object { (Get-ScrubDenylistAbsentVerdict $_) -cne 'FAIL' }).Count -eq 0)
 
 # ---- SG3: strict mode and the repo list ---------------------------------------
 Write-Host "(SG3) strict mode and the repo list"
@@ -964,7 +988,7 @@ if ($res.DiscoveryOk) {
     }
 }
 if (-not $denylist) {
-    Write-ScrubUnchecked 'SG5 denylist rows' 'TRACKSTEWARD_SCRUB_DENYLIST is unset, the file is missing, or it holds no entry'
+    Write-ScrubDenylistAbsent 'SG5 denylist rows'
 }
 
 Write-Host "(SG6) the history scan: every blob a range of commits adds or changes, and every commit message"
@@ -1065,7 +1089,7 @@ if ($History) {
             $hs = @($real.Hits | Where-Object { $_.Rule -like 'denylist entry*' } | ForEach-Object { Format-ScrubHit $_ })
             Assert-Coord "SG6 no denylist entry ($($denylist.Count) entries) in the history" ($hs.Count -eq 0) ($hs -join "`n")
         }
-        else { Write-ScrubUnchecked 'SG6 history denylist rows' 'TRACKSTEWARD_SCRUB_DENYLIST is unset, the file is missing, or it holds no entry' }
+        else { Write-ScrubDenylistAbsent 'SG6 history denylist rows' }
         $histRepoRule = Invoke-ScrubRepoRule $real ([string]$env:TRACKSTEWARD_SCRUB_REPOS)
         if ($histRepoRule.Verdict -ceq 'RAN') {
             $hs = @($real.Hits | Where-Object { $_.Rule -ceq $hexRuleName } | ForEach-Object { Format-ScrubHit $_ })

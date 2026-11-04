@@ -1,0 +1,46 @@
+name: Feature request
+description: A new script, flag, rule or doc change for the coordinator pattern.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        tracksteward stays thin on purpose: one coordinator session, a ledger, briefs,
+        findings, one verified merge at a time. Describe the coordination problem first;
+        a proposed solution is welcome but optional. Leave out anything private (paths,
+        repo or app names, session ids, ledger lines).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What goes wrong or takes too long today, in which part of the coordination day.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you would like a script, the scope guard, the skill or a template to do.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - a script (scripts/)
+        - the scope guard (hooks/)
+        - the skill or a template (skills/, templates/)
+        - the tests (tests/)
+        - the docs (README, CHANGELOG)
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds and alternatives
+      description: What you do now instead, and other designs you considered.
+  - type: textarea
+    id: verification
+    attributes:
+      label: How it would be verified
+      description: The test rows or checks that would show it works (and fail without it).

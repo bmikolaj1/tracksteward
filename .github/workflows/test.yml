@@ -1,0 +1,49 @@
+# Runs the test suites (tests\run.ps1) on Windows PowerShell 5.1, the one host
+# the scripts are verified on.
+#
+# Triggers: pull requests and a manual run only. No push and no schedule: the
+# account's Actions minutes have a hard monthly cap.
+#
+# The scrub suite's private denylist is not in this repo and not on the runner.
+# The suite sees GITHUB_ACTIONS=true and skips its denylist rows with an
+# UNCHECKED "denylist absent" line; outside CI an absent denylist fails it.
+# TRACKSTEWARD_SKIP_TIMING=1 skips the guard suite's G9 timing rows (SKIP lines,
+# not passed); a local run without it keeps them. No secret is set here.
+name: test
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-ps1:
+    name: tests\run.ps1 (Windows PowerShell 5.1)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Versions
+        shell: powershell
+        run: |
+          "PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
+          git --version
+
+      - name: tests\run.ps1
+        shell: powershell
+        env:
+          # The guard suite's G9 timing rows have fixed budgets that a hosted
+          # runner misses; they print a SKIP line each and do not count as passed.
+          TRACKSTEWARD_SKIP_TIMING: '1'
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\run.ps1 -Shell powershell
+          exit $LASTEXITCODE
