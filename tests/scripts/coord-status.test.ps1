@@ -25,6 +25,7 @@
 #   T9   -Verify: a live row with a PR prints the gh state; a failing gh prints `unknown (...)`, never a state; a
 #        MERGED row whose PR is OPEN is a MISMATCH on the STATUS line; without -Verify gh is not called at all
 #   T9e  (F11) a MERGED row whose gh call fails prints an `unverified: #<n> (gh failed ...)` line, never nothing
+#   T9f  (F25) with gh missing from PATH (a long error text) that line stays within 140 characters and still ends in its L<n> pointer
 #   T10  the Log and Decisions sections are never read (poison lines there change nothing)
 #   T12  a big synthetic ledger is cut at the cap with `... <n> more; -Full or -Group <name>`; -Full lists all;
 #        -Group prints only that group, uncapped
@@ -342,6 +343,15 @@ Assert-Coord 'T9c a failing gh prints "unknown (...)" and never a state for that
 # T9e (F11) a MERGED row whose gh call fails is not silently skipped: it gets its own "unverified" line with the reason, and is no MISMATCH
 $r = Invoke-Board $l '-Verify' -Rules @((New-CoordRule '^pr view 90\b' $prJson), (New-CoordRule '^pr view 91\b' 'boom' 1), (New-CoordRule '^pr view 92\b' $prJson))
 Assert-Coord 'T9e a MERGED row (#91) whose gh fails prints "unverified: #91 (gh failed ..." and counts no MISMATCH for it; #92 still MISMATCHes' ((Test-Has $r 'unverified: #91 \(gh') -and (Test-Has $r 'MISMATCH: #92 is OPEN') -and -not (Test-Has $r 'MISMATCH: #91') -and $r.Last -match '; 1 MISMATCH') $r.Out
+# T9f (F25) a long gh failure text must not cost the L<n> pointer: with gh missing from PATH, Invoke-CoordGhJson's error is the long
+# "gh could not be run: The term 'gh' is not recognized ..." text; the unverified line stays within 140 characters, the cut falls on the error text ("...; L<n>)") and the row's L<n> pointer survives
+$noGh = Join-Path $root 'no-gh-on-path'
+[void][IO.Directory]::CreateDirectory($noGh)
+$l9f = New-Ledger -Rows @((Get-Row 'fine' 'MERGED 10:00 #91 as aaaaaaaaaaaa' '#91'))
+$sp9f = if ($ScriptPath) { [System.IO.Path]::GetFullPath($ScriptPath) } else { '' }
+$r = Invoke-CoordScript -Name 'coord-status.ps1' -Cwd $l9f.Dir -ScriptArgs ("-Ledger `"$($l9f.Path)`" -Now `"$clock`" -Verify") -ExtraEnv @{ PATH = $noGh } -ScriptPath $sp9f
+$unv9f = @(Get-Lines $r | Where-Object { $_ -match 'unverified: #91' })
+Assert-Coord 'T9f a MERGED row (#91) whose gh cannot be run (long error text) prints one "unverified: #91 (gh failed: ..." line within 140 characters that still ends in its L<n> pointer' ($unv9f.Count -eq 1 -and $unv9f[0] -match 'gh could not be run' -and $unv9f[0].Length -le 140 -and $unv9f[0] -match '\.\.\.; L\d+\)$') "$($unv9f -join "`n")`n$($r.Out)`n$($r.Err)"
 $r = Invoke-Board $l
 Assert-Coord 'T9d without -Verify gh is not called and the header says "not verified"' ($r.Calls.Count -eq 0 -and @(Get-Lines $r)[0] -match 'not verified\)') "$($r.Calls -join '; ')`n$($r.Out)"
 

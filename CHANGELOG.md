@@ -12,6 +12,8 @@ Merged after 0.2.2; no version bump yet.
   `F3 outcome:` no longer closes a dated carried finding.
 - **coord-status -Verify** (F11): a MERGED row whose gh call fails prints
   `unverified: #<n> (gh failed: ...; L<n>)` under DONE instead of nothing.
+- **coord-status -Verify** (F25): the 140-character cut of that `unverified:` line falls on the gh error
+  text, never on the `L<n>` pointer; a long error (gh not on PATH) used to cut the pointer off.
 - **coord-brief -Check** (F12): refuses a brief in which a fixed label has no text after it (on its line,
   or under it up to a blank line or the next label line), naming the labels; a brief cut down to its
   labels used to pass.
