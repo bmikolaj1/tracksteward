@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 - 2026-11-05
 
-Merged after 0.2.2; no version bump yet.
+Fixes to the scripts, the tests and the docs; no new commands.
 
 - **merge-verify** (F9): after `git fetch --prune origin` the base is also fetched alone by its exact
   name, so a narrowed fetch refspec cannot leave a stale `origin/<base>` to be read; a failed base
