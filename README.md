@@ -3,7 +3,7 @@
 **One thin coordinator session over many parallel Claude Code sessions.** It gives you a daily
 ledger, scoped briefs, a findings protocol, and one verified merge at a time.
 
-> **Status:** v0.2.2, 2026-11-03. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
+> **Status:** v0.2.3, 2026-11-05. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
 > for 10 coordination days: 57 merges verified, 127 findings with recorded outcomes, up to 16 tracks in
 > a day. The scripts and the scope guard came to this plugin in 0.2.0, after those days.
 >
@@ -198,9 +198,9 @@ busiest recorded day ran sixteen.
 The version lives in `.claude-plugin/plugin.json`, and each release bumps it; the one exception is
 0.2.2, whose fixes merged while the file still said 0.2.1 (the bump followed; see the CHANGELOG).
 Installed copies stay on their version until you update: `claude plugin update
-coordinate@tracksteward`, or turn on auto-update for this marketplace in `/plugin`. 0.1.1 and 0.1.2
-are tagged `vX.Y.Z` (0.1.0 has no commit of its own); the 0.2 releases are not tagged yet, so the
-CHANGELOG is the record of what each one holds.
+coordinate@tracksteward`, or turn on auto-update for this marketplace in `/plugin`. 0.1.1, 0.1.2
+and 0.2.3 onward are tagged `vX.Y.Z` (0.1.0 has no commit of its own); 0.2.0, 0.2.1 and 0.2.2 are not
+tagged, so the CHANGELOG is the record of what each one holds.
 
 ## Scripts and the scope guard
 
