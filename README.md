@@ -214,6 +214,9 @@ calls these from the plugin folder (`${CLAUDE_PLUGIN_ROOT}/scripts/`):
   `READY | WAIT | HOLD`.
 - `merge-verify.ps1`: confirms the merge commit on origin, deletes the branch only when its tip is
   still the merged head, and checks the shared checkout and git config.
+- `prune-scan.ps1`: which worktrees and branches can go. One `SAFE (<evidence>)` or `KEEP <reason>`
+  line per worktree, local branch and origin branch, and a last `PRUNE-SCAN:` count line. It removes
+  nothing unless told to (`-Apply`, Windows only, after the user's OK); every unknown is KEEP.
 - `coord-log.ps1`: appends to the ledger, stamping the time from the clock, expanding every `{now}`
   in the text (`{{now}}` writes a literal `{now}`) and refusing typed times, BOM and bidi marks;
   `-Register` records the day's ledger for the guard.
