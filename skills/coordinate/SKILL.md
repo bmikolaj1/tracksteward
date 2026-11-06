@@ -247,8 +247,8 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
    **With the script**, one call gives the whole inventory and removes nothing:
    `& "${CLAUDE_PLUGIN_ROOT}/scripts/prune-scan.ps1" -Repos '<repo>','<repo>' -SessionCwds '<cwd>','<cwd>'`
    (from Bash, through `powershell.exe -ExecutionPolicy Bypass -File` as above, with each list as one
-   comma list; give it the folders `ListAgents` reports for live sessions). Its only write is `git
-   fetch --prune` (git runs with optional locks off, so even `git status` leaves a worktree's index alone). A first `ledger:` line names the ledgers read (or says none was), then one line per
+   comma list; give it the folders `ListAgents` reports for live sessions). Without `-Apply` the only thing it changes is what `git
+   fetch --prune` brings in (git runs with optional locks off, so even `git status` leaves a worktree's index alone). A first `ledger:` line names the ledgers read (or says none was), then one line per
    worktree, local branch and origin branch, `SAFE (<evidence>)` or `KEEP <reason>`, and a last
    `PRUNE-SCAN: <n> SAFE, <m> KEEP` line (with `-Apply`: `; applied <a>, failed <f>`; a repo or ledger
    it could not check: `; COULD NOT CHECK: ...`). Exit 0, 1 when an apply failed, 2 when something
