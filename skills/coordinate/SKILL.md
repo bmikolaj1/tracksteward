@@ -248,15 +248,15 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
    `& "${CLAUDE_PLUGIN_ROOT}/scripts/prune-scan.ps1" -Repos '<repo>','<repo>' -SessionCwds '<cwd>','<cwd>'`
    (from Bash, through `powershell.exe -ExecutionPolicy Bypass -File` as above, with each list as one
    comma list; give it the folders `ListAgents` reports for live sessions). Its only write is `git
-   fetch --prune`. A first `ledger:` line names the ledgers read (or says none was), then one line per
+   fetch --prune` (git runs with optional locks off, so even `git status` leaves a worktree's index alone). A first `ledger:` line names the ledgers read (or says none was), then one line per
    worktree, local branch and origin branch, `SAFE (<evidence>)` or `KEEP <reason>`, and a last
    `PRUNE-SCAN: <n> SAFE, <m> KEEP` line (with `-Apply`: `; applied <a>, failed <f>`; a repo or ledger
    it could not check: `; COULD NOT CHECK: ...`). Exit 0, 1 when an apply failed, 2 when something
    could not be checked. Every unknown is KEEP.
    - A **branch** is SAFE only with a merged, same-repo PR whose head IS the tip and that went into
      origin's default branch (or the tip is on it), no open PR using it as head or base, no live
-     ledger row naming it as its Branch (a row counts unless its Repo cell resolves to another
-     repo), no KEEP worktree holding it (the main checkout, and a worktree mid-rebase or mid-bisect,
+     ledger row naming it as its Branch (a row counts unless its Repo cell is the path of another
+     repo's checkout or the folder name of another repo scanned in the same run), no KEEP worktree holding it (the main checkout, and a worktree mid-rebase or mid-bisect,
      included; for an origin branch, also one tracking it), and no other local branch of its name in
      another case. `main`, `master` and origin's default branch are never SAFE.
    - A **worktree** is SAFE only when it is not the main checkout, unlocked, on a SAFE branch, clean
@@ -264,7 +264,7 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
      inside it, no junction or symlink on its path or in its tree, and no ignored file beyond build
      caches (`build`, `node_modules`, `.dart_tool`, `.gradle`, `Pods` and the like), the two files
      Flutter regenerates (`android/local.properties` while every line is `key=value` for one of
-     Flutter's own keys, and `GeneratedPluginRegistrant.java`, by whole path) and `.worktreeinclude`
+     Flutter's own keys (comments and blank lines are fine), and `GeneratedPluginRegistrant.java`, by whole path) and `.worktreeinclude`
      copies identical to the main checkout's. `_inbox/`, `.claude/audit/`, `CODE-REVIEW.md` and the
      like are KEEP. A session or ledger cwd through a junction makes every worktree KEEP.
    - Without `-Ledger` it reads today's and yesterday's ledger of the current repo and every ledger

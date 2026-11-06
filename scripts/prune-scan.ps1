@@ -89,7 +89,10 @@
 # Exit: 0 scan done (and every apply succeeded), 1 an apply failed, 2 could not check.
 # Usage: powershell.exe -ExecutionPolicy Bypass -File prune-scan.ps1 -Repos <repoA>,<repoB> [-SessionCwds <dir>,<dir>] [-Ledger <path>] [-Apply]
 # Lists are split on commas only (a semicolon is legal in a folder name).
-# Without -Apply its only writes are `git fetch --prune` (remote-tracking refs).
+# Without -Apply its only write is `git fetch --prune` (remote-tracking refs): git runs with
+# GIT_OPTIONAL_LOCKS=0, so `git status` does not refresh the index of a worktree a live session may be using.
+# Off Windows -Apply refuses: no `ledger:` line, and `PRUNE-SCAN: 0 SAFE, 0 KEEP; applied 0, failed 0;
+# COULD NOT CHECK: every repo (...)` as the last line, exit 2.
 # Not seen: a cwd on a subst or mapped drive that reaches a worktree (it is compared as given);
 # a session that enters a worktree between the scan and its removal; under an ignore line like
 # `notes/*`, git prints `notes/build/` alone, which reads as a build cache; GIT_DIR or
@@ -107,12 +110,14 @@ param(
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'coord-common.ps1')
 Initialize-CoordConsole
+# `git status` refreshes a worktree's index unless told not to; the scan must not write there.
+$env:GIT_OPTIONAL_LOCKS = '0'
 
-# Verified on Windows PowerShell 5.1 only. -Apply deletes branches and removes worktrees, and the
-# checks it leans on (junctions, 8.3 names, a held folder) were measured on Windows: off Windows it
-# refuses. The scan alone runs elsewhere, not verified there.
+# -Apply deletes branches and removes worktrees, and the checks it leans on (junctions, a held folder)
+# were tested on Windows PowerShell 5.1 only (8.3 short names were not tested): off Windows it refuses (PowerShell 7 on
+# Windows is not gated and not verified). The scan alone runs elsewhere, not verified there.
 if ($Apply -and -not (Test-CoordWindows)) {
-    Write-Output "PRUNE-SCAN: 0 SAFE, 0 KEEP; COULD NOT CHECK: -Apply (not verified off Windows; nothing changed)"
+    Write-Output "PRUNE-SCAN: 0 SAFE, 0 KEEP; applied 0, failed 0; COULD NOT CHECK: every repo (-Apply is not verified off Windows; nothing was changed)"
     exit 2
 }
 
@@ -129,6 +134,7 @@ function New-OrdinalTable { return (New-Object System.Collections.Hashtable ([Sy
 # not exist keeps the components it cannot find as given.
 function Get-LongPath([string]$Path) {
     try { $full = ConvertTo-CoordFullPath $Path } catch { return $Path }
+    # 8.3 names exist on Windows only (the non-Windows return is not verified).
     if (-not (Test-CoordWindows) -or $full -notmatch '~' -or $full.StartsWith('\\')) { return $full }
     $parts = $full.Split('\')
     $cur = $parts[0] + '\'
@@ -143,6 +149,7 @@ function Get-LongPath([string]$Path) {
 
 # $Child is $Parent or below it (full long paths, case-insensitive).
 function Test-UnderPath([string]$Child, [string]$Parent) {
+    # Not verified off Windows.
     if ([string]::Equals($Child, $Parent, (Get-CoordPathComparison))) { return $true }
     return $Child.StartsWith($Parent.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar, (Get-CoordPathComparison))
 }

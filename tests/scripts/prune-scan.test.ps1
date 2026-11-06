@@ -4,6 +4,11 @@
 # -Ledger except the P18 runs, which pass none, point COORD_INDEX_DIR at a scratch
 # index and run from a folder that is not a repo: the live ledger is never read.
 #
+# What changed from the private suite: the fixtures load from tests\fixtures; the fixture names are
+# neutral; the private lints pubspec.lock is gone from the generated-file rows (two files, not three, and
+# a pubspec.lock is no longer disposable); the case ids P27-P29 were other ids there.
+#
+#
 #   P1  a clean worktree on a branch merged at its tip -> worktree, branch and
 #       remote branch SAFE
 #   P2  a tip that moved past the merged head -> branch and remote KEEP, and the
@@ -19,7 +24,7 @@
 #       branch as head or base -> KEEP; a cross-repository merged PR does not
 #       count; no merged PR -> KEEP
 #   P8  gh failing or invalid -> KEEP unknown, never SAFE
-#   P9  read-only without -Apply: refs, worktrees and files unchanged
+#   P9  read-only without -Apply: refs, worktrees, files and every index unchanged
 #   P10 -Apply removes SAFE worktrees, then local and remote branches; KEEP items
 #       stay; the last line counts them
 #   P12 not a git repo, a failed fetch, an unreadable ledger -> exit 2, no SAFE
@@ -50,7 +55,7 @@
 #       SAFE branch during -Apply: the local and its origin branch stay; P25b (Codex)
 #       one added on a KEEP local whose origin branch is SAFE keeps the origin branch
 #   P26 (Codex round 2) a symbolic branch ref to main is KEEP; main survives -Apply
-#   NOT covered: -Apply refused off Windows (exit 2); the content re-read right before `git worktree remove` (not
+#   NOT covered: -Apply refused off Windows (exit 2); an 8.3 short-name path; the content re-read right before `git worktree remove` (not
 #       staged; it needs a change between the scan and the apply); rebase-apply/head-name and
 #       BISECT_START (read like head-name, not staged); a failed for-each-ref or
 #       worktree list; a listed ledger access-denied (skipped as missing); gh
@@ -227,6 +232,10 @@ function Rb([string]$Name) { return '(?m)^remote origin/' + [regex]::Escape($Nam
 
 # ---- scan --------------------------------------------------------------------
 Write-Host "(P1-P9, P13) scan"
+# A tracked file whose mtime moved with no change in content: `git status` would refresh the index of its worktree.
+(Get-Item -LiteralPath (Join-Path $wtA 'docs\done-a.md')).LastWriteTime = [DateTime]::Now.AddMinutes(7)
+function Get-IndexHashes { return (@(Get-ChildItem -LiteralPath (Join-Path $fx.Launch '.git') -Recurse -Force -File -Filter 'index' | Sort-Object FullName | ForEach-Object { "$($_.FullName)=$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)" }) -join '|') }
+$indexBefore = Get-IndexHashes
 $before = Get-State
 $r = Invoke-Prune -Extra "-SessionCwds `"$(Join-Path $wtS 'docs\sub')`""
 Assert-Coord 'scan exits 0' ($r.Code -eq 0) "exit=$($r.Code)`n$($r.Out)`nerr: $($r.Err)"
@@ -275,7 +284,7 @@ Assert-Has 'P16 and so is its remote' $r ((Rb 'twice') + 'KEEP worktree .*wtTw1'
 Assert-Has 'P22 an assume-unchanged edit is KEEP' $r ((Wt $wtAu) + 'KEEP 1 file\(s\) flagged assume-unchanged or skip-worktree.*docs/assume\.md')
 Assert-Has 'P28 a worktree with only the two generated Flutter files is SAFE' $r ((Wt $wtF) + 'SAFE')
 Assert-Has 'P28 the same plus _inbox/ is still KEEP' $r ((Wt $wtFk) + 'KEEP .*not disposable: _inbox/')
-Assert-HasNot 'P28 and the generated files are not what it names' $r ((Wt $wtFk) + 'KEEP .*(local\.properties|GeneratedPluginRegistrant|pubspec\.lock)')
+Assert-HasNot 'P28 and the generated files are not what it names' $r ((Wt $wtFk) + 'KEEP .*(local\.properties|GeneratedPluginRegistrant)')
 Assert-Has 'P28 .claude/audit/ alone is KEEP' $r ((Wt $wtAud) + 'KEEP .*not disposable: \.claude/audit/')
 Assert-Has 'P28 a local.properties in another folder is KEEP' $r ((Wt $wtLk2) + 'KEEP .*not disposable: other/local\.properties')
 Assert-Has 'P28 a local.properties with a hand-written line is KEEP' $r ((Wt $wtPx) + 'KEEP .*not disposable: android/local\.properties')
@@ -283,6 +292,7 @@ Assert-Has 'P28 an ignored directory named like a generated file is KEEP' $r ((W
 Assert-HasNot 'P9 no APPLY lines without -Apply' $r '(?m)^APPLY '
 Assert-Coord 'P9 last line counts' ($r.Last -match '^PRUNE-SCAN: \d+ SAFE, \d+ KEEP$') $r.Last
 Assert-Coord 'P9 read-only' ((Get-State) -ceq $before) 'state changed'
+Assert-Coord 'P9 the scan leaves every index alone (git runs without optional locks)' ((Get-IndexHashes) -ceq $indexBefore) 'an index file changed'
 Assert-Coord 'P9 gh merged lookups are per branch' (@($r.Calls | Where-Object { $_ -match '--state merged --head done-a ' }).Count -eq 1) ($r.Calls -join "`n")
 
 # ---- P8: gh failures -----------------------------------------------------------
@@ -362,9 +372,9 @@ Remove-Item -LiteralPath (Join-Path $idx "$today.ledgers")
 # ---- P27: a live yesterday row stops protecting only when today's ledger has a MERGED/DONE row for the same track ----
 Write-Host "(P27) yesterday's rows"
 $yesterday = [DateTime]::Now.AddDays(-1).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
-$ledToday = Join-Path $root 'f30-today.md'
-$ledToday2 = Join-Path $root 'f30-today2.md'
-$ledYest = Join-Path $root 'f30-yesterday.md'
+$ledToday = Join-Path $root 'p27-today.md'
+$ledToday2 = Join-Path $root 'p27-today2.md'
+$ledYest = Join-Path $root 'p27-yesterday.md'
 function Set-P27([string[]]$TodayRows, [string[]]$YestRows, [string[]]$TodayRows2 = @()) {
     Set-PruneLedger $TodayRows -Path $ledToday
     Set-PruneLedger $YestRows -Path $ledYest
