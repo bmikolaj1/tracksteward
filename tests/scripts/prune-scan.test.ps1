@@ -4,10 +4,11 @@
 # -Ledger except the P18 runs, which pass none, point COORD_INDEX_DIR at a scratch
 # index and run from a folder that is not a repo: the live ledger is never read.
 #
-# What changed from the private suite: the fixtures load from tests\fixtures; the fixture names are
-# neutral; the private lints pubspec.lock is gone from the generated-file rows (two files, not three, and
-# a pubspec.lock is no longer disposable); the case ids P27-P29 were other ids there.
-#
+# What changed from the private suite it was ported from: the fixtures load from tests\fixtures; the fixture
+# names are neutral; the generated-file rows stage the two files Flutter regenerates (the private suite had a
+# third, a lints pubspec.lock; no row stages a pubspec.lock now, and the script treats one as not disposable);
+# the case ids P27-P29 were other ids there; P9 runs with GIT_OPTIONAL_LOCKS=1 in the environment, so the
+# script has to set it to 0 itself.
 #
 #   P1  a clean worktree on a branch merged at its tip -> worktree, branch and
 #       remote branch SAFE
@@ -237,7 +238,7 @@ Write-Host "(P1-P9, P13) scan"
 function Get-IndexHashes { return (@(Get-ChildItem -LiteralPath (Join-Path $fx.Launch '.git') -Recurse -Force -File -Filter 'index' | Sort-Object FullName | ForEach-Object { "$($_.FullName)=$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)" }) -join '|') }
 $indexBefore = Get-IndexHashes
 $before = Get-State
-$r = Invoke-Prune -Extra "-SessionCwds `"$(Join-Path $wtS 'docs\sub')`""
+$r = Invoke-Prune -Extra "-SessionCwds `"$(Join-Path $wtS 'docs\sub')`"" -Env @{ GIT_OPTIONAL_LOCKS = '1' }   # the script must set it to 0 itself
 Assert-Coord 'scan exits 0' ($r.Code -eq 0) "exit=$($r.Code)`n$($r.Out)`nerr: $($r.Err)"
 Assert-Has 'P1 worktree SAFE' $r ((Wt $wtA) + 'SAFE')
 Assert-Has 'P1 branch SAFE' $r ((Br 'done-a') + 'SAFE')

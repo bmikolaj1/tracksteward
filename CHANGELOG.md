@@ -10,8 +10,8 @@
   session inside and no ignored file beyond build caches, the two files Flutter regenerates and
   unchanged `.worktreeinclude` copies (any other ignored file, such as `_inbox/`, `CODE-REVIEW.md` or a
   `pubspec.lock` outside the build caches, is KEEP). A live ledger row of yesterday stops protecting once today's
-  ledgers have a MERGED or DONE row for the same Track and Repo. Without `-Apply` its only write is
-  `git fetch --prune` (git runs with optional locks off, so `git status` does not refresh a worktree's index); `-Apply` removes the SAFE items only, one destructive git call each, and is
+  ledgers have a MERGED or DONE row for the same Track and Repo. Without `-Apply` the only thing it changes is what
+  `git fetch --prune` brings in (git runs with optional locks off, so `git status` does not refresh a worktree's index); `-Apply` removes the SAFE items only, one destructive git call each, and is
   refused off Windows (exit 2). A worktree git removes except for an empty folder a process holds
   (git exit 255) counts as removed; a folder that still holds a file is FAILED. The skill's start-of-window
   step 4 and the README's script list describe it.

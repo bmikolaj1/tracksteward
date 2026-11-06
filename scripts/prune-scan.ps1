@@ -89,8 +89,8 @@
 # Exit: 0 scan done (and every apply succeeded), 1 an apply failed, 2 could not check.
 # Usage: powershell.exe -ExecutionPolicy Bypass -File prune-scan.ps1 -Repos <repoA>,<repoB> [-SessionCwds <dir>,<dir>] [-Ledger <path>] [-Apply]
 # Lists are split on commas only (a semicolon is legal in a folder name).
-# Without -Apply its only write is `git fetch --prune` (remote-tracking refs): git runs with
-# GIT_OPTIONAL_LOCKS=0, so `git status` does not refresh the index of a worktree a live session may be using.
+# Without -Apply the only thing it changes is what `git fetch --prune` brings in (remote-tracking refs, objects, FETCH_HEAD): git runs with
+# GIT_OPTIONAL_LOCKS=0, so `git status` does not refresh the index of a worktree a live session may be using (`git diff` would; it is not called).
 # Off Windows -Apply refuses: no `ledger:` line, and `PRUNE-SCAN: 0 SAFE, 0 KEEP; applied 0, failed 0;
 # COULD NOT CHECK: every repo (...)` as the last line, exit 2.
 # Not seen: a cwd on a subst or mapped drive that reaches a worktree (it is compared as given);
