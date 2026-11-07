@@ -11,12 +11,22 @@
   unchanged `.worktreeinclude` copies (any other ignored file, such as `_inbox/`, `CODE-REVIEW.md` or a
   `pubspec.lock` outside the build caches, is KEEP). A live ledger row of yesterday stops protecting once today's
   ledgers have a MERGED or DONE row for the same Track and Repo. Without `-Apply` the only thing it changes is what
-  `git fetch --prune` brings in (git runs with optional locks off, so `git status` does not refresh a worktree's index); `-Apply` removes the SAFE items only, one destructive git call each, and is
+  `git fetch --prune` and a fetch of origin's default branch by name bring in (git runs with optional locks off, so `git status` does not refresh a worktree's index); `-Apply` removes the SAFE items only, one destructive git call each, and is
   refused off Windows (exit 2). A worktree git removes except for an empty folder a process holds
   (git exit 255) counts as removed; a folder that still holds a file is FAILED. The skill's start-of-window
   step 4 and the README's script list describe it.
-- **Tests**: `tests/scripts/prune-scan.test.ps1` (163 rows) runs git for real against a bare origin and
-  the gh stub.
+- **prune-scan** (F37-F39), three fixes to the item above before it ships:
+  - `-Apply` re-reads the worktree list right before `git worktree remove`: a worktree that is no longer on the
+    branch and HEAD it was judged on, or is detached, locked or gone from the list, is FAILED
+    (`changed since the scan: ...; untouched`) and its branch is skipped, not only a worktree whose files changed.
+  - A ledger that exists but cannot be looked at (access denied, say) is COULD NOT CHECK for every repo; it
+    used to read as "no ledger", so its live rows protected nothing. A ledger that does not exist is still skipped.
+  - Origin's default branch is also fetched by name, so a narrowed `remote.origin.fetch` cannot leave a stale
+    `origin/<default>` for the stacked-PR containment check (a branch merged into a stacked base that has since
+    reached the default branch was KEEP, and is now SAFE); a failed fetch of it is COULD NOT CHECK.
+- **Tests**: `tests/scripts/prune-scan.test.ps1` (206 rows; 202 plus one UNCHECKED where an access-denied
+  ledger cannot be staged) runs git for real against a bare origin and the gh stub; the F37-F39 behaviour
+  rows were seen red without their fix.
 
 ## 0.2.3 - 2026-11-05
 

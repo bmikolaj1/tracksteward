@@ -56,11 +56,22 @@
 #       SAFE branch during -Apply: the local and its origin branch stay; P25b (Codex)
 #       one added on a KEEP local whose origin branch is SAFE keeps the origin branch
 #   P26 (Codex round 2) a symbolic branch ref to main is KEEP; main survives -Apply
-#   NOT covered: -Apply refused off Windows (exit 2); an 8.3 short-name path; the content re-read right before `git worktree remove` (not
-#       staged; it needs a change between the scan and the apply); rebase-apply/head-name and
+#   F37-F39 (ported from the private toolkit's fixes)
+#       F37 a worktree switched to another branch (at the same commit), moved on by a commit, detached or
+#       locked between the scan and the apply is FAILED, untouched, its branch skipped (a git shim first on PATH acts
+#       at the apply's content re-read); an unchanged one is still removed
+#       F39 remote.origin.fetch narrowed to one other branch leaves origin/main stale: the default branch is
+#       fetched by name, so a branch merged into a stacked base that reached main is SAFE
+#       F38 a listed ledger in a folder this user is denied is COULD NOT CHECK (exit 2, icacls deny); one that
+#       does not exist is still skipped
+#   NOT covered: -Apply refused off Windows (exit 2); an 8.3 short-name path; a FILE change caught by the
+#       content re-read right before `git worktree remove` (not staged: the F37 shim changes branch, HEAD
+#       or lock only); rebase-apply/head-name and
 #       BISECT_START (read like head-name, not staged); a failed for-each-ref or
-#       worktree list; a listed ledger access-denied (skipped as missing); gh
-#       missing; a cwd on a subst or mapped drive
+#       worktree list; gh
+#       missing; a cwd on a subst or mapped drive; F37: the worktree list unreadable at the
+#       apply re-read, or the entry gone (untested, fail closed); F39: the by-name fetch of the
+#       default branch failing (COULD NOT CHECK, not staged); F38: the -Ledger path access-denied
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scripts\prune-scan.test.ps1 [-ScriptPath <mutant copy>]
 # Exit: 0 = all passed, 1 = a case failed.
@@ -644,6 +655,132 @@ Assert-Has 'P29 neg: its branch is skipped' $r '(?m)^APPLY branch heldfile: FAIL
 Assert-Coord 'P29 neg: its branch is still there' ((Get-CoordGitOut $fx.Launch @('rev-parse', 'refs/heads/heldfile')) -ceq $tip['heldfile']) ''
 Assert-Coord 'P29 neg: and so is its origin branch' ((Get-CoordRemoteRef $fx 'refs/heads/heldfile') -ceq $tip['heldfile']) ''
 Assert-Coord 'P29 neg: a failed apply exits 1' ($r.Code -eq 1) "exit=$($r.Code)"
+
+# ---- F37, F38, F39 (ported from the private toolkit's prune-scan fixes) -----------------------
+Set-PruneLedger @()
+
+# F37: a worktree that is not on the scanned branch/HEAD any more when -Apply gets to it. A git shim
+# (git.cmd, first on PATH) acts on the SECOND `status --porcelain --untracked-files=all` of the worktree whose
+# folder name contains GIT_SHIM_MATCH (the scan makes the first, the apply's content re-read the second): it runs
+# GIT_SHIM_ARGS in that worktree, then the status. The tree stays clean either way, so the content re-read passes.
+Write-Host "(F37) a worktree changed between the scan and the apply"
+$shimDir = Join-Path $root 'gitshim'
+[void][IO.Directory]::CreateDirectory($shimDir)
+$realGit = [string](@(Get-Command git -CommandType Application)[0].Source)
+$shim = "@echo off`r`n" +
+    "if /i not `"%~1`"==`"-C`" goto run`r`n" +
+    "if /i not `"%~3`"==`"status`" goto run`r`n" +
+    "if not `"%~4`"==`"--porcelain`" goto run`r`n" +
+    "if not `"%~5`"==`"--untracked-files`" goto run`r`n" +
+    "if not `"%~6`"==`"all`" goto run`r`n" +
+    "if not `"%~7`"==`"`" goto run`r`n" +
+    "echo `"%~2`"| findstr /i /c:`"%GIT_SHIM_MATCH%`" >nul`r`n" +
+    "if errorlevel 1 goto run`r`n" +
+    "if not exist `"%GIT_SHIM_MARK%`" goto first`r`n" +
+    "if exist `"%GIT_SHIM_DONE%`" goto run`r`n" +
+    "echo x> `"%GIT_SHIM_DONE%`"`r`n" +
+    "`"%GIT_SHIM_REAL%`" -C `"%~2`" %GIT_SHIM_ARGS% >nul 2>&1`r`n" +
+    "goto run`r`n" +
+    ":first`r`n" +
+    "echo x> `"%GIT_SHIM_MARK%`"`r`n" +
+    ":run`r`n" +
+    "`"%GIT_SHIM_REAL%`" %*`r`n" +
+    "exit /b %errorlevel%`r`n"
+[System.IO.File]::WriteAllText((Join-Path $shimDir 'git.cmd'), $shim, [System.Text.Encoding]::ASCII)
+$fx5 = New-CoordFixture $root 'fx5'
+$t5 = @{}
+function New-ShimEnv([string]$Match, [string]$Tag, [string]$ShimArgs) {
+    return @{ PATH = "$shimDir;$coordStubDir;$env:PATH"; GIT_SHIM_REAL = $realGit; GIT_SHIM_MATCH = $Match; GIT_SHIM_ARGS = $ShimArgs
+        GIT_SHIM_MARK = (Join-Path $root "shim-$Tag.mark"); GIT_SHIM_DONE = (Join-Path $root "shim-$Tag.done") }
+}
+function New-Rules5([string]$Head, [string]$Sha) {
+    return @((New-CoordRule '--state open ' '[]'), (New-CoordRule "--head $Head " (ConvertTo-J @((New-Merged 91 $Sha)))), (New-CoordRule '.' '[]'))
+}
+# A merged branch f37<Tag> on a clean worktree wt<Tag>37; the shim then runs $ShimArgs in it at the apply's content
+# re-read. $Why matches what the FAILED line says changed. An empty $Why has no shim match: nothing changes, it is removed.
+function Test-F37Case([string]$Tag, [string]$ShimArgs, [string]$Why, [scriptblock]$Prep = $null) {
+    $br = "f37$Tag"
+    $t5[$br] = New-CoordBranch $fx5 $br -Write @{ "docs/$br.md" = "$br`n" }
+    Invoke-HookTestGit $fx5.Launch @('fetch', '--quiet', 'origin')
+    Invoke-HookTestGit $fx5.Launch @('branch', '--quiet', $br, "origin/$br")
+    if ($Prep) { & $Prep $br }
+    $wt = Join-Path $fx5.Base "wt${Tag}37"
+    Invoke-HookTestGit $fx5.Launch @('worktree', 'add', '--quiet', $wt, $br)
+    $match = if ($Why) { "wt${Tag}37" } else { 'no-such-worktree-name' }
+    $sh = New-ShimEnv $match $Tag $ShimArgs
+    $r = Invoke-Prune -Repos $fx5.Launch -Rules (New-Rules5 $br $t5[$br]) -Extra '-Apply' -Env $sh
+    Assert-Has "F37$Tag the worktree was SAFE at scan time" $r ((Wt $wt) + 'SAFE')
+    if (-not $Why) {
+        Assert-Has 'F37c an unchanged worktree is still removed' $r ('(?m)^APPLY worktree ' + [regex]::Escape($wt) + ': removed')
+        Assert-Has 'F37c and its branch deleted' $r "(?m)^APPLY branch ${br}: deleted"
+        Assert-Coord 'F37c exits 0' ($r.Code -eq 0) "exit=$($r.Code)`n$($r.Out)"
+        return
+    }
+    Assert-Coord "F37$Tag the shim acted in the worktree (so the case is not vacuous)" (Test-Path -LiteralPath $sh.GIT_SHIM_DONE) "exit=$($r.Code)`n$($r.Out)`nerr: $($r.Err)"
+    Assert-Has "F37$Tag a worktree that changed since the scan is FAILED, untouched, saying what" $r ('(?m)^APPLY worktree ' + [regex]::Escape($wt) + ': FAILED \(changed since the scan: ' + $Why + '; untouched\)')
+    Assert-Coord "F37$Tag its folder is still there" (Test-Path -LiteralPath $wt) $r.Out
+    Assert-Has "F37$Tag its branch is skipped" $r "(?m)^APPLY branch ${br}: FAILED \(skipped: its worktree was not removed\)"
+    Assert-Coord "F37$Tag its origin branch stays" ((Get-CoordRemoteRef $fx5 "refs/heads/$br") -ceq $t5[$br]) ''
+    Assert-Coord "F37$Tag a failed apply exits 1" ($r.Code -eq 1) "exit=$($r.Code)"
+}
+# a: switched to another branch at the SAME commit (only the branch name tells).
+Test-F37Case 'a' 'checkout --quiet f37same' 'it is on branch f37same now, not f37a' { param($b) Invoke-HookTestGit $fx5.Launch @('branch', '--quiet', 'f37same', $b) }
+# b: still on the branch, but its HEAD moved (a commit made since the scan).
+Test-F37Case 'b' '-c user.name=t -c user.email=t@t commit --quiet --allow-empty -m moved' 'its HEAD moved from [0-9a-f]{12} to [0-9a-f]{12}'
+# d: detached at the same commit. e: locked.
+Test-F37Case 'd' 'checkout --quiet --detach' 'it is detached now'
+Test-F37Case 'e' 'worktree lock --reason prune-test .' 'it is locked now'
+# c: nothing changes (the shim matches no worktree): removed as before, so the new check blocks nothing it should not.
+Test-F37Case 'c' 'checkout --quiet f37same' ''
+
+# F39: remote.origin.fetch narrowed to one other branch: `git fetch --prune origin` leaves origin/main stale.
+# stk was merged into stackbase; stackbase then reached main on origin. The truth is SAFE.
+Write-Host "(F39) a narrowed fetch refspec"
+$fx6 = New-CoordFixture $root 'fx6'
+$t6 = @{}
+$t6['stk'] = New-CoordBranch $fx6 'stk' -Write @{ 'docs/stk.md' = "stk`n" }
+$t6['stackbase'] = New-CoordBranch $fx6 'stackbase' -From 'origin/stk' -Write @{ 'docs/sb.md' = "sb`n" }
+Invoke-HookTestGit $fx6.Launch @('fetch', '--quiet', 'origin')
+Invoke-HookTestGit $fx6.Launch @('branch', '--quiet', 'stk', 'origin/stk')
+Invoke-HookTestGit $fx6.Launch @('config', 'remote.origin.fetch', '+refs/heads/stackbase:refs/remotes/origin/stackbase')
+$null = Merge-CoordIntoMain $fx6 $t6['stackbase']
+$staleMain = Get-CoordGitOut $fx6.Launch @('rev-parse', 'refs/remotes/origin/main')
+$rules6 = @((New-CoordRule '--state open ' '[]'), (New-CoordRule '--head stk ' (ConvertTo-J @([ordered]@{ number = 92; headRefOid = $t6['stk']; isCrossRepository = $false; baseRefName = 'stackbase' }))), (New-CoordRule '.' '[]'))
+$r = Invoke-Prune -Repos $fx6.Launch -Rules $rules6
+Assert-Coord 'F39 the fixture left origin/main stale before the scan' ($staleMain -cne (Get-CoordRemoteRef $fx6 'refs/heads/main')) "stale=$staleMain"
+Assert-Has 'F39 a branch merged into a base that reached main is SAFE although the fetch refspec is narrowed' $r ((Br 'stk') + 'SAFE')
+Assert-Has 'F39 and its origin branch' $r ((Rb 'stk') + 'SAFE')
+Assert-Coord 'F39 the scan refreshed origin/main by name' ((Get-CoordGitOut $fx6.Launch @('rev-parse', 'refs/remotes/origin/main')) -ceq (Get-CoordRemoteRef $fx6 'refs/heads/main')) ''
+Assert-Coord 'F39 exits 0' ($r.Code -eq 0) "exit=$($r.Code)`n$($r.Out)"
+
+# F38: a listed ledger that cannot be seen because access to it is denied is COULD NOT CHECK, not "no ledger".
+Write-Host "(F38) an access-denied ledger"
+$todayQ = [DateTime]::Now.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
+$idx7 = Join-Path $root 'index7'
+[void][IO.Directory]::CreateDirectory($idx7)
+$denied = Join-Path $root 'denied-ledgers'
+[void][IO.Directory]::CreateDirectory($denied)
+$deniedLedger = Join-Path $denied 'ledger.md'
+[System.IO.File]::WriteAllText($deniedLedger, "# L`n`n## Tracks`n`n| Track | Repo | Session | Cwd | Branch | Scope | PR | Status |`n|---|---|---|---|---|---|---|---|`n| DN | $($fx6.Launch) | s | | stk | ** | | RUNNING |`n`n## Log`n", $coordUtf8)
+[System.IO.File]::WriteAllText((Join-Path $idx7 "$todayQ.ledgers"), "$deniedLedger`n", $coordUtf8)
+$me = "$env:USERDOMAIN\$env:USERNAME"
+$null = & icacls $denied /deny "${me}:(OI)(CI)F" 2>&1
+$seen = $true
+try { $seen = Test-Path -LiteralPath $deniedLedger -ErrorAction SilentlyContinue } catch { $seen = $false }
+if ($seen) { Write-CoordUnchecked 'F38 an access-denied ledger' 'icacls deny did not hide the file from Test-Path on this host'; $null = & icacls $denied /remove:d $me 2>&1 }
+else {
+    try { $r = Invoke-Prune -Repos $fx6.Launch -Rules $rules6 -NoLedger -Env @{ COORD_INDEX_DIR = $idx7 } }
+    finally { $null = & icacls $denied /remove:d $me 2>&1 }
+    Assert-Coord 'F38 a listed ledger that is access-denied -> exit 2' ($r.Code -eq 2) "exit=$($r.Code)`n$($r.Out)"
+    Assert-Coord 'F38 the last line says the ledger is unreadable' ($r.Last -match 'COULD NOT CHECK: .*ledger .*denied-ledgers.*unreadable') $r.Last
+    Assert-HasNot 'F38 nothing SAFE' $r '(?m): SAFE'
+    Assert-Coord 'F38 the ACL was restored' ((Test-Path -LiteralPath $deniedLedger)) 'deny ACE still in place'
+}
+# A listed ledger that simply does not exist is still skipped (the old rule, unchanged).
+[System.IO.File]::WriteAllText((Join-Path $idx7 "$todayQ.ledgers"), (Join-Path $root 'no-such-ledger.md') + "`n", $coordUtf8)
+$r = Invoke-Prune -Repos $fx6.Launch -Rules $rules6 -NoLedger -Env @{ COORD_INDEX_DIR = $idx7 }
+Assert-Has 'F38 neg: a listed ledger that does not exist is skipped, said as no ledger' $r '(?m)^ledger: none \('
+Assert-Coord 'F38 neg: and the scan runs' ($r.Code -eq 0) "exit=$($r.Code)`n$($r.Out)"
 
 if (Test-Path -LiteralPath (Join-Path $wtJ 'build\link')) { Remove-CoordJunction (Join-Path $wtJ 'build\link') }
 if (Test-Path -LiteralPath (Join-Path $fx.Base 'jdir')) { Remove-CoordJunction (Join-Path $fx.Base 'jdir') }

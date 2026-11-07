@@ -248,7 +248,7 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
    `& "${CLAUDE_PLUGIN_ROOT}/scripts/prune-scan.ps1" -Repos '<repo>','<repo>' -SessionCwds '<cwd>','<cwd>'`
    (from Bash, through `powershell.exe -ExecutionPolicy Bypass -File` as above, with each list as one
    comma list; give it the folders `ListAgents` reports for live sessions). Without `-Apply` the only thing it changes is what `git
-   fetch --prune` brings in (git runs with optional locks off, so even `git status` leaves a worktree's index alone). A first `ledger:` line names the ledgers read (or says none was), then one line per
+   fetch --prune` and a fetch of origin's default branch by name bring in (git runs with optional locks off, so even `git status` leaves a worktree's index alone). A first `ledger:` line names the ledgers read (or says none was), then one line per
    worktree, local branch and origin branch, `SAFE (<evidence>)` or `KEEP <reason>`, and a last
    `PRUNE-SCAN: <n> SAFE, <m> KEEP` line (with `-Apply`: `; applied <a>, failed <f>`; a repo or ledger
    it could not check: `; COULD NOT CHECK: ...`). Exit 0, 1 when an apply failed, 2 when something
@@ -268,11 +268,13 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
      copies identical to the main checkout's. `_inbox/`, `.claude/audit/`, `CODE-REVIEW.md` and the
      like are KEEP. A session or ledger cwd through a junction makes every worktree KEEP.
    - Without `-Ledger` it reads today's and yesterday's ledger of the current repo and every ledger
-     the index lists for those days. A live yesterday row stops protecting once today's ledgers have
+     the index lists for those days. A listed ledger that exists but cannot be read (access denied, say)
+     is COULD NOT CHECK for every repo, not "no ledger"; one that does not exist is skipped. A live yesterday row stops protecting once today's ledgers have
      a MERGED or DONE row with the same Track and Repo (a live row of the same Track today does not
      end it; a row with no Track is never dropped).
    - `-Apply` removes the SAFE items only, one destructive git call each: the worktree (after
-     re-reading its files), then the local branch by `update-ref -d <b> <tip>`, then the origin branch,
+     re-reading its files and its branch, HEAD and lock: one that changed since the scan is FAILED,
+     untouched), then the local branch by `update-ref -d <b> <tip>`, then the origin branch,
      lease-guarded and re-read. Run it only on the user's OK, after they have seen the scan, and only
      on Windows (elsewhere it refuses with exit 2; the scan itself is not verified off Windows).
      Pass the cwd of idle sessions in `-SessionCwds` too: a folder a process holds as its cwd is left

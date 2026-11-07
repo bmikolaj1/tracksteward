@@ -8,7 +8,8 @@
 # A `ledger:` line first names every ledger read, or says why none was.
 # Every rule that cannot be evaluated is KEEP: an unknown is never a yes.
 #
-# Branch (refs/heads/<b>, and refs/remotes/origin/<b> after `git fetch --prune`), SAFE only when:
+# Branch (refs/heads/<b>, and refs/remotes/origin/<b> after `git fetch --prune`, with origin's default
+# branch also fetched by name so a narrowed remote.origin.fetch cannot leave it stale), SAFE only when:
 #   - it is not main, master or HEAD (any case) or origin's default branch (read from
 #     origin with `ls-remote --symref`, as merge-verify.ps1 does; unknown -> every branch KEEP);
 #   - no live ledger row (Status not led by MERGED/DONE) names it as its Branch (any case),
@@ -50,8 +51,10 @@
 #
 # -Apply acts on SAFE items only, one destructive git call per item (reads before and after it), never chained, in order:
 #   1. the worktree's status and ignored files are read again (a file written since the
-#      scan makes it FAILED, untouched), then `git worktree remove <path>` (no --force:
-#      git refuses a dirty or locked one; it does NOT look at ignored files, hence the re-read).
+#      scan makes it FAILED, untouched); then the worktree list is read again: the entry must
+#      still be on the scanned branch at the scanned HEAD and unlocked, else FAILED (changed
+#      since the scan), untouched; then `git worktree remove <path>` (no --force: git refuses a
+#      dirty or locked one; it does NOT look at ignored files, hence the re-read).
 #      A non-zero exit still counts as removed when the worktree list, read again, no longer shows
 #      it and its folder is missing or empty (a session cwd holds it: git removes the files and
 #      the entry, cannot delete the folder, exits 255); the line says so. A folder that still holds
@@ -81,7 +84,14 @@
 # yesterday row that today's ledger does not end keeps protecting, even beside a live row of the
 # same Track today. Ledgers of one day, and one -Ledger file, are equals. A row with no Track cell
 # is never dropped. A MERGED/DONE row protects nothing, in any ledger.
-# A listed ledger that Test-Path cannot see (it does not exist, or access is denied) is skipped.
+# A listed or canonical ledger that does not exist (file or folder not found) is skipped; one that
+# cannot be looked at for any other reason (access denied, a bad path) is COULD NOT CHECK for every
+# repo, as an index file that opens badly is: its live rows would otherwise protect nothing. A path on a
+# drive that does not exist, or through a dead junction, reads as "not found" too and is skipped
+# (measured); an unreachable share is an I/O error, so COULD NOT CHECK (measured). Keep ledgers on a
+# local drive. Not covered: an index file or folder this user is denied reads as "no index"
+# (Get-CoordIndexedLedgers in coord-common.ps1 asks File.Exists, which is false when access is
+# denied), so the ledgers it would list are not read.
 # A repo that is not a git checkout, has no origin, whose fetch failed, whose local or
 # remote branch list or worktree list failed, or with gh missing is COULD NOT CHECK: no
 # item lines, never applied.
@@ -89,7 +99,9 @@
 # Exit: 0 scan done (and every apply succeeded), 1 an apply failed, 2 could not check.
 # Usage: powershell.exe -ExecutionPolicy Bypass -File prune-scan.ps1 -Repos <repoA>,<repoB> [-SessionCwds <dir>,<dir>] [-Ledger <path>] [-Apply]
 # Lists are split on commas only (a semicolon is legal in a folder name).
-# Without -Apply the only thing it changes is what `git fetch --prune` brings in (remote-tracking refs, objects, FETCH_HEAD): git runs with
+# Without -Apply the only thing it changes is what `git fetch --prune` and a fetch of origin's default branch by name bring in
+# (remote-tracking refs, objects, FETCH_HEAD; the second exists because the first follows remote.origin.fetch,
+# which can leave the default branch out): git runs with
 # GIT_OPTIONAL_LOCKS=0, so `git status` does not refresh the index of a worktree a live session may be using (`git diff` would; it is not called).
 # Off Windows -Apply refuses: no `ledger:` line, and `PRUNE-SCAN: 0 SAFE, 0 KEEP; applied 0, failed 0;
 # COULD NOT CHECK: every repo (...)` as the last line, exit 2.
@@ -210,6 +222,22 @@ $disposableFiles = @('.flutter-plugins', '.flutter-plugins-dependencies')
 # the same name elsewhere is not one of them).
 $disposablePaths = @('android/local.properties', 'android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java')
 
+# What is at a ledger path: State 'file', 'dir', 'missing' (file or folder not found, as Test-Path
+# reports it) or 'unreadable' (anything else, access denied included; Why says what). Test-Path
+# answers false for a path it is denied, which would read as "no ledger".
+function Get-LedgerPresence([string]$Path) {
+    try { $a = [System.IO.File]::GetAttributes($Path) }
+    catch {
+        $e = $_.Exception
+        while ($e.InnerException -and $e -is [System.Management.Automation.RuntimeException]) { $e = $e.InnerException }
+        if ($e -is [System.IO.FileNotFoundException] -or $e -is [System.IO.DirectoryNotFoundException] -or $e -is [System.IO.DriveNotFoundException]) {
+            return [pscustomobject]@{ State = 'missing'; Why = '' }
+        }
+        return [pscustomobject]@{ State = 'unreadable'; Why = (([string]$e.Message) -replace '\s+', ' ').Trim() }
+    }
+    return [pscustomobject]@{ State = $(if (($a -band [System.IO.FileAttributes]::Directory) -ne 0) { 'dir' } else { 'file' }); Why = '' }
+}
+
 # '' when the ## Tracks section holds one unbroken table; else why not. A table line after
 # the line that ended the table (up to the next # or ## heading, as the reader reads it).
 function Find-TracksSplit([string]$Path) {
@@ -235,7 +263,10 @@ $ledgerAge = New-Object System.Collections.Hashtable ((Get-CoordPathComparison -
 $ledgerError = ''
 $ledgerWhy = ''
 if ($Ledger) {
-    if (Test-Path -LiteralPath $Ledger -PathType Leaf) { $full = ConvertTo-CoordFullPath $Ledger; $ledgerPaths.Add($full); $ledgerAge[$full] = 0 } else { $ledgerError = "ledger $Ledger not found" }
+    $lpres = Get-LedgerPresence $Ledger
+    if ($lpres.State -eq 'file') { $full = ConvertTo-CoordFullPath $Ledger; $ledgerPaths.Add($full); $ledgerAge[$full] = 0 }
+    elseif ($lpres.State -eq 'unreadable') { $ledgerError = "ledger $Ledger is unreadable ($($lpres.Why))" }
+    else { $ledgerError = "ledger $Ledger not found" }
 }
 else {
     $seenL = New-Object 'System.Collections.Generic.HashSet[string]' ((Get-CoordPathComparison -Comparer))
@@ -254,8 +285,10 @@ else {
         if ($idx.Overflow) { $ledgerError = "the ledger index of $date lists more than can be read (over 8 ledgers or 64 KiB)"; break }
         $cands += @($idx.Entries)
         foreach ($c in $cands) {
-            if (-not (Test-Path -LiteralPath $c)) { continue }
-            if (-not (Test-Path -LiteralPath $c -PathType Leaf)) { $ledgerError = "ledger $c is not a file"; break }
+            $pres = Get-LedgerPresence $c
+            if ($pres.State -eq 'missing') { continue }
+            if ($pres.State -eq 'unreadable') { $ledgerError = "ledger $c is unreadable ($($pres.Why))"; break }
+            if ($pres.State -ne 'file') { $ledgerError = "ledger $c is not a file"; break }
             $full = ConvertTo-CoordFullPath $c
             if ($seenL.Add($full)) { $ledgerPaths.Add($full); $ledgerAge[$full] = $thisAge }
         }
@@ -354,6 +387,12 @@ foreach ($repo in $Repos) {
     $defaultBranch = ''
     $sym = Invoke-CoordGit $main @('ls-remote', '--symref', 'origin', 'HEAD')
     if ($sym.Code -eq 0) { foreach ($line in $sym.Out) { if ($line -match '^ref: refs/heads/(\S+)\s+HEAD$') { $defaultBranch = $Matches[1] } } }
+    # `fetch --prune origin` follows remote.origin.fetch, which a narrowed refspec makes skip the default
+    # branch: fetch it by name, so the containment check reads origin's real tip, not a stale one.
+    if ($defaultBranch) {
+        $fd = Invoke-CoordGit $main @('fetch', '--quiet', 'origin', "+refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}")
+        if ($fd.Code -ne 0) { $couldNot.Add("$main (git fetch of origin's default branch $defaultBranch failed, exit $($fd.Code))"); continue }
+    }
     $pushUrl = Invoke-CoordGit $main @('remote', 'get-url', '--push', '--all', 'origin')
     $pushUrls = @($pushUrl.Out | Where-Object { $_.Trim() })
     $pushSame = ($pushUrl.Code -eq 0 -and $pushUrls.Count -eq 1 -and $pushUrls[0].Trim() -ceq $originUrl)
@@ -445,9 +484,10 @@ foreach ($repo in $Repos) {
     $wts = New-Object System.Collections.Generic.List[object]
     $cur = $null
     foreach ($line in $wl.Out) {
-        if ($line -match '^worktree (.+)$') { $cur = [pscustomobject]@{ Path = (Get-LongPath $Matches[1]); Branch = ''; Holds = @(); Detached = $false; Bare = $false; Locked = $null; Prunable = $false; IsMain = ($wts.Count -eq 0); V = $null }; $wts.Add($cur) }
+        if ($line -match '^worktree (.+)$') { $cur = [pscustomobject]@{ Path = (Get-LongPath $Matches[1]); Branch = ''; Head = ''; Holds = @(); Detached = $false; Bare = $false; Locked = $null; Prunable = $false; IsMain = ($wts.Count -eq 0); V = $null }; $wts.Add($cur) }
         elseif ($null -eq $cur) { continue }
         elseif ($line -match '^branch refs/heads/(.+)$') { $cur.Branch = $Matches[1] }
+        elseif ($line -match '^HEAD ([0-9a-f]{40,64})$') { $cur.Head = $Matches[1] }
         elseif ($line -match '^detached$') { $cur.Detached = $true }
         elseif ($line -match '^bare$') { $cur.Bare = $true }
         elseif ($line -match '^locked ?(.*)$') { $cur.Locked = $Matches[1] }
@@ -554,6 +594,32 @@ foreach ($repo in $Repos) {
         try { if (@([System.IO.Directory]::GetFileSystemEntries($Path)).Count -eq 0) { return 'empty' } } catch { }
         return $null
     }
+    # Right before `git worktree remove`: why the worktree is not what the scan judged, or $null when its
+    # entry in git's list, read again, is still on the scanned branch at the scanned HEAD and unlocked.
+    # An unreadable list, a missing entry or an unknown scanned HEAD is a reason too.
+    function Get-WorktreeDrift($W) {
+        $now = Invoke-CoordGit $main @('worktree', 'list', '--porcelain')
+        if ($now.Code -ne 0 -or -not $now.Out.Count) { return 'the worktree list could not be read again' }
+        if (-not $W.Head) { return 'its HEAD was not read at the scan' }
+        $found = $false; $branch = ''; $head = ''; $locked = $false; $detached = $false
+        foreach ($line in $now.Out) {
+            if ($line -match '^worktree (.+)$') {
+                if ($found) { break }
+                $found = [string]::Equals((Get-LongPath $Matches[1]), $W.Path, [System.StringComparison]::OrdinalIgnoreCase)
+            }
+            elseif (-not $found) { continue }
+            elseif ($line -match '^branch refs/heads/(.+)$') { $branch = $Matches[1] }
+            elseif ($line -match '^HEAD ([0-9a-f]{40,64})$') { $head = $Matches[1] }
+            elseif ($line -match '^detached$') { $detached = $true }
+            elseif ($line -match '^locked') { $locked = $true }
+        }
+        if (-not $found) { return 'it is no longer in the worktree list' }
+        if ($locked) { return 'it is locked now' }
+        if ($detached -or -not $branch) { return 'it is detached now' }
+        if ($branch -cne $W.Branch) { return "it is on branch $branch now, not $($W.Branch)" }
+        if ($head -cne $W.Head) { return "its HEAD moved from $(Get-Short $W.Head) to $(Get-Short $head)" }
+        return $null
+    }
     function Get-WorktreeVerdict($W) {
         if ($W.IsMain) { return (New-Verdict $false 'main checkout') }
         if ($W.Bare) { return (New-Verdict $false 'bare') }
@@ -630,6 +696,10 @@ foreach ($repo in $Repos) {
         if (-not $w.V.Safe) { continue }
         $k = Get-ContentKeep $w.Path
         if ($k) { $localStays[$w.Branch] = 'its worktree was not removed'; $script:failed++; Write-Output "APPLY worktree $($w.Path): FAILED (changed since the scan: $k; untouched)"; continue }
+        # The branch and HEAD it was judged on, read again after the content (the later the check, the
+        # narrower the window left before the remove).
+        $dr = Get-WorktreeDrift $w
+        if ($dr) { $localStays[$w.Branch] = 'its worktree was not removed'; $script:failed++; Write-Output "APPLY worktree $($w.Path): FAILED (changed since the scan: $dr; untouched)"; continue }
         $rm = Invoke-CoordGit $main @('worktree', 'remove', $w.Path)
         $left = if ($rm.Code -ne 0) { Get-RemoveRemnant $w.Path } else { $null }
         if ($rm.Code -eq 0 -and -not (Test-Path -LiteralPath $w.Path)) { $script:applied++; Write-Output "APPLY worktree $($w.Path): removed" }
