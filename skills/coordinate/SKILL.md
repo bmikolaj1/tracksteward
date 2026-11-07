@@ -243,6 +243,42 @@ worktree, never a linked one, so every session finds the same file. Gitignore th
    number,headRefOid,mergedAt` may list several PRs (branch names get reused); confirm the newest
    with the user before deleting anything. A tip that has moved past the merged head holds
    commits nobody merged: that branch is in flight or stale, not merged.
+
+   **With the script**, one call gives the whole inventory and removes nothing:
+   `& "${CLAUDE_PLUGIN_ROOT}/scripts/prune-scan.ps1" -Repos '<repo>','<repo>' -SessionCwds '<cwd>','<cwd>'`
+   (from Bash, through `powershell.exe -ExecutionPolicy Bypass -File` as above, with each list as one
+   comma list; give it the folders `ListAgents` reports for live sessions). Without `-Apply` the only thing it changes is what `git
+   fetch --prune` brings in (git runs with optional locks off, so even `git status` leaves a worktree's index alone). A first `ledger:` line names the ledgers read (or says none was), then one line per
+   worktree, local branch and origin branch, `SAFE (<evidence>)` or `KEEP <reason>`, and a last
+   `PRUNE-SCAN: <n> SAFE, <m> KEEP` line (with `-Apply`: `; applied <a>, failed <f>`; a repo or ledger
+   it could not check: `; COULD NOT CHECK: ...`). Exit 0, 1 when an apply failed, 2 when something
+   could not be checked. Every unknown is KEEP.
+   - A **branch** is SAFE only with a merged, same-repo PR whose head IS the tip and that went into
+     origin's default branch (or the tip is on it), no open PR using it as head or base, no live
+     ledger row naming it as its Branch (a row counts unless its Repo cell is the path of another
+     repo's checkout or the folder name of another repo scanned in the same run), no KEEP worktree holding it (the main checkout, and a worktree mid-rebase or mid-bisect,
+     included; for an origin branch, also one tracking it), and no other local branch of its name in
+     another case. `main`, `master` and origin's default branch are never SAFE.
+   - A **worktree** is SAFE only when it is not the main checkout, unlocked, on a SAFE branch, clean
+     (no assume-unchanged or skip-worktree file either), with no session cwd or live ledger row's Cwd
+     inside it, no junction or symlink on its path or in its tree, and no ignored file beyond build
+     caches (`build`, `node_modules`, `.dart_tool`, `.gradle`, `Pods` and the like), the two files
+     Flutter regenerates (`android/local.properties` while every line is `key=value` for one of
+     Flutter's own keys (comments and blank lines are fine), and `GeneratedPluginRegistrant.java`, by whole path) and `.worktreeinclude`
+     copies identical to the main checkout's. `_inbox/`, `.claude/audit/`, `CODE-REVIEW.md` and the
+     like are KEEP. A session or ledger cwd through a junction makes every worktree KEEP.
+   - Without `-Ledger` it reads today's and yesterday's ledger of the current repo and every ledger
+     the index lists for those days. A live yesterday row stops protecting once today's ledgers have
+     a MERGED or DONE row with the same Track and Repo (a live row of the same Track today does not
+     end it; a row with no Track is never dropped).
+   - `-Apply` removes the SAFE items only, one destructive git call each: the worktree (after
+     re-reading its files), then the local branch by `update-ref -d <b> <tip>`, then the origin branch,
+     lease-guarded and re-read. Run it only on the user's OK, after they have seen the scan, and only
+     on Windows (elsewhere it refuses with exit 2; the scan itself is not verified off Windows).
+     Pass the cwd of idle sessions in `-SessionCwds` too: a folder a process holds as its cwd is left
+     behind, empty, when git removes the rest and exits 255; the apply reports that as `removed (git
+     exit 255; empty folder left, probably in use)` when the worktree is no longer listed and the
+     folder is empty, `folder gone` when it is missing.
 5. Give the user one list: DONE since the last coordination window, OPEN by owner (user decision vs session
    work), a recommended order. Ask which to start. Start only those.
 

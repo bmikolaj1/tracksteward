@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **prune-scan** (new): `scripts/prune-scan.ps1` prints one `SAFE (<evidence>)` or `KEEP <reason>` line per
+  worktree, local branch and origin branch of the repos it is given, and a last `PRUNE-SCAN: <n> SAFE,
+  <m> KEEP` line (exit 0, 1 an apply failed, 2 could not check). A branch is SAFE only with a merged,
+  same-repo PR whose head is the tip and that went into origin's default branch, no open PR, no live
+  ledger row naming it and no worktree holding it; a worktree only when clean, unlocked, with no
+  session inside and no ignored file beyond build caches, the two files Flutter regenerates and
+  unchanged `.worktreeinclude` copies (any other ignored file, such as `_inbox/`, `CODE-REVIEW.md` or a
+  `pubspec.lock` outside the build caches, is KEEP). A live ledger row of yesterday stops protecting once today's
+  ledgers have a MERGED or DONE row for the same Track and Repo. Without `-Apply` the only thing it changes is what
+  `git fetch --prune` brings in (git runs with optional locks off, so `git status` does not refresh a worktree's index); `-Apply` removes the SAFE items only, one destructive git call each, and is
+  refused off Windows (exit 2). A worktree git removes except for an empty folder a process holds
+  (git exit 255) counts as removed; a folder that still holds a file is FAILED. The skill's start-of-window
+  step 4 and the README's script list describe it.
+- **Tests**: `tests/scripts/prune-scan.test.ps1` (163 rows) runs git for real against a bare origin and
+  the gh stub.
+
 ## 0.2.3 - 2026-11-05
 
 Fixes to the scripts, the tests and the docs; no new commands.
