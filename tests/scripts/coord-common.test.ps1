@@ -732,6 +732,42 @@ Assert-Coord 'C16 -Path: a folder cannot be read: not Ok' (-not $ix.Ok) "ok=$($i
 $wh = New-Object System.IO.FileStream($pIdx, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
 try { $ix = Get-CoordIndexedLedgers -Path $pIdx } finally { $wh.Dispose() }
 Assert-Coord 'C16 -Path: a file another process holds open for writing is still read' ($ix.Ok -and (Join-IdxEntries $ix) -ceq "$e1|$e2") "ok=$($ix.Ok) error=$($ix.Error)"
+$ix = Get-CoordIndexedLedgers -Path (Join-Path $root 'c16-no-such-folder\nope.ledgers')
+Assert-Coord 'C16 -Path: a file under a folder that does not exist is Ok, Missing, no entries' ($ix.Ok -and $ix.Missing -and @($ix.Entries).Count -eq 0) "ok=$($ix.Ok) missing=$($ix.Missing) error=$($ix.Error)"
+
+# Q61 (ledger F47): an index this user is denied reads as "no index" when only
+# File.Exists is asked: it is false for a file this user may not look at. The
+# deny that hides it is on the file (read attributes and permissions) AND on its
+# folder (list); on the file alone File.Exists stays true (measured 2026-11-09).
+# Restore order matters: the folder's deny first, or the file's cannot be removed.
+Write-Host "(C16) an index this user is denied"
+$meQ = "$env:USERDOMAIN\$env:USERNAME"
+function Set-IdxDeny([string]$File, [bool]$On) {
+    $dir = Split-Path -Parent $File
+    if ($On) { $null = & icacls $File /deny "${meQ}:(RA,RC)" 2>&1; $null = & icacls $dir /deny "${meQ}:(RD)" 2>&1 }
+    else { $null = & icacls $dir /remove:d $meQ 2>&1; $null = & icacls $File /remove:d $meQ 2>&1 }
+}
+$null = New-CoordScratchIndex $root
+$pDenied = Set-IdxText "$ledA`n$e2`n"
+Set-IdxDeny $pDenied $true
+try {
+    if ([System.IO.File]::Exists($pDenied)) { Write-CoordUnchecked 'C16 an access-denied index' 'icacls deny did not hide the file from File.Exists on this host' }
+    else {
+        $ix = Get-CoordIndexedLedgers -Path $pDenied
+        Assert-Coord 'C16 a denied index (File.Exists false) is not Ok, not Missing, no entries; the error names the index' (-not $ix.Ok -and -not $ix.Missing -and -not $ix.TimedOut -and @($ix.Entries).Count -eq 0 -and ([string]$ix.Error).Contains('cannot read the ledger index') -and ([string]$ix.Error).Contains($pDenied)) "ok=$($ix.Ok) missing=$($ix.Missing) error=$($ix.Error)"
+        $ix = Get-CoordIndexedLedgers -Path $pDenied -TimeoutMs 10000
+        Assert-Coord 'C16 ... also under a -TimeoutMs bound (the scope guard asks that way): not Ok, not Missing, not TimedOut' (-not $ix.Ok -and -not $ix.Missing -and -not $ix.TimedOut -and @($ix.Entries).Count -eq 0) "ok=$($ix.Ok) missing=$($ix.Missing) timedOut=$($ix.TimedOut) error=$($ix.Error)"
+        # A pin, green before the fix too (measured): Register-CoordLedger's own
+        # File.Exists reads this index as empty, but its append is denied as well, so
+        # the entry (already listed) is not written twice. The row holds that if the
+        # append ever succeeds, the read gets its own check.
+        $r = Register-CoordLedger -Ledger $ledA -Date $d16
+        Assert-Coord 'C16 Register-CoordLedger on a denied index: not Ok, not Added, and the error names the index' (-not $r.Ok -and -not $r.Added -and ([string]$r.Error).Contains($pDenied)) "ok=$($r.Ok) added=$($r.Added) error=$($r.Error)"
+    }
+}
+finally { Set-IdxDeny $pDenied $false }
+$ix = Get-CoordIndexedLedgers -Path $pDenied
+Assert-Coord 'C16 the deny was removed: the index reads again, and Register did not touch it' ($ix.Ok -and (Join-IdxEntries $ix) -ceq "$ledA|$e2" -and (Get-IdxText $pDenied) -ceq "$ledA`n$e2`n") "ok=$($ix.Ok) text=$(Get-IdxText $pDenied)"
 
 Write-Host "(C17) Register-CoordLedger"
 $repoB = New-CoordCanonRepo $root 'c17b'

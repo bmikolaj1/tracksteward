@@ -7,7 +7,8 @@
 # no ledger and writes, refreshes and prunes no anchor, and allows silently,
 # apart from the warnings about its own input and setup (an event it cannot
 # read, a coord-common.ps1 that is missing or fails to load, a SessionStart
-# event with no full cwd, an internal error).
+# event with no full cwd, an internal error) and the one about an index it
+# cannot read (a denied file: that is not "no index"; see FAILURE POLICY).
 # TRACKSTEWARD_GUARD=off in the environment turns it off without uninstalling
 # the plugin: the hook exits at once, reads nothing and writes nothing. That is
 # a convenience, not a lock: anything that can set the hook's environment (a
@@ -73,7 +74,8 @@
 # BINDING: the anchors are, in order, the lines of the session anchor file
 # `<index dir>\sessions\<session_id>.anchor`, the event `cwd`, and
 # CLAUDE_PROJECT_DIR. The SessionStart run writes the anchor file once, holding
-# the event cwd, and only when today's or yesterday's index exists: a day with
+# the event cwd, and only when today's or yesterday's index exists (or exists but
+# cannot be read): a day with
 # no registered coordinator leaves no anchor, and with no index nothing is
 # written, refreshed or pruned. A write also prunes the anchor files in the same
 # folder whose last write time is more than 7 days old. A later SessionStart
@@ -104,7 +106,12 @@
 # row is bound today and yesterday's index exists, a live row of yesterday's
 # trusted ledgers that the anchors bind and that has no row of the same Track and
 # Repo in today's trusted ledgers allows with a warning; yesterday's scope is
-# never enforced. A malformed or unreadable ledger, a git failure while checking
+# never enforced. An index this user cannot read (a denied index file; the open
+# decides, because File.Exists can be false for it) is not "no index": it is skipped
+# with a warning, and a SessionStart writes its anchor. Not covered: a denied ledger
+# is warned about with the wrong reason (Test-CoordLedgerTrusted says "no ledger file
+# there"), and a denied anchor file is silently absent, so the session binds by its
+# cwd (Read-CsgAnchorFile). A malformed or unreadable ledger, a git failure while checking
 # a ledger or finding the target's tree, a dropped anchor that could have bound
 # a row when no other anchor binds one, a timeout, the budget running out, an
 # event that cannot be read or parsed, and an unexpected error each allow with a
@@ -1107,7 +1114,8 @@ function Invoke-CsgAnchorMode {
         # Anchor policy: only a day with a registered coordinator (today's or
         # yesterday's index exists) touches the sessions folder at all; otherwise
         # nothing is written, refreshed or pruned, not even the sessions folder.
-        if (-not ([System.IO.File]::Exists((Get-CoordIndexPath -Date $script:csgToday)) -or [System.IO.File]::Exists((Get-CoordIndexPath -Date $script:csgYday)))) { Exit-Csg 0 }
+        # An index this user cannot read counts as there (File.Exists can be false for it): the anchor is still written.
+        if ((Get-CoordFileState (Get-CoordIndexPath -Date $script:csgToday)) -eq 'missing' -and (Get-CoordFileState (Get-CoordIndexPath -Date $script:csgYday)) -eq 'missing') { Exit-Csg 0 }
         if ([System.IO.File]::Exists($file)) {
             # A SessionStart event (the hook does not tell start, resume, compact
             # and clear apart) for a session that already has its anchor, on a day
@@ -1248,7 +1256,11 @@ function Get-CsgDroppedWhy($Anchors, $Rows) {
 function Invoke-CsgGuard {
     $todayEntries = @(Read-CsgIndex (Get-CoordIndexPath -Date $script:csgToday))
     $script:csgYdayIdx = Get-CoordIndexPath -Date $script:csgYday
-    $ydayExists = [System.IO.File]::Exists($script:csgYdayIdx)
+    # Asked of the open, not File.Exists (can be false for an index this user is denied): an unreadable index
+    # of yesterday is skipped with a warning, as today's is, never read as "no index".
+    $ydayState = Get-CoordFileState $script:csgYdayIdx
+    if ($ydayState -eq 'unreadable') { $null = @(Read-CsgIndex $script:csgYdayIdx) }
+    $ydayExists = ($ydayState -eq 'present')
     if ($todayEntries.Count -eq 0 -and -not $ydayExists) { Exit-CsgAllow }
 
     # Anchors and ledgers by file reads; git only from here on when a live row

@@ -89,9 +89,9 @@
 # repo, as an index file that opens badly is: its live rows would otherwise protect nothing. A path on a
 # drive that does not exist, or through a dead junction, reads as "not found" too and is skipped
 # (measured); an unreachable share is an I/O error, so COULD NOT CHECK (measured). Keep ledgers on a
-# local drive. Not covered: an index file or folder this user is denied reads as "no index"
-# (Get-CoordIndexedLedgers in coord-common.ps1 asks File.Exists, which is false when access is
-# denied), so the ledgers it would list are not read.
+# local drive. An index file this user is denied is COULD NOT CHECK as well:
+# Get-CoordIndexedLedgers in coord-common.ps1 lets the open decide (File.Exists can be false when
+# access is denied), so only a not-found failure reads as "no index".
 # A repo that is not a git checkout, has no origin, whose fetch failed, whose local or
 # remote branch list or worktree list failed, or with gh missing is COULD NOT CHECK: no
 # item lines, never applied.
