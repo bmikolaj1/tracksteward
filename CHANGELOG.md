@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Fix (Q61, ledger F47)**: an index this user cannot read is no longer read as "no index".
+  `Get-CoordIndexedLedgers` tested the path with `File.Exists`/`Directory.Exists`, which can be false for a denied file
+  (an `icacls` deny on the file and on its folder gave `Ok=True Missing=True Entries=0`), so the scope guard saw no
+  ledgers instead of failing closed. The open now decides: only a not-found failure is `Missing`; a denied index, or a
+  path the open rejects (an empty one included), is `Ok=$false` with the error. Effects:
+  - the scope guard warns that today's index was skipped (it allowed silently), and now does the same for yesterday's
+    index; it also writes a SessionStart anchor when an index exists but cannot be read (it wrote none: both gates
+    asked `File.Exists`). New `Get-CoordFileState` (`present` / `missing` / `unreadable`, by the open) serves those gates;
+  - `prune-scan.ps1` is COULD NOT CHECK for a denied index (the header's "Not covered" note is gone);
+  - `coord-brief.ps1 -Check` refused before and still does (its message changes: the error, not "not among the ledgers").
+  Not covered, same class: a denied LEDGER is warned about with the wrong reason (`Test-CoordLedgerTrusted` says "no
+  ledger file there (missing, or a folder)", measured) and a denied anchor file (`Read-CsgAnchorFile`) is silently absent
+  (the session then binds by its cwd; read, not measured); and `Register-CoordLedger` still asks `File.Exists` of its index (it fails
+  closed on the deny measured here, where its append is denied too; an ACL that hid the index but allowed the append is untested).
+  Pinned by `tests/scripts/coord-common.test.ps1` C16, `tests/hooks/coord-scope-guard.test.ps1` G12 and
+  `tests/scripts/prune-scan.test.ps1` F38. The rows for the fixed behaviour were seen red against the old code; the
+  `Register-CoordLedger` row, the missing-folder row and the deny-removed and control rows (C16, G12-5, F38 "ACL
+  restored") are pins that were green before. The rows that stage a deny need an `icacls` deny that hides the file from
+  `File.Exists` and are UNCHECKED on a host where it does not.
 - **prune-scan** (new): `scripts/prune-scan.ps1` prints one `SAFE (<evidence>)` or `KEEP <reason>` line per
   worktree, local branch and origin branch of the repos it is given, and a last `PRUNE-SCAN: <n> SAFE,
   <m> KEEP` line (exit 0, 1 an apply failed, 2 could not check). A branch is SAFE only with a merged,
@@ -24,8 +43,8 @@
   - Origin's default branch is also fetched by name, so a narrowed `remote.origin.fetch` cannot leave a stale
     `origin/<default>` for the stacked-PR containment check (a branch merged into a stacked base that has since
     reached the default branch was KEEP, and is now SAFE); a failed fetch of it is COULD NOT CHECK.
-- **Tests**: `tests/scripts/prune-scan.test.ps1` (206 rows; 202 plus one UNCHECKED where an access-denied
-  ledger cannot be staged) runs git for real against a bare origin and the gh stub; the F37-F39 behaviour
+- **Tests**: `tests/scripts/prune-scan.test.ps1` (210 rows; the access-denied rows are UNCHECKED where
+  a deny cannot be staged) runs git for real against a bare origin and the gh stub; the F37-F39 behaviour
   rows were seen red without their fix.
 
 ## 0.2.3 - 2026-11-05
