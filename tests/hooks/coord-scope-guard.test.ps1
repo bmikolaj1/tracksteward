@@ -50,6 +50,9 @@
 #      Get-CoordMainRoot bounded, a child holding stdout
 #   G10 midnight (COORD_TODAY)
 #   G11 fixes and stated limits found by the private toolkit's review rounds
+#   G12 an index this user is denied (icacls deny on the file and its folder) is not "no index": a warning
+#      for today's and for yesterday's, and SessionStart still writes its anchor; UNCHECKED where the deny
+#      does not hide the file from File.Exists
 #   S6 plugin wiring: hooks.json shape and launcher (space, brackets, backtick; a
 #      sibling folder is not run), the ..\scripts layout, the off switch, the
 #      anchor policy and pruning, name-only Session cells, no registered ledger
@@ -1651,6 +1654,56 @@ Invoke-Group 'S6 plugin wiring' {
     $rq = Invoke-Edit -Cwd $wtA1 -Path (Join-Path $wtA2 'src\a2\x.ps1') -Tool 'Write'
     Test-Block 'S6-36 a write into a tree no row names is refused as out of scope' $rq @($stdScopeTail)
     Report (([string]$rq.Err).IndexOf('names that tree') -lt 0) 'S6-36b the refusal carries no cross-row note when no row names the tree' (Get-Tail $rq.Err)
+}
+
+# ===========================================================================
+# G12 an index this user is denied is not "no index" (Q61, ledger F47)
+# ===========================================================================
+# File.Exists can be false for a file this user may not look at, so the guard's own
+# gates (the SessionStart anchor policy, yesterday's index) read a denied index
+# as absent and allowed silently. The deny that hides it is on the file (read
+# attributes and permissions) AND on its folder (list); on the file alone
+# File.Exists stays true (measured 2026-11-09). Restore order matters: the
+# folder's deny first, or the file's cannot be removed.
+Invoke-Group 'G12 denied index' {
+    $meQ = "$env:USERDOMAIN\$env:USERNAME"
+    $outPath = Join-Path $wtA1 'other\x.txt'
+    function Set-IdxDeny([string]$File, [bool]$On) {
+        $dir = Split-Path -Parent $File
+        if ($On) { $null = & icacls $File /deny "${meQ}:(RA,RC)" 2>&1; $null = & icacls $dir /deny "${meQ}:(RD)" 2>&1 }
+        else { $null = & icacls $dir /remove:d $meQ 2>&1; $null = & icacls $File /remove:d $meQ 2>&1 }
+    }
+    $todayIdx = Join-Path $idxDir ($today + '.ledgers')
+    $ydayIdx = Join-Path $idxDir ($yday + '.ledgers')
+
+    # yesterday's index (A1 live) denied, none today: the rollover read never happens, and nothing said so
+    $null = Use-Ledger -Rows @((RowA1)) -Date $yday
+    Set-IdxDeny $ydayIdx $true
+    try {
+        if ([System.IO.File]::Exists($ydayIdx)) { Skip 'G12 a denied index' 'icacls deny did not hide the file from File.Exists on this host' }
+        else {
+            Test-Warn "G12-1 yesterday's index is denied, none today: warns that the index was skipped, not a silent allow" (Invoke-Edit -Cwd $wtA1 -Path $outPath) @('ledger index', ($yday + '.ledgers'), 'skipped')
+            $null = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-g12y' -Cwd $wtA1)
+            Report (Test-Path -LiteralPath (Get-AnchorPath 'sa-g12y')) "G12-2 SessionStart with yesterday's index denied: the anchor is still written (the index may be readable again later)" ''
+        }
+    }
+    finally { Set-IdxDeny $ydayIdx $false }
+
+    # today's index denied, none yesterday
+    $null = Use-Ledger -Rows @((RowA1))
+    Set-IdxDeny $todayIdx $true
+    try {
+        if ([System.IO.File]::Exists($todayIdx)) { Skip 'G12 a denied index' 'icacls deny did not hide the file from File.Exists on this host' }
+        else {
+            Test-Warn "G12-3 today's index is denied: warns that the index was skipped, not a silent allow" (Invoke-Edit -Cwd $wtA1 -Path $outPath) @('ledger index', ($today + '.ledgers'), 'skipped')
+            $null = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-g12t' -Cwd $wtA1)
+            Report (Test-Path -LiteralPath (Get-AnchorPath 'sa-g12t')) "G12-4 SessionStart with today's index denied: the anchor is still written" ''
+        }
+    }
+    finally { Set-IdxDeny $todayIdx $false }
+
+    # control: the deny removed, the same index guards again
+    Test-Block 'G12-5 control: the deny removed, the same index blocks an out-of-scope edit' (Invoke-Edit -Cwd $wtA1 -Path $outPath) @($stdScopeTail)
 }
 
 # ===========================================================================

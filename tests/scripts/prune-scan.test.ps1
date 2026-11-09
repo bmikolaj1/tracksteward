@@ -63,7 +63,8 @@
 #       F39 remote.origin.fetch narrowed to one other branch leaves origin/main stale: the default branch is
 #       fetched by name, so a branch merged into a stacked base that reached main is SAFE
 #       F38 a listed ledger in a folder this user is denied is COULD NOT CHECK (exit 2, icacls deny); one that
-#       does not exist is still skipped
+#       does not exist is still skipped; the ledger index itself denied (Q61, icacls deny on the file and
+#       its folder) is COULD NOT CHECK too, not "no index"
 #   NOT covered: -Apply refused off Windows (exit 2); an 8.3 short-name path; a FILE change caught by the
 #       content re-read right before `git worktree remove` (not staged: the F37 shim changes branch, HEAD
 #       or lock only); rebase-apply/head-name and
@@ -781,6 +782,26 @@ else {
 $r = Invoke-Prune -Repos $fx6.Launch -Rules $rules6 -NoLedger -Env @{ COORD_INDEX_DIR = $idx7 }
 Assert-Has 'F38 neg: a listed ledger that does not exist is skipped, said as no ledger' $r '(?m)^ledger: none \('
 Assert-Coord 'F38 neg: and the scan runs' ($r.Code -eq 0) "exit=$($r.Code)`n$($r.Out)"
+
+# Q61 (ledger F47): the index itself denied, not a ledger it lists. File.Exists can be false for it, so the
+# index read as "no index" and the ledgers it lists protected nothing; the deny that hides it is on the file
+# AND on its folder (on the file alone File.Exists stays true). Restore order: the folder's deny first.
+Write-Host "(F38) an access-denied ledger index"
+$idx8 = Join-Path $root 'index8'
+[void][IO.Directory]::CreateDirectory($idx8)
+$idx8File = Join-Path $idx8 "$todayQ.ledgers"
+[System.IO.File]::WriteAllText($idx8File, $deniedLedger + "`n", $coordUtf8)
+$null = & icacls $idx8File /deny "${me}:(RA,RC)" 2>&1
+$null = & icacls $idx8 /deny "${me}:(RD)" 2>&1
+if ([System.IO.File]::Exists($idx8File)) { Write-CoordUnchecked 'F38 an access-denied ledger index' 'icacls deny did not hide the file from File.Exists on this host'; $null = & icacls $idx8 /remove:d $me 2>&1; $null = & icacls $idx8File /remove:d $me 2>&1 }
+else {
+    try { $r = Invoke-Prune -Repos $fx6.Launch -Rules $rules6 -NoLedger -Env @{ COORD_INDEX_DIR = $idx8 } }
+    finally { $null = & icacls $idx8 /remove:d $me 2>&1; $null = & icacls $idx8File /remove:d $me 2>&1 }
+    Assert-Coord 'F38 a ledger index that is access-denied -> exit 2' ($r.Code -eq 2) "exit=$($r.Code)`n$($r.Out)"
+    Assert-Coord 'F38 the last line is COULD NOT CHECK and names the index' ($r.Last -match 'COULD NOT CHECK: .*cannot read the ledger index .*index8') $r.Last
+    Assert-HasNot 'F38 nothing SAFE' $r '(?m): SAFE'
+    Assert-Coord 'F38 the ACL was restored' ([System.IO.File]::Exists($idx8File)) 'deny ACE still in place'
+}
 
 if (Test-Path -LiteralPath (Join-Path $wtJ 'build\link')) { Remove-CoordJunction (Join-Path $wtJ 'build\link') }
 if (Test-Path -LiteralPath (Join-Path $fx.Base 'jdir')) { Remove-CoordJunction (Join-Path $fx.Base 'jdir') }

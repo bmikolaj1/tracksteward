@@ -455,6 +455,28 @@ function Open-CoordReadStream([string]$Path, [bool]$Bounded) {
     return [System.IO.FileStream]::new($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
 }
 
+# True when the failure of an open (PowerShell wraps a constructor's exception
+# in another) is the file system saying the file, or a folder on its way, is not
+# there: the only failure that means "absent". Access denied is not.
+function Test-CoordNotFoundException($Exception) {
+    $inner = $Exception
+    while ($inner.InnerException) { $inner = $inner.InnerException }
+    return ($inner -is [System.IO.FileNotFoundException] -or $inner -is [System.IO.DirectoryNotFoundException])
+}
+
+# Whether a file is there to be read, asked of the open itself because
+# File.Exists can be false for a file this user is denied: 'present' (it opened for
+# reading), 'missing' (the open reports not found) or 'unreadable' (any other
+# failure: access denied, a folder, a path the open rejects). Callers that gate
+# on "is there an index at all" use it so an unreadable one is not "no index".
+function Get-CoordFileState([string]$Path) {
+    try { $fs = Open-CoordReadStream $Path $false; $fs.Dispose(); return 'present' }
+    catch {
+        if (Test-CoordNotFoundException $_.Exception) { return 'missing' }
+        return 'unreadable'
+    }
+}
+
 # The chunk read both bounded readers below use: up to $MaxBytes from
 # $Stream, until that many are in or the stream ends. Without -TimeoutMs:
 # synchronous reads, no bound. With it: each read is one ReadAsync waited on
@@ -510,11 +532,14 @@ function Read-CoordStreamBounded {
 # first spelled. Returns { Ok; Entries (the first 8
 # distinct, in file order); Overflow (a 9th distinct entry, or more than 65536
 # bytes); Missing (no file: Ok, no entries); TimedOut; Error }. A file that
-# cannot be read (a folder, a refused open) is Ok = $false.
+# cannot be read (a folder named without a trailing separator, a refused open) is Ok = $false.
 # -TimeoutMs (with -Path; default: no bound): the read is waited on for at
 # most that long from the call's start (Read-CoordStreamBounded); when the time
 # runs out, or TimeoutMs is 0 or less (then nothing is read), the result is
 # Ok = $false, TimedOut = $true, Error 'read timed out after <ms> ms'.
+# Missing is only what the open itself reports as not found (the file, or a
+# folder on its way); an index this user is denied (the deny that hides it from
+# File.Exists included) or a path the open rejects is Ok = $false, not "no index".
 function Get-CoordIndexedLedgers {
     param([string]$Path = '', [byte[]]$Bytes = $null, [int]$TimeoutMs = 0)
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -531,9 +556,9 @@ function Get-CoordIndexedLedgers {
     }
     else {
         if ($bounded -and $TimeoutMs -le 0) { return $timedOut }
-        if (-not [System.IO.File]::Exists($Path) -and -not [System.IO.Directory]::Exists($Path)) {
-            return [pscustomobject]@{ Ok = $true; Entries = [string[]]@(); Overflow = $false; Missing = $true; TimedOut = $false; Error = $null }
-        }
+        # No File.Exists / Directory.Exists gate: both can be false for a file this
+        # user may not look at (an access-denied index would read as "no index").
+        # The open decides: only a not-found failure is Missing.
         try {
             $fs = Open-CoordReadStream $Path $bounded
             try {
@@ -544,7 +569,12 @@ function Get-CoordIndexedLedgers {
             }
             finally { $fs.Dispose() }
         }
-        catch { return [pscustomobject]@{ Ok = $false; Entries = [string[]]@(); Overflow = $false; Missing = $false; TimedOut = $false; Error = "cannot read the ledger index ${Path}: $($_.Exception.Message)" } }
+        catch {
+            if (Test-CoordNotFoundException $_.Exception) {
+                return [pscustomobject]@{ Ok = $true; Entries = [string[]]@(); Overflow = $false; Missing = $true; TimedOut = $false; Error = $null }
+            }
+            return [pscustomobject]@{ Ok = $false; Entries = [string[]]@(); Overflow = $false; Missing = $false; TimedOut = $false; Error = "cannot read the ledger index ${Path}: $($_.Exception.Message)" }
+        }
         if ($rd.TimedOut) { return $timedOut }
         if (-not $rd.Ok) { return [pscustomobject]@{ Ok = $false; Entries = [string[]]@(); Overflow = $false; Missing = $false; TimedOut = $false; Error = "cannot read the ledger index ${Path}: $($rd.Error)" } }
         $data = $rd.Bytes
