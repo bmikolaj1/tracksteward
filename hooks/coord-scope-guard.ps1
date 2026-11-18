@@ -108,9 +108,10 @@
 # Repo in today's trusted ledgers allows with a warning; yesterday's scope is
 # never enforced. An index this user cannot read (a denied index file; the open
 # decides, because File.Exists can be false for it) is not "no index": it is skipped
-# with a warning, and a SessionStart writes its anchor. A ledger or an anchor file this
-# user cannot open (the open decides, not File.Exists) is warned about too, with its
-# own reason; only a not-found one is absent, silently. A malformed or unreadable ledger, a git failure while checking
+# with a warning, and a SessionStart writes its anchor. A ledger this user
+# cannot open (denied, or held with no sharing; the open decides, not File.Exists) and an
+# anchor file that fails to open for any reason but not-found are warned about too, with
+# their own reason; a missing one, and a ledger that is a folder, are absent without one. A malformed or unreadable ledger, a git failure while checking
 # a ledger or finding the target's tree, a dropped anchor that could have bound
 # a row when no other anchor binds one, a timeout, the budget running out, an
 # event that cannot be read or parsed, and an unexpected error each allow with a
