@@ -456,6 +456,14 @@ function Get-CoordLeafAttributes([string]$Path) {
 # Read-CoordLedgerTracksBounded, Read-CoordLedgerFile and coord-brief.ps1's own read. Only the
 # leaf is checked, not the folders above it (Test-CoordLedgerTrusted does those). A failed
 # attribute read is not a link here: the open that follows reports its own failure.
+# Every reparse point is refused, not only symlinks and junctions (Q19, F6): a cloud
+# placeholder (OneDrive Files On-Demand) and a scratch -Ledger in a synced folder too.
+# Reason: the ledger is read and replaced in place, and an open through any reparse point
+# can leave the folder or trigger a network recall; the real ledger normally lives in the main
+# checkout, not in a synced folder (nothing enforces that), and the refusal names the cause so
+# the fix is to move the file. Measured on this host (by the Q19 adversary, not re-run by me): a
+# dehydrated OneDrive placeholder has attributes 0x401620 (ReparsePoint, Offline, Sparse,
+# RecallOnDataAccess, Archive) and a hydrated one 0x420 (Archive + ReparsePoint), so a ledger in a synced folder is refused.
 function Test-CoordLeafIsLink([string]$Path) {
     $attrs = Get-CoordLeafAttributes $Path
     return ($null -ne $attrs -and [bool]($attrs -band [System.IO.FileAttributes]::ReparsePoint))
@@ -1369,7 +1377,9 @@ function Find-CoordSectionEnd {
 # Replace in 300 fail). The lock keeps out other writers, not an editor:
 # before EVERY try the ledger is compared with $Expected (the bytes read), and
 # a change is refused rather than swapped away (the handle that fails a try is
-# often an editor's write). The comparison and the swap are not one step: a
+# often an editor's write). Before every try the leaf is also refused when it is a link or
+# another reparse point (Status failed, temp file removed, ledger untouched); that check is
+# not atomic with the read that follows it. Separately, the comparison and the swap are not one step: a
 # write landing between them is still lost. A ledger gone when the swap fails
 # (moved away, or ReplaceFile failed half-way without a backup) is never
 # recreated: the temp file, the only copy of the ledger as read plus the
@@ -1386,6 +1396,11 @@ function Write-CoordLedgerSwap {
     try {
         [System.IO.File]::WriteAllText($tmp, $Text, $out)
         for ($try = 1; ; $try++) {
+            # Q19 (F5): a link swapped in after the checked first read is refused before it is read or replaced.
+            if (Test-CoordLeafIsLink $Path) {
+                Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                return [pscustomobject]@{ Ok = $false; Status = 'failed'; Temp = $null; Error = "cannot write ${Path}: the ledger is a symbolic link or another reparse point" }
+            }
             if ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($Path)) -cne $base64) {
                 Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
                 return [pscustomobject]@{ Ok = $false; Status = 'changed'; Temp = $null; Error = "$Path changed since it was read" }

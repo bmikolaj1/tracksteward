@@ -1122,6 +1122,41 @@ finally { Remove-Item function:Get-CoordLeafAttributes; Remove-Item function:Ope
 $ctl = Read-CoordLedgerTracksBounded -Path $t10.Ledger
 Assert-Coord 'C18 Q16 control: with the seams gone the real open runs (the plain ledger has no Tracks table, and that is the refusal, not a link)' (-not $ctl.Ok -and ([string]$ctl.Error).Contains("no '## Tracks' heading") -and -not ([string]$ctl.Error).Contains('reparse')) "error=$($ctl.Error)"
 
+# Q19 (F5): the swap re-reads the ledger before it replaces it; a link swapped in after the checked first read is refused there.
+$t11 = New-TrustRepo 'c19-swaplink'
+$q19Orig = [System.IO.File]::ReadAllBytes($t11.Ledger)
+$global:linkOn = $true
+function Get-CoordLeafAttributes([string]$Path) { if ($global:linkOn) { return [System.IO.FileAttributes]::ReparsePoint } else { return [System.IO.FileAttributes]::Normal } }
+try {
+    $sw = Write-CoordLedgerSwap -Path $t11.Ledger -Expected $q19Orig -Text 'replaced' -Bom $false
+    Assert-Coord 'C18 Q19 Write-CoordLedgerSwap refuses a link: not written, failed, reparse point named' (-not $sw.Ok -and $sw.Status -eq 'failed' -and ([string]$sw.Error).Contains('reparse point')) "ok=$($sw.Ok) status=$($sw.Status) error=$($sw.Error)"
+    Assert-Coord 'C18 Q19 ... the ledger is untouched and no temp file is left' (([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($t11.Ledger))) -ceq [Convert]::ToBase64String($q19Orig) -and -not (Get-ChildItem -LiteralPath (Split-Path -Parent $t11.Ledger) -Filter '*.coord-log-*.tmp' -Force)) ''
+    $global:linkOn = $false
+    $sw2 = Write-CoordLedgerSwap -Path $t11.Ledger -Expected $q19Orig -Text 'replaced' -Bom $false
+    Assert-Coord 'C18 Q19 control: a normal file is swapped' ($sw2.Ok -and $sw2.Status -eq 'written') "status=$($sw2.Status) error=$($sw2.Error)"
+}
+finally { Remove-Item function:Get-CoordLeafAttributes; Remove-Variable -Scope Global linkOn -ErrorAction SilentlyContinue; . $CommonPath }
+
+# Q19 (F6): decision pinned: every reparse point is refused, a cloud placeholder (OneDrive Files On-Demand)
+# and a scratch -Ledger included. Real row: a junction (creatable without elevation) at the leaf, no seam.
+$q19J = Join-Path (Split-Path -Parent $t11.Ledger) 'q19-junction'
+$null = cmd /c mklink /J "$q19J" "$(Split-Path -Parent $t11.Ledger)" 2>&1
+if (Test-Path -LiteralPath $q19J) {
+    try { Assert-Coord 'C18 Q19 F6 the leaf check flags a real junction (a directory reparse point; not a file link, not run through the swap)' (Test-CoordLeafIsLink $q19J) '' }
+    finally { cmd /c rmdir "$q19J" | Out-Null }
+}
+else { Write-CoordUnchecked 'C18 Q19 F6 real junction' 'could not create a junction' }
+# Attribute values as the Q19 panel adversary reported them for a dehydrated (0x401620) and a hydrated (0x420)
+# OneDrive file on this host (not reproduced by the author); no row touches a real OneDrive path.
+$global:q19Attr = 0x401620
+function Get-CoordLeafAttributes([string]$Path) { return [Enum]::ToObject([System.IO.FileAttributes], [int]$global:q19Attr) }
+try {
+    Assert-Coord 'C18 Q19 F6 a dehydrated OneDrive placeholder attribute set (0x401620) is refused, by decision (fail closed)' (Test-CoordLeafIsLink $t11.Ledger) ''
+    $global:q19Attr = 0x420
+    Assert-Coord 'C18 Q19 F6 a hydrated OneDrive file attribute set (0x420) is refused too' (Test-CoordLeafIsLink $t11.Ledger) ''
+}
+finally { Remove-Item function:Get-CoordLeafAttributes; Remove-Variable -Scope Global q19Attr -ErrorAction SilentlyContinue; . $CommonPath }
+
 
 Write-Host "(C19) Read-CoordLedgerTracksBounded"
 $trkHeader = '| Track | Repo | Session | Cwd | Branch | Scope | PR | Status |'

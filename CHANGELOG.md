@@ -2,6 +2,20 @@
 
 ## 0.2.4 - 2026-11-18
 
+- **Fix (Q19, F5/F6)**: the two reads Q16 left unchecked now refuse a link at the ledger path: `coord-handoff.ps1`'s
+  re-read after the fetch, and the compare inside `Write-CoordLedgerSwap` (before every try, so `coord-set`, `coord-log`
+  and `coord-handoff` all get it); the swap returns `failed` and removes its temp file, the ledger is untouched. Tested
+  through the `Get-CoordLeafAttributes` seam (a file symlink cannot be created without elevation on this host); the
+  handoff re-read has no row of its own (the script runs as a subprocess, no seam): UNCHECKED. F6 decided, not
+  changed: every reparse point, a cloud placeholder and a scratch `-Ledger` included, stays refused (fail closed; the
+  real ledger normally lives in the main checkout, and a refusal names the cause). The F6 rows test the predicate, not
+  the swap: it flags a real junction (UNCHECKED where `mklink /J` fails), and it flags the attribute values 0x401620 and
+  0x420. Those two values come from the panel adversary's reading of a dehydrated and a hydrated OneDrive file on this
+  host (its report; the author did not reproduce it); no row touches a real OneDrive path. If that reading is right, a
+  scratch `-Ledger` in a synced folder is now refused: a behaviour change, kept on purpose. The swap row pins the refusal
+  before the replace, not the exact place of the check in the retry loop, and the check is not atomic with the open that
+  follows it (a link swapped in between is still followed).
+
 - **Fix (Q16, F2)**: five scripts opened a ledger with no link check on its path (`prune-scan`, `coord-brief`,
   `merge-verify`, `repo-snapshot`, `slot-check`; found by reading, then confirmed by grep: none of them called a
   reparse-point test on the ledger, and `coord-brief` reached its trust check, which has one, only in `-Check`, after its
