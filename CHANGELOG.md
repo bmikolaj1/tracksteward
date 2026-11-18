@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Fix (Q24, F9)**: the SessionStart anchor is no longer dropped when the host is slow. `coord-scope-guard.ps1` refused
+  to write the anchor when its stopwatch, which starts on the script's first line and so also counts the stdin wait,
+  the JSON parse and the load of `coord-common.ps1`, had passed 1000 ms. On the hosted Windows runner that was 1501 ms
+  (run 44333075321, G2-1..G2-3), so a real session on a slow machine would have had no anchor and warned "session
+  anchor not written (the 1000 ms budget ran out)". Without an anchor the session is not recognised as a coordinator
+  and binds only by cwd. The defect was in the hook, not the test: the write is one small local file that the hook
+  cannot bound anyway (only the hooks.json `timeout`, 10 s, covers a stalled open), so the gate protected nothing.
+  The gate is removed; the 1000 ms anchor budget now starts when the write begins and bounds only the prune loop
+  after it, which has nothing to lose from stopping early. New row G2-33 delays the end of stdin by 1300 ms (a slow
+  start, no seam in the hook) and was red before the fix. The 3000 ms guard budget is unchanged. No change under
+  `scripts/**`.
+
 ## 0.2.4 - 2026-11-18
 
 - **Fix (Q19, F5/F6)**: the two reads Q16 left unchecked now refuse a link at the ledger path: `coord-handoff.ps1`'s

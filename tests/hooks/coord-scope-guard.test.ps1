@@ -156,7 +156,7 @@ function Get-RealSessionsLeak([string]$Marker, [string]$Dir = $coordRealIndexDir
 # clock to the child's exit (the pipe reads after it are not counted).
 # ---------------------------------------------------------------------------
 function Start-TestProcess {
-    param([string]$Arguments, [string]$StdinText = '', [hashtable]$ExtraEnv = @{}, [string]$StartDir = '', [int]$Seconds = 90)
+    param([string]$Arguments, [string]$StdinText = '', [hashtable]$ExtraEnv = @{}, [string]$StartDir = '', [int]$Seconds = 90, [int]$StdinDelayMs = 0)
     if (-not $StartDir) { $StartDir = $script:root }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $psExe
@@ -179,6 +179,8 @@ function Start-TestProcess {
         $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
         $p.StandardInput.BaseStream.Flush()
     }
+    # A slow host, simulated: the hook's stopwatch is already running while it waits for the end of stdin.
+    if ($StdinDelayMs -gt 0) { Start-Sleep -Milliseconds $StdinDelayMs }
     $p.StandardInput.Close()
     $outRead = $p.StandardOutput.ReadToEndAsync()
     $errRead = $p.StandardError.ReadToEndAsync()
@@ -404,7 +406,7 @@ function New-SessionStartJson {
 # wildcard, so it can run a sibling folder's copy); 'escaped' = the hooks.json
 # way: -Command, the path wildcard-escaped, the exit code forwarded.
 function Invoke-Guard {
-    param([string]$Json, [hashtable]$ExtraEnv = @{}, [string]$ProjectDir = '', [string]$StubDir = '', [string]$Script = '', [int]$Seconds = 90, [string]$Launcher = 'file')
+    param([string]$Json, [hashtable]$ExtraEnv = @{}, [string]$ProjectDir = '', [string]$StubDir = '', [string]$Script = '', [int]$Seconds = 90, [string]$Launcher = 'file', [int]$StdinDelayMs = 0)
     if (-not $Script) { $Script = $hookPath }
     if (-not (Test-Path -LiteralPath $Script)) { return @{ Code = 'hook script missing'; Out = ''; Err = ''; Ms = 0 } }
     $envs = @{ COORD_INDEX_DIR = $idxDir; COORD_TODAY = $today }
@@ -417,7 +419,7 @@ function Invoke-Guard {
         $args1 = '-NoProfile -ExecutionPolicy Bypass -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
     }
     else { $args1 = '-NoProfile -ExecutionPolicy Bypass -File "' + $Script + '"' }
-    return (Start-TestProcess -Arguments $args1 -StdinText $Json -ExtraEnv $envs -Seconds $Seconds)
+    return (Start-TestProcess -Arguments $args1 -StdinText $Json -ExtraEnv $envs -Seconds $Seconds -StdinDelayMs $StdinDelayMs)
 }
 function Invoke-Edit {
     param([string]$Cwd, [string]$Path, [string]$Tool = 'Edit', [string]$Session = 'sess-test', [string]$ProjectDir = '', [hashtable]$ExtraEnv = @{}, [string]$StubDir = '', [string]$Script = '', [string]$Launcher = 'file', [string]$PathKey = '')
@@ -701,6 +703,13 @@ Invoke-Group 'G2 anchors' {
         $got = [System.IO.File]::ReadAllText($f1)
         Report ($got -ceq ($wtA1 + "`n")) "G2-3 a second SessionStart ($src) with another cwd leaves the anchor as it was" ("got [$got]")
     }
+    # A slow host (F9, run 44333075321: 1501 ms before the write on a hosted runner): the hook's stopwatch
+    # runs while it waits for the end of stdin, so 1300 ms there is past the old 1000 ms pre-write gate. The
+    # anchor is one small local write; a slow start must not cost the session its anchor.
+    $f33 = Get-AnchorPath 'sa-slow'
+    $r = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-slow' -Cwd $wtA1 -Source 'startup') -StdinDelayMs 1300
+    $got = if (Test-Path -LiteralPath $f33) { [System.IO.File]::ReadAllText($f33) } else { '<no file>' }
+    Report ($r.Code -eq 0 -and [string]::IsNullOrEmpty([string]$r.Out) -and $got -ceq ($wtA1 + "`n")) 'G2-33 a slow start (stdin ends 1300 ms late) still writes the anchor, with no warning' ("code=$($r.Code); out=[$($r.Out)]; file=[$got]")
     foreach ($bad in @('..\evil', '../evil', 'a b', 'a.b', 'a:b', ('x' * 129))) {
         $null = Use-Ledger -Rows @((RowA1), (RowA2))
         $label = if ($bad.Length -gt 20) { "a $($bad.Length)-character id" } else { "'$bad'" }
@@ -1621,7 +1630,7 @@ Invoke-Group 'S6 plugin wiring' {
     # (the hook always runs under powershell.exe, whose GetFullPath rejects the '|'; under another host, where GetFullPath accepts it, S6-30c and S6-30e pass trivially and S6-30d fails)
     Test-Allow 'S6-30c no index: a SessionStart whose cwd GetFullPath rejects is still a silent allow' (Invoke-Guard -Json (New-SessionStartJson -Session 'sa-badcwd' -Cwd 'C:\a|b'))
     $null = Use-Ledger -Rows @((RowA1))
-    # The warning of a cwd that GetFullPath rejects (its text names GetFullPath): the other two anchor warnings (no full cwd, budget ran out) share the "session anchor not written" text.
+    # The warning of a cwd that GetFullPath rejects (its text names GetFullPath): the other anchor warning (no full cwd) shares the "session anchor not written" text; the "budget ran out" one is gone (Q24).
     $badR = Invoke-Guard -Json (New-SessionStartJson -Session 'sa-badcwd2' -Cwd 'C:\a|b')
     $badV = Get-Verdict $badR
     Report ($badV.Kind -eq 'warn' -and $badV.Msg -match 'session anchor not written' -and $badV.Msg -match 'GetFullPath' -and $badV.Msg -notmatch 'no full cwd' -and $badV.Msg -notmatch 'budget ran out' -and -not (Test-Path -LiteralPath (Get-AnchorPath 'sa-badcwd2'))) 'S6-30d with an index and no anchor yet: the same cwd warns that the anchor was not written (the GetFullPath rejection, not the no-cwd or budget warning), and writes none' (Show-Run $badR $badV)

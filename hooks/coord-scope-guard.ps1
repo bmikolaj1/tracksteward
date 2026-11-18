@@ -133,8 +133,10 @@
 # starts. The index and Tracks reads get the time left (-TimeoutMs) and a
 # timeout there gives the deadline warning; the anchor file read waits at most
 # the time left; the anchor append is
-# skipped, with a warning, under 200 ms left. Anchor mode has its own 1 s budget
-# and exits silently for an unusable session id, with no index (a cwd that is not
+# skipped, with a warning, under 200 ms left. Anchor mode has its own 1 s budget,
+# started when the anchor write begins (not at the script's first line), that
+# bounds only the prune after the write: a slow start never costs the anchor. It
+# exits silently for an unusable session id, with no index (a cwd that is not
 # a drive-letter full path warns first; a cwd that GetFullPath rejects warns, for a
 # session with no anchor yet and time left in the budget, only with an index), for
 # a session that already has its anchor and a drive-letter full-path cwd (a failed refresh is ignored), and when it loses the create race to another run; any
@@ -1132,10 +1134,11 @@ function Invoke-CsgAnchorMode {
             try { [System.IO.File]::SetLastWriteTimeUtc($file, [DateTime]::UtcNow) } catch { }
             Exit-Csg 0
         }
-        if ($script:csgSw.ElapsedMilliseconds -ge $script:csgAnchorBudgetMs) {
-            Add-CsgWarning ('session anchor not written (the ' + $script:csgAnchorBudgetMs + ' ms budget ran out)')
-            Exit-CsgAllow
-        }
+        # No time gate before this write: the anchor is one small local file, and a
+        # slow host (stdin, JSON, the coord-common load all run on the script's
+        # stopwatch) must not cost the session its anchor. The anchor budget starts
+        # here and bounds only the prune loop below.
+        $anchorSw = [System.Diagnostics.Stopwatch]::StartNew()
         # Resolved only here, after the index check: a cwd that GetFullPath rejects
         # warns only on a day with an index.
         $full = ConvertTo-CsgFull $cwd
@@ -1157,7 +1160,7 @@ function Invoke-CsgAnchorMode {
         try {
             $cutoff = [DateTime]::UtcNow.AddDays(-7)
             foreach ($old in [System.IO.Directory]::EnumerateFiles($dir, '*.anchor')) {
-                if ($script:csgSw.ElapsedMilliseconds -ge $script:csgAnchorBudgetMs) { break }
+                if ($anchorSw.ElapsedMilliseconds -ge $script:csgAnchorBudgetMs) { break }
                 if ($old -eq $file) { continue }
                 try { if ([System.IO.File]::GetLastWriteTimeUtc($old) -lt $cutoff) { [System.IO.File]::Delete($old) } } catch { }
             }
