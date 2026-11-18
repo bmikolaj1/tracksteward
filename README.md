@@ -3,7 +3,7 @@
 **One thin coordinator session over many parallel Claude Code sessions.** It gives you a daily
 ledger, scoped briefs, a findings protocol, and one verified merge at a time.
 
-> **Status:** v0.2.3, 2026-11-05. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
+> **Status:** v0.2.4, 2026-11-18. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
 > for 10 coordination days: 57 merges verified, 127 findings with recorded outcomes, up to 16 tracks in
 > a day. The scripts and the scope guard came to this plugin in 0.2.0, after those days.
 >
