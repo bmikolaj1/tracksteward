@@ -673,6 +673,9 @@ function Test-CsgLedgerUsable($Rec) {
     Stop-CsgOnTimeout
     if ($null -eq $t -or -not $t.Ok) {
         if ($script:csgGitFail) { Add-CsgWarning ('git failed (' + $script:csgGitFail + ', checking ledger ' + $e + '); ' + $script:csgNotGuarded) }
+        # A ledger this user cannot open (denied, or held with no sharing) is said, with
+        # its own reason; an untrusted one stays silent.
+        elseif ($t -and $t.Unreadable) { Add-CsgWarning ('ledger ' + $e + ' skipped: ' + [string]$t.Error) }
         return $false
     }
     if (-not $Rec.Read) { Read-CsgLedgerFile $Rec }
@@ -734,7 +737,8 @@ function Confirm-CsgCandidates($Anchors, $Recs, $Infos) {
 # 4 KiB, or unreadable: absent, with a warning.
 function Read-CsgAnchorFile([string]$Path) {
     $res = [pscustomobject]@{ Present = $false; Lines = @(); Text = '' }
-    if (-not [System.IO.File]::Exists($Path)) { return $res }
+    # No File.Exists gate: it can be false for an anchor this user is denied, which then read
+    # as "absent" with no word. The open decides: only a not-found failure is absent, silently.
     Assert-CsgTime ('reading the session anchor ' + $Path)
     $fs = $null
     try {
@@ -769,7 +773,9 @@ function Read-CsgAnchorFile([string]$Path) {
         $res.Lines = $lines.ToArray()
     }
     catch {
-        Add-CsgWarning ('session anchor ' + $Path + ' could not be read (' + $_.Exception.Message + '); it is treated as absent')
+        if (-not (Test-CoordNotFoundException $_.Exception)) {
+            Add-CsgWarning ('session anchor ' + $Path + ' could not be read (' + $_.Exception.Message + '); it is treated as absent')
+        }
         $res.Present = $false
     }
     finally { if ($fs) { $fs.Dispose() } }

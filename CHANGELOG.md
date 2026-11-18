@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Fix (Q8, F47 follow-up)**: the three same-class gaps the entry below left open.
+  - A denied LEDGER: `Test-CoordLedgerTrusted` asked `FileInfo.Exists` and said "no ledger file there" (measured: an
+    `icacls` deny on the file and its folder hides it). The open decides now (`Get-CoordFileState`): a ledger that cannot
+    be opened is not trusted, with `Unreadable = $true` and "cannot read the ledger <path>"; a missing file or a
+    folder keeps the old message. The scope guard used to skip an untrusted ledger silently; it now warns
+    `ledger <path> skipped: cannot read ...` for an unreadable one (a ledger held with no sharing is warned about the
+    same way, as before), and `coord-brief.ps1 -Check` refuses with that reason.
+  - A denied ANCHOR file: `Read-CsgAnchorFile` asked `File.Exists`, so a denied anchor was silently absent and the session
+    bound by its cwd alone (measured by the same deny). Only a not-found open is absent now; any other failure warns
+    "session anchor <path> could not be read".
+  - `Register-CoordLedger` asked `File.Exists` of its index: an index it cannot open now refuses ("cannot read the ledger
+    index <path>; nothing was appended") instead of reading it as empty. The deny that hides the index also denies the
+    append on this host, so the pin is an index path that is a folder (red before: "cannot update").
+  Pinned by `tests/scripts/coord-common.test.ps1` C16/C18 and `tests/hooks/coord-scope-guard.test.ps1` G13; the rows
+  that stage a deny need an `icacls` deny that hides the file from `File.Exists` and are UNCHECKED where it does not.
+
 - **Fix (Q61, ledger F47)**: an index this user cannot read is no longer read as "no index".
   `Get-CoordIndexedLedgers` tested the path with `File.Exists`/`Directory.Exists`, which can be false for a denied file
   (an `icacls` deny on the file and on its folder gave `Ok=True Missing=True Entries=0`), so the scope guard saw no
@@ -12,10 +28,7 @@
     asked `File.Exists`). New `Get-CoordFileState` (`present` / `missing` / `unreadable`, by the open) serves those gates;
   - `prune-scan.ps1` is COULD NOT CHECK for a denied index (the header's "Not covered" note is gone);
   - `coord-brief.ps1 -Check` refused before and still does (its message changes: the error, not "not among the ledgers").
-  Not covered, same class: a denied LEDGER is warned about with the wrong reason (`Test-CoordLedgerTrusted` says "no
-  ledger file there (missing, or a folder)", measured) and a denied anchor file (`Read-CsgAnchorFile`) is silently absent
-  (the session then binds by its cwd; read, not measured); and `Register-CoordLedger` still asks `File.Exists` of its index (it fails
-  closed on the deny measured here, where its append is denied too; an ACL that hid the index but allowed the append is untested).
+  Closed in Q8 (below): the three same-class gaps this entry listed as not covered.
   Pinned by `tests/scripts/coord-common.test.ps1` C16, `tests/hooks/coord-scope-guard.test.ps1` G12 and
   `tests/scripts/prune-scan.test.ps1` F38. The rows for the fixed behaviour were seen red against the old code; the
   `Register-CoordLedger` row, the missing-folder row and the deny-removed and control rows (C16, G12-5, F38 "ACL

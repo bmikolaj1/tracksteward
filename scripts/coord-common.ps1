@@ -644,7 +644,11 @@ function Register-CoordLedger {
     }
     try {
         $cur = [byte[]]@()
-        if ([System.IO.File]::Exists($index)) { $cur = [System.IO.File]::ReadAllBytes($index) }
+        # The open decides (Get-CoordFileState), not File.Exists: false for an index this
+        # user is denied, which would read as empty here and append to what it cannot read.
+        $idxState = Get-CoordFileState $index
+        if ($idxState -eq 'unreadable') { return [pscustomobject]@{ Ok = $false; Added = $false; Index = $index; Error = "cannot read the ledger index ${index}; nothing was appended" } }
+        if ($idxState -eq 'present') { $cur = [System.IO.File]::ReadAllBytes($index) }
         foreach ($have in @((Get-CoordIndexedLedgers -Bytes $cur).Entries)) {
             if ([string]::Equals($have, $entry, (Get-CoordPathComparison))) {
                 return [pscustomobject]@{ Ok = $true; Added = $false; Index = $index; Error = $null }
@@ -707,7 +711,16 @@ function Test-CoordLedgerTrusted {
     # symlink on .NET Core elsewhere. Not verified off Windows.
     $reparse = [System.IO.FileAttributes]::ReparsePoint
     $fi = [System.IO.FileInfo]::new($full)
-    if (-not $fi.Exists) { return [pscustomobject]@{ Ok = $false; Error = 'no ledger file there (missing, or a folder)' } }
+    # The open decides, not FileInfo.Exists: that can be false for a ledger this user is
+    # denied, which then read as "no ledger file there". Unreadable is set so a caller can
+    # tell "cannot look" from "not trusted".
+    $state = Get-CoordFileState $full
+    if ($state -eq 'missing' -or ($state -eq 'unreadable' -and [System.IO.Directory]::Exists($full))) {
+        return [pscustomobject]@{ Ok = $false; Error = 'no ledger file there (missing, or a folder)' }
+    }
+    if ($state -eq 'unreadable') {
+        return [pscustomobject]@{ Ok = $false; Unreadable = $true; Error = "cannot read the ledger ${full} (access denied, or the open failed)" }
+    }
     if ($fi.Attributes -band $reparse) { return [pscustomobject]@{ Ok = $false; Error = 'the ledger is a symbolic link or another reparse point' } }
     foreach ($d in @($dotClaude, $coordDir)) {
         $di = [System.IO.DirectoryInfo]::new($d)
