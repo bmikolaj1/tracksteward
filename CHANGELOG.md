@@ -7,11 +7,14 @@
     `icacls` deny on the file and its folder hides it). The open decides now (`Get-CoordFileState`): a ledger that cannot
     be opened is not trusted, with `Unreadable = $true` and "cannot read the ledger <path>"; a missing file or a
     folder keeps the old message. The scope guard used to skip an untrusted ledger silently; it now warns
-    `ledger <path> skipped: cannot read ...` for an unreadable one (a ledger held with no sharing is warned about the
-    same way, as before), and `coord-brief.ps1 -Check` refuses with that reason.
+    `ledger <path> skipped: cannot read ...` for an unreadable one (a ledger held with no sharing is warned about too, now
+    with this trust-stage reason, not the read error; no test stages it), and `coord-brief.ps1 -Check` refuses with that
+    reason (by reading, not pinned by a test). The reparse-point check runs before the open, so a symbolic link is
+    never followed by it (one open of a link target could block on a network path); the symlink rows are UNCHECKED
+    where a file symlink cannot be created.
   - A denied ANCHOR file: `Read-CsgAnchorFile` asked `File.Exists`, so a denied anchor was silently absent and the session
     bound by its cwd alone (measured by the same deny). Only a not-found open is absent now; any other failure warns
-    "session anchor <path> could not be read".
+    "session anchor <path> could not be read" (a folder at the anchor path warns now; it was silent).
   - `Register-CoordLedger` asked `File.Exists` of its index: an index it cannot open now refuses ("cannot read the ledger
     index <path>; nothing was appended") instead of reading it as empty. The deny that hides the index also denies the
     append on this host, so the pin is an index path that is a folder (red before: "cannot update").
