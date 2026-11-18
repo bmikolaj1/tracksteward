@@ -138,7 +138,7 @@
 # bounds only the prune after the write: a slow start never costs the anchor. It
 # exits silently for an unusable session id, with no index (a cwd that is not
 # a drive-letter full path warns first; a cwd that GetFullPath rejects warns, for a
-# session with no anchor yet and time left in the budget, only with an index), for
+# session with no anchor yet, only with an index), for
 # a session that already has its anchor and a drive-letter full-path cwd (a failed refresh is ignored), and when it loses the create race to another run; any
 # other failure writes no anchor and warns (a prune failure after the anchor is
 # written is ignored).

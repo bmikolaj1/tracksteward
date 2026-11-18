@@ -11,7 +11,10 @@
   cannot bound anyway (only the hooks.json `timeout`, 10 s, covers a stalled open), so the gate protected nothing.
   The gate is removed; the 1000 ms anchor budget now starts when the write begins and bounds only the prune loop
   after it, which has nothing to lose from stopping early. New row G2-33 delays the end of stdin by 1300 ms (a slow
-  start, no seam in the hook) and was red before the fix. The 3000 ms guard budget is unchanged. No change under
+  start, no seam in the hook) and was red before the fix (seen: "budget ran out" warning, no anchor). The prune bound
+  itself has no row (it would need a large sessions folder): UNCHECKED. A side effect: on a slow host the prune now
+  gets its full 1000 ms after the write (it used to stop at once), so a slow SessionStart with a large sessions folder
+  can take up to about 1 s longer, well inside the 10 s hook timeout. The 3000 ms guard budget is unchanged. No change under
   `scripts/**`.
 
 ## 0.2.4 - 2026-11-18
