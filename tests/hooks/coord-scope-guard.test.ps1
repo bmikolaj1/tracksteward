@@ -1187,7 +1187,7 @@ Invoke-Group 'G8 failure and output' {
 # ===========================================================================
 Invoke-Group 'G9 runtime' {
     $outPath = Join-Path $wtA1 'other\x.txt'
-    $limit = $baselineMs + 3400   # wall-clock minus the start-up baseline must stay within 3.4 s (3 s budget + kill + jitter; the guard's budget starts after the event parse and the coord-common load, which sit in the 400 ms of slack)
+    $limit = $baselineMs + 3400   # wall-clock minus the start-up baseline must stay within 3.4 s (3 s budget + kill + jitter; the guard's budget starts after the event parse and the coord-common load; their time, not measured here, now sits in the 400 ms of slack)
 
     # four listed 78 KiB ledgers
     Reset-State

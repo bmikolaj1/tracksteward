@@ -130,9 +130,12 @@
 # the JSON parse and the coord-common load are not counted); 3000 ms of
 # processing (the powershell.exe start-up before the script is not counted
 # either). Only the hooks.json `timeout` bounds the part before the restart, so
-# the budget shrinks when that part is very slow: min(3000, 8500 - its time), at
-# least 500 ms, to end with the timeout warning inside the 10 s.
-# Every git call goes
+# the budget shrinks when that part is slow: min(3000, 8500 - its time), at least
+# 500 ms, which leaves about 1.5 s of the 10 s for the powershell.exe start-up, the
+# kill and the output. A stall of about 8 s or more before the guard leaves no room
+# for git (the 500 ms floor equals the git reserve) and the run ends with the
+# timeout warning; one past about 9.5 s still ends in a silent kill by the harness.
+# The "timed out after N ms" text counts from the restart. Every git call goes
 # through Invoke-CoordGitBounded with min(2000, time left - 500) ms and is not
 # started when that is not positive; each step checks the time left before it
 # starts. The index and Tracks reads get the time left (-TimeoutMs) and a
@@ -1423,9 +1426,8 @@ try {
         # stopwatch, and on a slow host they must not use up the budget and turn a
         # block into an allow with a timeout warning (F11b). The hooks.json timeout
         # still bounds the whole run.
-        # The restart is capped so the whole run stays inside the 10 s timeout: after
-        # a very slow start the budget shrinks (never under 500 ms) and the run ends
-        # with the loud timeout warning, not a silent kill by the harness.
+        # The restart is capped so a slow start usually still ends in the loud timeout
+        # warning inside the 10 s (see BUDGET in the header for the limits).
         $csgPreMs = $csgSw.ElapsedMilliseconds
         $csgBudgetMs = [Math]::Max(500, [Math]::Min(3000, 8500 - $csgPreMs))
         $csgSw.Restart()

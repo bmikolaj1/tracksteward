@@ -23,8 +23,9 @@
   guard allowed with "timed out ... this edit is NOT guarded" where it owed a block: a fail-open on a slow host. The
   stopwatch is now restarted once the event is read and `coord-common.ps1` is loaded, so the 3000 ms bounds the guard's
   own work; the part before it is bounded only by the 10 s `hooks.json` timeout, so the restart is capped (budget
-  `min(3000, 8500 - that time)`, at least 500 ms) and a very slow start ends in the timeout warning, not a silent
-  kill by the harness (the cap has no row: UNCHECKED). Where the time went in run 44367315654 is not known from the
+  `min(3000, 8500 - that time)`, at least 500 ms) and a slow start usually ends in the timeout warning inside the 10 s
+  (about 1.5 s are left for start-up, kill and output; a stall past about 9.5 s before the guard is still a silent kill
+  by the harness; the cap has no row: UNCHECKED). Where the time went in run 44367315654 is not known from the
   log line (5972 ms is only when the budget was found spent); G10-16 simulates the stdin wait. New row G10-16 (stdin ends 3500 ms late, an
   out-of-scope edit) was red before: allow with the timeout warning, no block. The other budgets (per-git
   `min(2000, left - 500)`, the reader `-TimeoutMs` values, the 200 ms append skip) run on the same stopwatch and now
