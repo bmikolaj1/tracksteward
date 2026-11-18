@@ -443,6 +443,24 @@ function Test-CoordLedgerCanonical {
     return [pscustomobject]@{ Ok = $true; Canonical = $canon; Undecided = $false; Error = $null }
 }
 
+# The ledger leaf's own attributes, read without following it. A seam for tests (a file
+# symlink cannot be created on every host). $null when the read fails.
+function Get-CoordLeafAttributes([string]$Path) {
+    try { return [System.IO.File]::GetAttributes($Path) } catch { return $null }
+}
+
+# True when the file at $Path is a symbolic link or another reparse point, decided from its
+# own attributes before the ledger is opened or read (an open would follow the link, to a network path
+# perhaps; a Test-Path before it already stats the target). One check, used by Test-CoordLedgerTrusted and by the ledger readers that do not
+# run the whole trust check (a scratch -Ledger is allowed there): Read-CoordLedgerTracks,
+# Read-CoordLedgerTracksBounded, Read-CoordLedgerFile and coord-brief.ps1's own read. Only the
+# leaf is checked, not the folders above it (Test-CoordLedgerTrusted does those). A failed
+# attribute read is not a link here: the open that follows reports its own failure.
+function Test-CoordLeafIsLink([string]$Path) {
+    $attrs = Get-CoordLeafAttributes $Path
+    return ($null -ne $attrs -and [bool]($attrs -band [System.IO.FileAttributes]::ReparsePoint))
+}
+
 # The file open for the two bounded readers below. With -TimeoutMs given to
 # them the file is opened for asynchronous I/O. The open itself is not bounded
 # (.NET Framework has no timeout on a local open); Test-CoordLedgerCanonical
@@ -718,9 +736,7 @@ function Test-CoordLedgerTrusted {
     # The link's own attributes first: a reparse point at the ledger path is rejected before
     # anything opens it (the open would follow it, to a network path perhaps). A failed read of
     # them falls through to the open, and the $fi check below is then the only one.
-    $attrs = $null
-    try { $attrs = [System.IO.File]::GetAttributes($full) } catch { }
-    if ($null -ne $attrs -and ($attrs -band $reparse)) { return [pscustomobject]@{ Ok = $false; Error = 'the ledger is a symbolic link or another reparse point' } }
+    if (Test-CoordLeafIsLink $full) { return [pscustomobject]@{ Ok = $false; Error = 'the ledger is a symbolic link or another reparse point' } }
     # The open decides, not FileInfo.Exists: that can be false for a ledger this user is
     # denied, which then read as "no ledger file there". Unreadable is set so a caller can
     # tell "cannot look" from "not trusted".
@@ -774,8 +790,10 @@ function Split-CoordTableRow([string]$Row) {
 # missing Repo, Branch or Scope column or a row whose cell count differs from
 # the header. No `## Tracks` section, or a table with no data rows: no output.
 # Rows are written to the pipeline one by one: wrap the call in @(...).
+# Also throws when the ledger path is a symbolic link or another reparse point (checked before the open).
 function Read-CoordLedgerTracks {
     param([string]$Path)
+    if (Test-CoordLeafIsLink $Path) { throw "the ledger $Path is a symbolic link or another reparse point" }
     $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
     $lines = $text -split '\r\n|\r|\n'
     $inSection = $false
@@ -846,7 +864,8 @@ function Add-CoordTracksLine($S, [string]$Line) {
 # heading in what was read, no table in the section, a table not ended within
 # the 1 MiB or before the end of the file (the newline that ends the file's
 # last line is no line of its own), and what Read-CoordLedgerTracks throws on
-# (a missing Repo, Branch or Scope column, a ragged row). A table with a
+# (a missing Repo, Branch or Scope column, a ragged row, a ledger path that is a
+# symbolic link or another reparse point: refused before the open). A table with a
 # header row and no data rows is Ok with no rows. Returns { Ok; Rows (the
 # objects Read-CoordLedgerTracks returns); TimedOut; Error }.
 # -TimeoutMs (default: no bound): each chunk read is waited on for the time
@@ -861,6 +880,7 @@ function Read-CoordLedgerTracksBounded {
     $bounded = $PSBoundParameters.ContainsKey('TimeoutMs')
     $timedOut = [pscustomobject]@{ Ok = $false; Rows = @(); TimedOut = $true; Error = "read timed out after $TimeoutMs ms" }
     if ($bounded -and $TimeoutMs -le 0) { return $timedOut }
+    if (Test-CoordLeafIsLink $Path) { return [pscustomobject]@{ Ok = $false; Rows = @(); TimedOut = $false; Error = "the ledger $Path is a symbolic link or another reparse point" } }
     try { $fs = Open-CoordReadStream $Path $bounded }
     catch { return [pscustomobject]@{ Ok = $false; Rows = @(); TimedOut = $false; Error = "cannot open ${Path}: $($_.Exception.Message)" } }
     $late = $false
@@ -1302,10 +1322,12 @@ function Enter-CoordLedgerLock {
 # (Bom), anything that is not valid UTF-8 refused; the line end is CRLF when
 # the text holds any CRLF, else LF (Newline). Returns { Ok; Bytes (the file
 # as read: the swap compares the ledger with them); Bom; Newline; Lines (a
-# List[string], split on CRLF or LF); Error }.
+# List[string], split on CRLF or LF); Error }. A ledger path that is a symbolic
+# link or another reparse point is refused before the open (Test-CoordLeafIsLink).
 function Read-CoordLedgerFile {
     param([string]$Path)
     $fail = { param($Why) [pscustomobject]@{ Ok = $false; Bytes = $null; Bom = $false; Newline = $null; Lines = $null; Error = $Why } }
+    if (Test-CoordLeafIsLink $Path) { return (& $fail "the ledger $Path is a symbolic link or another reparse point") }
     try { $bytes = [System.IO.File]::ReadAllBytes($Path) } catch { return (& $fail "cannot read ${Path}: $($_.Exception.Message)") }
     $bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
     $strict = New-Object System.Text.UTF8Encoding($bom, $true)
