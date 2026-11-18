@@ -1097,6 +1097,32 @@ if ($linked) {
 }
 else { Write-CoordUnchecked 'C18 symlinked ledger' 'could not create a file symlink (needs developer mode or elevation)' }
 
+# Q16 (F2): the readers that do not run the whole trust check refuse a link at the ledger path too.
+# The attribute read is a seam (Get-CoordLeafAttributes), so this runs where a file symlink cannot be created.
+$t10 = New-TrustRepo 'c18-leaflink'
+$global:openCalls = 0
+$global:linkOn = $true
+function Get-CoordLeafAttributes([string]$Path) { if ($global:linkOn) { return [System.IO.FileAttributes]::ReparsePoint } else { return [System.IO.FileAttributes]::Normal } }
+function Open-CoordReadStream([string]$Path, [bool]$Bounded) { $global:openCalls++; throw 'the open must not be reached for a link' }
+try {
+    Assert-Coord 'C18 Q16 Test-CoordLeafIsLink: true for a reparse point' (Test-CoordLeafIsLink $t10.Ledger) ''
+    $threw = ''
+    try { $null = Read-CoordLedgerTracks $t10.Ledger } catch { $threw = "$_" }
+    Assert-Coord 'C18 Q16 Read-CoordLedgerTracks throws on a link, naming the reparse point, before it reads' ($threw.Contains('reparse point')) "threw=$threw"
+    $bd = Read-CoordLedgerTracksBounded -Path $t10.Ledger
+    Assert-Coord 'C18 Q16 Read-CoordLedgerTracksBounded refuses a link before the open (Open-CoordReadStream never called)' (-not $bd.Ok -and ([string]$bd.Error).Contains('reparse point') -and $global:openCalls -eq 0) "ok=$($bd.Ok) calls=$($global:openCalls) error=$($bd.Error)"
+    $bd2 = Read-CoordLedgerTracksBounded -Path $t10.Ledger -TimeoutMs 5000
+    Assert-Coord 'C18 Q16 ... also with -TimeoutMs' (-not $bd2.Ok -and -not $bd2.TimedOut -and $global:openCalls -eq 0) "ok=$($bd2.Ok) calls=$($global:openCalls)"
+    $lf = Read-CoordLedgerFile -Path $t10.Ledger
+    Assert-Coord 'C18 Q16 Read-CoordLedgerFile refuses a link (Ok false, reparse point)' (-not $lf.Ok -and ([string]$lf.Error).Contains('reparse point')) "ok=$($lf.Ok) error=$($lf.Error)"
+    $global:linkOn = $false
+    Assert-Coord 'C18 Q16 control: a normal attribute is not a link' (-not (Test-CoordLeafIsLink $t10.Ledger)) ''
+}
+finally { Remove-Item function:Get-CoordLeafAttributes; Remove-Item function:Open-CoordReadStream; . $CommonPath }
+$ctl = Read-CoordLedgerTracksBounded -Path $t10.Ledger
+Assert-Coord 'C18 Q16 control: with the seams gone the real open runs (the plain ledger has no Tracks table, and that is the refusal, not a link)' (-not $ctl.Ok -and ([string]$ctl.Error).Contains("no '## Tracks' heading") -and -not ([string]$ctl.Error).Contains('reparse')) "error=$($ctl.Error)"
+
+
 Write-Host "(C19) Read-CoordLedgerTracksBounded"
 $trkHeader = '| Track | Repo | Session | Cwd | Branch | Scope | PR | Status |'
 $trkDelim = '|-------|------|---------|-----|--------|-------|----|--------|'
