@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.4 - 2026-11-18
 
 - **Fix (Q19, F5/F6)**: the two reads Q16 left unchecked now refuse a link at the ledger path: `coord-handoff.ps1`'s
   re-read after the fetch, and the compare inside `Write-CoordLedgerSwap` (before every try, so `coord-set`, `coord-log`
