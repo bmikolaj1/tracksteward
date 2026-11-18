@@ -179,7 +179,7 @@ function Start-TestProcess {
         $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
         $p.StandardInput.BaseStream.Flush()
     }
-    # A slow host, simulated: the hook's stopwatch is already running while it waits for the end of stdin.
+    # A slow host, simulated: the end of stdin comes late. SessionStart's first-line stopwatch runs through that wait (G2-33); the guard restarts its own after the read (G10-16).
     if ($StdinDelayMs -gt 0) { Start-Sleep -Milliseconds $StdinDelayMs }
     $p.StandardInput.Close()
     $outRead = $p.StandardOutput.ReadToEndAsync()
@@ -422,9 +422,9 @@ function Invoke-Guard {
     return (Start-TestProcess -Arguments $args1 -StdinText $Json -ExtraEnv $envs -Seconds $Seconds -StdinDelayMs $StdinDelayMs)
 }
 function Invoke-Edit {
-    param([string]$Cwd, [string]$Path, [string]$Tool = 'Edit', [string]$Session = 'sess-test', [string]$ProjectDir = '', [hashtable]$ExtraEnv = @{}, [string]$StubDir = '', [string]$Script = '', [string]$Launcher = 'file', [string]$PathKey = '')
+    param([string]$Cwd, [string]$Path, [string]$Tool = 'Edit', [string]$Session = 'sess-test', [string]$ProjectDir = '', [hashtable]$ExtraEnv = @{}, [string]$StubDir = '', [string]$Script = '', [string]$Launcher = 'file', [string]$PathKey = '', [int]$StdinDelayMs = 0)
     $json = New-GuardEvent -Tool $Tool -Path $Path -Cwd $Cwd -Session $Session -PathKey $PathKey
-    return (Invoke-Guard -Json $json -ExtraEnv $ExtraEnv -ProjectDir $ProjectDir -StubDir $StubDir -Script $Script -Launcher $Launcher)
+    return (Invoke-Guard -Json $json -ExtraEnv $ExtraEnv -ProjectDir $ProjectDir -StubDir $StubDir -Script $Script -Launcher $Launcher -StdinDelayMs $StdinDelayMs)
 }
 
 # ---------------------------------------------------------------------------
@@ -1187,7 +1187,7 @@ Invoke-Group 'G8 failure and output' {
 # ===========================================================================
 Invoke-Group 'G9 runtime' {
     $outPath = Join-Path $wtA1 'other\x.txt'
-    $limit = $baselineMs + 3400   # wall-clock minus the start-up baseline must stay within 3.4 s (3 s budget + kill + jitter)
+    $limit = $baselineMs + 3400   # wall-clock minus the start-up baseline must stay within 3.4 s (3 s budget + kill + jitter; the guard's budget starts after the event parse and the coord-common load, which sit in the 400 ms of slack)
 
     # four listed 78 KiB ledgers
     Reset-State
@@ -1341,6 +1341,12 @@ Invoke-Group 'G10 midnight' {
         $null = Use-Ledger -Rows @((RowA1)) -Date $real
         Test-Block "G10-15 COORD_TODAY='$bad' is ignored, the real date's index is read" (Invoke-Edit -Cwd $wtA1 -Path $outPath -ExtraEnv @{ COORD_TODAY = $bad }) @($stdScopeTail)
     }
+
+    # A slow start (F11b, run 44367315654: G10-15 timed out at 5972 ms on a hosted runner): the 3 s budget bounds the
+    # guard's own work, not the stdin wait, JSON parse and coord-common load that come first. 3500 ms of stdin delay
+    # was past the whole old budget, so the guard allowed with a "timed out" warning where a block was due.
+    $null = Use-Ledger -Rows @((RowA1))
+    Test-Block 'G10-16 a slow start (stdin ends 3500 ms late): the out-of-scope edit is still blocked, not allowed with a timeout warning' (Invoke-Edit -Cwd $wtA1 -Path $outPath -StdinDelayMs 3500) @($stdScopeTail)
 }
 
 # ===========================================================================

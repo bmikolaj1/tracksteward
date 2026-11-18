@@ -126,8 +126,13 @@
 # object on stdout, {"systemMessage":"coord-scope-guard: <w1>; <w2>"}; silent
 # allow = exit 0, no output. Plain stdout text is never used.
 #
-# BUDGET: one stopwatch, started on the first line; 3000 ms of processing (the
-# powershell.exe start-up before the script is not counted). Every git call goes
+# BUDGET: one stopwatch, restarted just before the guard runs (so the stdin wait,
+# the JSON parse and the coord-common load are not counted); 3000 ms of
+# processing (the powershell.exe start-up before the script is not counted
+# either). Only the hooks.json `timeout` bounds the part before the restart, so
+# the budget shrinks when that part is very slow: min(3000, 8500 - its time), at
+# least 500 ms, to end with the timeout warning inside the 10 s.
+# Every git call goes
 # through Invoke-CoordGitBounded with min(2000, time left - 500) ms and is not
 # started when that is not positive; each step checks the time left before it
 # starts. The index and Tracks reads get the time left (-TimeoutMs) and a
@@ -1412,7 +1417,20 @@ try {
     $csgYday = $csgDate.AddDays(-1).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
     $csgYdayIdx = $null
     if ($csgMode -ceq 'SessionStart') { Invoke-CsgAnchorMode }
-    else { Invoke-CsgGuard }
+    else {
+        # The guard budget starts here, with the guard's own work: the stdin wait,
+        # the JSON parse and the coord-common load above ran on the first-line
+        # stopwatch, and on a slow host they must not use up the budget and turn a
+        # block into an allow with a timeout warning (F11b). The hooks.json timeout
+        # still bounds the whole run.
+        # The restart is capped so the whole run stays inside the 10 s timeout: after
+        # a very slow start the budget shrinks (never under 500 ms) and the run ends
+        # with the loud timeout warning, not a silent kill by the harness.
+        $csgPreMs = $csgSw.ElapsedMilliseconds
+        $csgBudgetMs = [Math]::Max(500, [Math]::Min(3000, 8500 - $csgPreMs))
+        $csgSw.Restart()
+        Invoke-CsgGuard
+    }
 }
 catch {
     Add-CsgWarning ('internal error (' + $_.Exception.Message + '); ' + $csgNotGuarded)
