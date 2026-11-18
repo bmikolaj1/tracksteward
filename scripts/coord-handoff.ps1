@@ -399,6 +399,8 @@ try {
     $taken = Enter-CoordLedgerLock -Path $Ledger
     $script:lock = $taken.Lock
     if (-not $taken.Ok) { Exit-NotWritten $taken.Error }
+    # The link check first: a Test-Path before it would stat the link's target.
+    if (Test-CoordLeafIsLink $Ledger) { Exit-NotWritten "the ledger $Ledger is a symbolic link or another reparse point" }
     if (-not (Test-Path -LiteralPath $Ledger -PathType Leaf)) { Exit-NotWritten "no ledger at $Ledger any more (moved away during the fetch?)" }
     # Raw bytes, before any decoding: a change that no longer decodes is still
     # a change during the fetch.
