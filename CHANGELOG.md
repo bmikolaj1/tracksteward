@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+- **Fix (Q24, F9)**: the SessionStart anchor is no longer dropped when the host is slow. `coord-scope-guard.ps1` refused
+  to write the anchor when its stopwatch, which starts on the script's first line and so also counts the stdin wait,
+  the JSON parse and the load of `coord-common.ps1`, had passed 1000 ms. On the hosted Windows runner that was 1501 ms
+  (run 44333075321, G2-1..G2-3), so a real session on a slow machine would have had no anchor and warned "session
+  anchor not written (the 1000 ms budget ran out)". Without an anchor the session is not recognised as a coordinator
+  and binds only by cwd. The defect was in the hook, not the test: the write is one small local file that the hook
+  cannot bound anyway (only the hooks.json `timeout`, 10 s, covers a stalled open), so the gate protected nothing.
+  The gate is removed; the 1000 ms anchor budget now starts when the write begins and bounds only the prune loop
+  after it, which has nothing to lose from stopping early. New row G2-33 delays the end of stdin by 1300 ms (a slow
+  start, no seam in the hook) and was red before the fix (seen: "budget ran out" warning, no anchor). The prune bound
+  itself has no row (it would need a large sessions folder): UNCHECKED. A side effect: on a slow host the prune now
+  gets its full 1000 ms after the write (it used to stop at once), so a slow SessionStart with a large sessions folder
+  can take up to about 1 s longer, well inside the 10 s hook timeout. The guard's own 3000 ms budget is the next entry. No change
+  under `scripts/**`.
+
+- **Fix (Q24, F11b)**: the same flaw in the guard's 3000 ms budget, found by the sibling sweep after run 44367315654
+  (G10-15 timed out at 5972 ms on the runner). The guard's stopwatch also started on the first line, so a slow start
+  (stdin wait, JSON parse, `coord-common.ps1` load) could use the budget up before any ledger or git work, and the
+  guard allowed with "timed out ... this edit is NOT guarded" where it owed a block: a fail-open on a slow host. The
+  stopwatch is now restarted once the event is read and `coord-common.ps1` is loaded, so the 3000 ms bounds the guard's
+  own work; the part before it is bounded only by the 10 s `hooks.json` timeout, so the restart is capped (budget
+  `min(3000, 8500 - that time)`, at least 500 ms) and a slow start usually ends in the timeout warning inside the 10 s
+  (about 1.5 s are left for start-up, kill and output; a stall past about 9.5 s before the guard is still a silent kill
+  by the harness; the cap has no row: UNCHECKED). Where the time went in run 44367315654 is not known from the
+  log line (5972 ms is only when the budget was found spent); G10-16 simulates the stdin wait. New row G10-16 (stdin ends 3500 ms late, an
+  out-of-scope edit) was red before: allow with the timeout warning, no block. The other budgets (per-git
+  `min(2000, left - 500)`, the reader `-TimeoutMs` values, the 200 ms append skip) run on the same stopwatch and now
+  count only the guard's work. A host so slow that the work itself passes 3000 ms still gets the documented timeout
+  warning (fail-open by design, G9-6..G9-15).
+
 ## 0.2.4 - 2026-11-18
 
 - **Fix (Q19, F5/F6)**: the two reads Q16 left unchecked now refuse a link at the ledger path: `coord-handoff.ps1`'s

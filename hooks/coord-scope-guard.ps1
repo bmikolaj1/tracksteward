@@ -126,17 +126,27 @@
 # object on stdout, {"systemMessage":"coord-scope-guard: <w1>; <w2>"}; silent
 # allow = exit 0, no output. Plain stdout text is never used.
 #
-# BUDGET: one stopwatch, started on the first line; 3000 ms of processing (the
-# powershell.exe start-up before the script is not counted). Every git call goes
+# BUDGET: one stopwatch, restarted just before the guard runs (so the stdin wait,
+# the JSON parse and the coord-common load are not counted); 3000 ms of
+# processing (the powershell.exe start-up before the script is not counted
+# either). Only the hooks.json `timeout` bounds the part before the restart, so
+# the budget shrinks when that part is slow: min(3000, 8500 - its time), at least
+# 500 ms, which leaves about 1.5 s of the 10 s for the powershell.exe start-up, the
+# kill and the output. A stall of about 8 s or more before the guard leaves no room
+# for git (the 500 ms floor equals the git reserve) and the run ends with the
+# timeout warning; one past about 9.5 s still ends in a silent kill by the harness.
+# The "timed out after N ms" text counts from the restart. Every git call goes
 # through Invoke-CoordGitBounded with min(2000, time left - 500) ms and is not
 # started when that is not positive; each step checks the time left before it
 # starts. The index and Tracks reads get the time left (-TimeoutMs) and a
 # timeout there gives the deadline warning; the anchor file read waits at most
 # the time left; the anchor append is
-# skipped, with a warning, under 200 ms left. Anchor mode has its own 1 s budget
-# and exits silently for an unusable session id, with no index (a cwd that is not
+# skipped, with a warning, under 200 ms left. Anchor mode has its own 1 s budget,
+# started when the anchor write begins (not at the script's first line), that
+# bounds only the prune after the write: a slow start never costs the anchor. It
+# exits silently for an unusable session id, with no index (a cwd that is not
 # a drive-letter full path warns first; a cwd that GetFullPath rejects warns, for a
-# session with no anchor yet and time left in the budget, only with an index), for
+# session with no anchor yet, only with an index), for
 # a session that already has its anchor and a drive-letter full-path cwd (a failed refresh is ignored), and when it loses the create race to another run; any
 # other failure writes no anchor and warns (a prune failure after the anchor is
 # written is ignored).
@@ -1132,10 +1142,11 @@ function Invoke-CsgAnchorMode {
             try { [System.IO.File]::SetLastWriteTimeUtc($file, [DateTime]::UtcNow) } catch { }
             Exit-Csg 0
         }
-        if ($script:csgSw.ElapsedMilliseconds -ge $script:csgAnchorBudgetMs) {
-            Add-CsgWarning ('session anchor not written (the ' + $script:csgAnchorBudgetMs + ' ms budget ran out)')
-            Exit-CsgAllow
-        }
+        # No time gate before this write: the anchor is one small local file, and a
+        # slow host (stdin, JSON, the coord-common load all run on the script's
+        # stopwatch) must not cost the session its anchor. The anchor budget starts
+        # here and bounds only the prune loop below.
+        $anchorSw = [System.Diagnostics.Stopwatch]::StartNew()
         # Resolved only here, after the index check: a cwd that GetFullPath rejects
         # warns only on a day with an index.
         $full = ConvertTo-CsgFull $cwd
@@ -1157,7 +1168,7 @@ function Invoke-CsgAnchorMode {
         try {
             $cutoff = [DateTime]::UtcNow.AddDays(-7)
             foreach ($old in [System.IO.Directory]::EnumerateFiles($dir, '*.anchor')) {
-                if ($script:csgSw.ElapsedMilliseconds -ge $script:csgAnchorBudgetMs) { break }
+                if ($anchorSw.ElapsedMilliseconds -ge $script:csgAnchorBudgetMs) { break }
                 if ($old -eq $file) { continue }
                 try { if ([System.IO.File]::GetLastWriteTimeUtc($old) -lt $cutoff) { [System.IO.File]::Delete($old) } } catch { }
             }
@@ -1409,7 +1420,19 @@ try {
     $csgYday = $csgDate.AddDays(-1).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
     $csgYdayIdx = $null
     if ($csgMode -ceq 'SessionStart') { Invoke-CsgAnchorMode }
-    else { Invoke-CsgGuard }
+    else {
+        # The guard budget starts here, with the guard's own work: the stdin wait,
+        # the JSON parse and the coord-common load above ran on the first-line
+        # stopwatch, and on a slow host they must not use up the budget and turn a
+        # block into an allow with a timeout warning (F11b). The hooks.json timeout
+        # still bounds the whole run.
+        # The restart is capped so a slow start usually still ends in the loud timeout
+        # warning inside the 10 s (see BUDGET in the header for the limits).
+        $csgPreMs = $csgSw.ElapsedMilliseconds
+        $csgBudgetMs = [Math]::Max(500, [Math]::Min(3000, 8500 - $csgPreMs))
+        $csgSw.Restart()
+        Invoke-CsgGuard
+    }
 }
 catch {
     Add-CsgWarning ('internal error (' + $_.Exception.Message + '); ' + $csgNotGuarded)
