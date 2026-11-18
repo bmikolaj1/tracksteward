@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.4 - 2026-11-18
 
 - **Fix (Q16, F2)**: five scripts opened a ledger with no link check on its path (`prune-scan`, `coord-brief`,
   `merge-verify`, `repo-snapshot`, `slot-check`; found by reading, then confirmed by grep: none of them called a
