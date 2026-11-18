@@ -168,6 +168,8 @@ if ($lTop.Code -eq 0 -and $lTop.Out.Count) {
     }
 }
 try {
+    # This read opens the file before Read-CoordLedgerTracks does, so it needs the link check of its own.
+    if (Test-CoordLeafIsLink $Ledger) { throw "the ledger $Ledger is a symbolic link or another reparse point" }
     $ledgerText = [System.IO.File]::ReadAllText($Ledger, [System.Text.Encoding]::UTF8)
     $rows = @(Read-CoordLedgerTracks $Ledger)
 }

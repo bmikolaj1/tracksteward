@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Fix (Q16, F2)**: five scripts opened a ledger with no link check on its path (`prune-scan`, `coord-brief`,
+  `merge-verify`, `repo-snapshot`, `slot-check`; found by reading, then confirmed by grep: none of them called a
+  reparse-point test on the ledger, and `coord-brief` reached its trust check, which has one, only in `-Check`, after its
+  first read). `Test-CoordLeafIsLink` (the leaf's own attributes, read before the ledger is opened or read;
+  `Test-CoordLedgerTrusted` uses it too) now runs in `Read-CoordLedgerTracks`, `Read-CoordLedgerTracksBounded`,
+  `Read-CoordLedgerFile` and `coord-brief.ps1`'s own read. So the five refuse a symbolic-link ledger, and so do
+  `coord-status`, `coord-set`, `coord-log` and `coord-handoff`, whose first read goes through `Read-CoordLedgerFile`
+  (the panel found those four; two later reads of the file, `coord-handoff.ps1`'s re-read and the swap's compare, are not
+  checked and only follow a refused first read). The full trust check is NOT used: a scratch `-Ledger` stays allowed. Only
+  the leaf is checked, not the folders above it, and `Test-Path` still stats the link's target first. Any reparse point is
+  refused, not only symlinks: a ledger in a cloud-synced folder (OneDrive placeholders carry the attribute) would be too
+  (by reasoning, not tried here). Tests fake the attribute read (`Get-CoordLeafAttributes`); no row creates a real file
+  symlink here (UNCHECKED) and no script-level row runs a link ledger. Mutation: see the PR body.
 - **Fix (Q8, F47 follow-up)**: the three same-class gaps the entry below left open.
   - A denied LEDGER: `Test-CoordLedgerTrusted` asked `FileInfo.Exists` and said "no ledger file there" (measured: an
     `icacls` deny on the file and its folder hides it). The open decides now (`Get-CoordFileState`): a ledger that cannot
