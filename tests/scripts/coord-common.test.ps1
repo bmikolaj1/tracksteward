@@ -1088,6 +1088,13 @@ try { New-Item -ItemType SymbolicLink -Path $t9.Ledger -Target $real9 -ErrorActi
 if ($linked) {
     $tr = Test-CoordLedgerTrusted -Path $t9.Ledger
     Assert-Coord 'C18 the ledger a symbolic link: not trusted' (-not $tr.Ok) "ok=$($tr.Ok)"
+    # Q8 review (three lenses): the link is rejected BEFORE anything opens it.
+    $global:stateCalls = 0
+    function Get-CoordFileState([string]$Path) { $global:stateCalls++; return 'present' }
+    $tr = Test-CoordLedgerTrusted -Path $t9.Ledger
+    Remove-Item function:Get-CoordFileState
+    . $ScriptPath
+    Assert-Coord 'C18 ... the open (Get-CoordFileState) is never reached for a symbolic link, and the reason is the reparse point' (-not $tr.Ok -and $global:stateCalls -eq 0 -and ([string]$tr.Error).Contains('reparse point')) "calls=$($global:stateCalls) error=$($tr.Error)"
 }
 else { Write-CoordUnchecked 'C18 symlinked ledger' 'could not create a file symlink (needs developer mode or elevation)' }
 

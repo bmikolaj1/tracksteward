@@ -686,7 +686,9 @@ function Register-CoordLedger {
 # exits 0 and lists none of those three paths (any case) and (on Windows) no
 # path with an 8.3-style component (`~` and a digit). Any git failure is "not
 # trusted" (fails closed). Paths compare as Get-CoordPathComparison says.
-# Returns { Ok; Error }.
+# The ledger's attributes are read before anything opens it, so a link is never
+# followed; a ledger that cannot be opened (denied, held with no sharing) is not
+# trusted, with Unreadable = $true. Returns { Ok; Error } and, for that case only, Unreadable.
 function Test-CoordLedgerTrusted {
     param([string]$Path, [scriptblock]$Git = $null)
     try { $full = [System.IO.Path]::GetFullPath($Path) }
@@ -714,6 +716,11 @@ function Test-CoordLedgerTrusted {
     # The open decides, not FileInfo.Exists: that can be false for a ledger this user is
     # denied, which then read as "no ledger file there". Unreadable is set so a caller can
     # tell "cannot look" from "not trusted".
+    # The link's own attributes first: a reparse point is rejected before anything opens it
+    # (the open would follow it, to a network path perhaps). A failed read of them falls through.
+    $attrs = $null
+    try { $attrs = [System.IO.File]::GetAttributes($full) } catch { }
+    if ($null -ne $attrs -and ($attrs -band $reparse)) { return [pscustomobject]@{ Ok = $false; Error = 'the ledger is a symbolic link or another reparse point' } }
     $state = Get-CoordFileState $full
     if ($state -eq 'missing' -or ($state -eq 'unreadable' -and [System.IO.Directory]::Exists($full))) {
         return [pscustomobject]@{ Ok = $false; Error = 'no ledger file there (missing, or a folder)' }

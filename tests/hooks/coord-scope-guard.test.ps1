@@ -1727,7 +1727,7 @@ Invoke-Group 'G13 denied ledger and anchor' {
     Set-FileDeny $led $true
     try {
         if ([System.IO.File]::Exists($led)) { Skip 'G13 a denied ledger' 'icacls deny did not hide the file from File.Exists on this host' }
-        else { Test-Warn 'G13-1 the ledger is denied: the edit is allowed WITH a warning that the ledger was skipped because it cannot be read' (Invoke-Edit -Cwd $wtA1 -Path $outPath) @('ledger ', 'skipped', 'cannot read') }
+        else { Test-Warn 'G13-1 the ledger is denied: the edit is allowed WITH a warning that the ledger was skipped because it cannot be read' (Invoke-Edit -Cwd $wtA1 -Path $outPath) @('ledger ', 'skipped', 'cannot read the ledger ') }
     }
     finally { Set-FileDeny $led $false }
     Test-Block 'G13-2 control: the deny removed, the same ledger blocks an out-of-scope edit' (Invoke-Edit -Cwd $wtA1 -Path $outPath) @($stdScopeTail)
