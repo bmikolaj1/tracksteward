@@ -766,6 +766,15 @@ try {
     }
 }
 finally { Set-IdxDeny $pDenied $false }
+# Q8: Register-CoordLedger decides "is there an index" by the open, not File.Exists. An
+# index path that is a folder is not a readable index: File.Exists says false, which read as
+# "empty" and went on to an append that failed with "cannot update". It refuses at the read.
+$null = New-CoordScratchIndex $root
+$pFolder = Get-CoordIndexPath -Date $d16
+[void][IO.Directory]::CreateDirectory($pFolder)
+$r = Register-CoordLedger -Ledger $ledA -Date $d16
+Assert-Coord 'C16 Register-CoordLedger on an index that cannot be read (a folder): not Ok, not Added, the error says it cannot read the index' (-not $r.Ok -and -not $r.Added -and ([string]$r.Error).Contains('cannot read the ledger index')) "ok=$($r.Ok) added=$($r.Added) error=$($r.Error)"
+Remove-Item -LiteralPath $pFolder -Recurse -Force
 $ix = Get-CoordIndexedLedgers -Path $pDenied
 Assert-Coord 'C16 the deny was removed: the index reads again, and Register did not touch it' ($ix.Ok -and (Join-IdxEntries $ix) -ceq "$ledA|$e2" -and (Get-IdxText $pDenied) -ceq "$ledA`n$e2`n") "ok=$($ix.Ok) text=$(Get-IdxText $pDenied)"
 
@@ -969,6 +978,29 @@ Remove-Item -LiteralPath $t2.Ledger -Force
 $tr = Test-CoordLedgerTrusted -Path $t2.Ledger
 Assert-Coord 'C18 a ledger that does not exist: not trusted' (-not $tr.Ok -and $tr.Error) "ok=$($tr.Ok) error=$($tr.Error)"
 
+# Q8 (F47 follow-up): a ledger this user is denied is not "no ledger file there"; the
+# deny that hides it from FileInfo.Exists is on the file and on its folder (see C16).
+$t2d = New-TrustRepo 'c18-denied'
+$t2dDir = Split-Path -Parent $t2d.Ledger
+function Set-LedgerDeny([string]$File, [bool]$On) {
+    $dir = Split-Path -Parent $File
+    if ($On) { $null = & icacls $File /deny "${meQ}:(RA,RC)" 2>&1; $null = & icacls $dir /deny "${meQ}:(RD)" 2>&1 }
+    else { $null = & icacls $dir /remove:d $meQ 2>&1; $null = & icacls $File /remove:d $meQ 2>&1 }
+}
+Set-LedgerDeny $t2d.Ledger $true
+try {
+    if ([System.IO.File]::Exists($t2d.Ledger)) { Write-CoordUnchecked 'C18 an access-denied ledger' 'icacls deny did not hide the file from File.Exists on this host' }
+    else {
+        $tr = Test-CoordLedgerTrusted -Path $t2d.Ledger
+        Assert-Coord 'C18 a denied ledger: not trusted, and the reason says it cannot be read, not that no file is there' (-not $tr.Ok -and [bool]$tr.Unreadable -and ([string]$tr.Error).Contains('cannot read') -and -not ([string]$tr.Error).Contains('no ledger file')) "ok=$($tr.Ok) unreadable=$($tr.Unreadable) error=$($tr.Error)"
+    }
+}
+finally { Set-LedgerDeny $t2d.Ledger $false }
+$tr = Test-CoordLedgerTrusted -Path $t2d.Ledger
+Assert-Coord 'C18 the deny removed: the same ledger is trusted again (control)' ($tr.Ok -and -not $tr.Unreadable) "ok=$($tr.Ok) error=$($tr.Error)"
+$tr = Test-CoordLedgerTrusted -Path $t2.Ledger
+Assert-Coord 'C18 a missing ledger is not Unreadable (the not-found message stays)' (-not $tr.Ok -and -not [bool]$tr.Unreadable -and ([string]$tr.Error).Contains('no ledger file')) "ok=$($tr.Ok) unreadable=$($tr.Unreadable) error=$($tr.Error)"
+
 $t3 = New-TrustRepo 'c18-tracked'
 Invoke-HookTestGit $t3.Repo @('-c', 'core.autocrlf=false', 'add', '-A')
 Invoke-HookTestGit $t3.Repo @('-c', 'core.autocrlf=false', 'commit', '--quiet', '-m', 'ship a ledger')
@@ -1056,6 +1088,12 @@ try { New-Item -ItemType SymbolicLink -Path $t9.Ledger -Target $real9 -ErrorActi
 if ($linked) {
     $tr = Test-CoordLedgerTrusted -Path $t9.Ledger
     Assert-Coord 'C18 the ledger a symbolic link: not trusted' (-not $tr.Ok) "ok=$($tr.Ok)"
+    # Q8 review (three lenses): the link is rejected BEFORE anything opens it.
+    $global:stateCalls = 0
+    function Get-CoordFileState([string]$Path) { $global:stateCalls++; return 'present' }
+    try { $tr = Test-CoordLedgerTrusted -Path $t9.Ledger }
+    finally { Remove-Item function:Get-CoordFileState; . $CommonPath }
+    Assert-Coord 'C18 ... the open (Get-CoordFileState) is never reached for a symbolic link, and the reason is the reparse point' (-not $tr.Ok -and $global:stateCalls -eq 0 -and ([string]$tr.Error).Contains('reparse point')) "calls=$($global:stateCalls) error=$($tr.Error)"
 }
 else { Write-CoordUnchecked 'C18 symlinked ledger' 'could not create a file symlink (needs developer mode or elevation)' }
 

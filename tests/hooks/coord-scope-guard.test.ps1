@@ -1707,6 +1707,46 @@ Invoke-Group 'G12 denied index' {
 }
 
 # ===========================================================================
+# G13 a ledger or an anchor file this user is denied is said, not skipped silently (Q8)
+# ===========================================================================
+# Same class as G12. A denied ledger failed the trust check ("no ledger file there") and
+# was skipped with no warning; a denied anchor file was "absent" by File.Exists and the
+# session bound by its cwd alone. The deny that hides a file from File.Exists is on the
+# file (RA,RC) and on its folder (RD); restore the folder's deny first.
+Invoke-Group 'G13 denied ledger and anchor' {
+    $meQ = "$env:USERDOMAIN\$env:USERNAME"
+    $outPath = Join-Path $wtA1 'other\x.txt'
+    function Set-FileDeny([string]$File, [bool]$On) {
+        $dir = Split-Path -Parent $File
+        if ($On) { $null = & icacls $File /deny "${meQ}:(RA,RC)" 2>&1; $null = & icacls $dir /deny "${meQ}:(RD)" 2>&1 }
+        else { $null = & icacls $dir /remove:d $meQ 2>&1; $null = & icacls $File /remove:d $meQ 2>&1 }
+    }
+
+    # a denied ledger
+    $led = Use-Ledger -Rows @((RowA1))
+    Set-FileDeny $led $true
+    try {
+        if ([System.IO.File]::Exists($led)) { Skip 'G13 a denied ledger' 'icacls deny did not hide the file from File.Exists on this host' }
+        else { Test-Warn 'G13-1 the ledger is denied: the edit is allowed WITH a warning that the ledger was skipped because it cannot be read' (Invoke-Edit -Cwd $wtA1 -Path $outPath) @('ledger ', 'skipped', 'cannot read the ledger ') }
+    }
+    finally { Set-FileDeny $led $false }
+    Test-Block 'G13-2 control: the deny removed, the same ledger blocks an out-of-scope edit' (Invoke-Edit -Cwd $wtA1 -Path $outPath) @($stdScopeTail)
+
+    # a denied anchor file (cwd at A main binds nothing, so the anchor is the only binding)
+    $null = Use-Ledger -Rows @((RowA1))
+    $af = Write-AnchorFile 'sa-g13' @($wtA1)
+    Set-FileDeny $af $true
+    try {
+        if ([System.IO.File]::Exists($af)) { Skip 'G13 a denied anchor' 'icacls deny did not hide the file from File.Exists on this host' }
+        else { Test-Warn 'G13-3 the anchor file is denied: a warning says it could not be read, not a silent allow' (Invoke-Edit -Cwd $repoA -Path $outPath -Session 'sa-g13' -ProjectDir $repoA) @('session anchor', 'could not be read') }
+    }
+    finally { Set-FileDeny $af $false }
+    Test-Block 'G13-4 control: the deny removed, the anchor binds A1 and the edit is blocked' (Invoke-Edit -Cwd $repoA -Path $outPath -Session 'sa-g13' -ProjectDir $repoA) @($stdScopeTail)
+    Remove-Item -LiteralPath $af -Force
+    Test-Allow 'G13-5 an anchor file that does not exist: no warning, nothing bound by it' (Invoke-Edit -Cwd $repoA -Path $outPath -Session 'sa-g13' -ProjectDir $repoA)
+}
+
+# ===========================================================================
 # Z the real index folder shows no leak of this run
 # ===========================================================================
 Invoke-Group 'Z real index' {
