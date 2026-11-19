@@ -1,0 +1,60 @@
+#!/bin/sh
+# pre-push: the private-name gate. For every ref a push sends, runs this repo's
+# scrub suite (tests/scrub.test.ps1) with -History over the commits the remote
+# does not have yet, so every commit message and every file version those commits
+# add or change is checked against the private denylist (SG6) before anything
+# leaves this machine. Any failing row of that run refuses the push, and so does
+# a missing denylist: a -History run fails without one (set
+# TRACKSTEWARD_SCRUB_DENYLIST to the private denylist file).
+#
+# On only where `git config core.hooksPath .githooks` is set. Windows only, as
+# the scripts are (it starts powershell.exe). `git push --no-verify` skips it,
+# as it skips every pre-push hook.
+#
+# The range per ref:
+#   a deletion                    nothing to scan
+#   the remote has the ref        <remote sha>..<local sha> (a force-push too);
+#                                 a remote sha this clone does not have refuses
+#                                 the push (fetch first)
+#   a new ref                     <remote>/HEAD..<local sha>; with no
+#                                 <remote>/HEAD (a push to a URL) the local
+#                                 sha's whole history
+#   no commit in that range       nothing new to scan (a tag on a pushed commit)
+remote="$1"
+hookdir=$(cd "$(dirname "$0")" && { pwd -W 2>/dev/null || pwd; })
+suite="$hookdir/../tests/scrub.test.ps1"
+status=0
+while read -r lref lsha rref rsha; do
+    case "$lsha" in
+        *[!0]*) ;;
+        *) echo "pre-push: $rref: a deletion, nothing to scan"; continue ;;
+    esac
+    case "$rsha" in
+        *[!0]*) range="$rsha..$lsha" ;;
+        *)
+            if git rev-parse -q --verify "refs/remotes/$remote/HEAD" >/dev/null 2>&1; then
+                range="refs/remotes/$remote/HEAD..$lsha"
+            else
+                range="$lsha"
+            fi
+            ;;
+    esac
+    if ! n=$(git rev-list --count "$range" 2>/dev/null); then
+        echo "pre-push: refused $rref: git cannot read the range $range (fetch first)" >&2
+        status=1
+        continue
+    fi
+    if [ "$n" = 0 ]; then
+        echo "pre-push: $rref: nothing new to scan"
+        continue
+    fi
+    echo "pre-push: scanning $n commit(s) for $rref with the scrub suite (-History $range)"
+    out=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$suite" -History "$range" </dev/null 2>&1)
+    code=$?
+    if [ "$code" -ne 0 ]; then
+        printf '%s\n' "$out" | grep -E '^  FAIL: |^    ' >&2
+        echo "pre-push: refused $rref: the scrub suite failed (exit $code) over $range" >&2
+        status=1
+    fi
+done
+exit $status

@@ -1,6 +1,6 @@
 # tracksteward 0.2.2 plan (2026-11-03)
 
-Baseline: main 806ecb8 (0.2.1). Scope: the README "What is not done" / CHANGELOG 0.2.1 "Known and left"
+Baseline: main 9283e47 (0.2.1; 806ecb8 before the 2026-11-19 history rewrite). Scope: the README "What is not done" / CHANGELOG 0.2.1 "Known and left"
 items that sit in `scripts/coord-{status,set,log,common}.ps1`. No tag, no release. Every slice is red
 first (the test row seen failing), then the fix.
 

@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased
+## 0.2.5 - 2026-11-19
+
+- **History rewritten (2026-11-19)**: four commits of 2026-10-30 to 2026-11-03 held private wording in three files
+  (two plan docs and a test fixture), which a later commit had already replaced at the tip. Those four commits now hold
+  the replaced wording, and nothing else changed in any commit: same messages, authors and dates, and the tip tree is
+  byte-identical. Every commit from `9283e47` (was `806ecb8`, "tracksteward 0.2.1 (#11)") on has a new sha, the 20
+  GitHub-signed ones among them lose their signature, and the tags `v0.2.3` and `v0.2.4` were moved to the new commits
+  (same tag messages). A clone from before the rewrite needs `git fetch --force --tags` and a reset or rebase of local
+  branches onto the new `main`. The full-history scrub (SG6 over all of `main`, private denylist set) is green on the
+  new history: 136 passed, 0 failed. Pull-request refs on GitHub (`refs/pull/*/head`) are read-only and still point at
+  the old commits.
+
+- **Scrub: an absent denylist is UNCHECKED for others, FAIL for the maintainer and the release gate.** The private
+  denylist is not in this repo, so a clone without it used to fail `tests\scrub.test.ps1` outside GitHub Actions (seen on
+  a fresh clone: 12 of 13 suites passed). Now an absent denylist (variable unset, file missing or empty) is a FAIL when
+  `TRACKSTEWARD_SCRUB_DENYLIST` is set to anything (a broken setup) and in every `-History` run (the release gate,
+  `TRACKSTEWARD_SCRUB_HISTORY` included, and the new pre-push gate); otherwise the denylist rows print a loud
+  `UNCHECKED: ... NOT CHECKED: denylist absent ...` line, not a pass, and `-Strict` still makes that a FAIL. CI is
+  unchanged in effect (it sets neither the variable nor a range). New SG2 rows pin the three cases; the unset-variable
+  row was red before. Not pinned by a row: the text of the three messages and which one prints (read).
+
+- **Pre-push gate**: `.githooks/pre-push` runs `tests\scrub.test.ps1 -History <range>` for every ref a push sends, over
+  the commits the remote does not have (`<remote sha>..<local sha>`; a new ref: `<remote>/HEAD..<local sha>`, or the
+  whole history with no `<remote>/HEAD`), so a private name in a commit message or in any file version those commits
+  add or change refuses the push before it leaves the machine. Any failing row of that run refuses it, and so does a
+  missing denylist. A deletion and a ref with no new commit (a tag on a pushed commit) are not scanned. On only with
+  `git config core.hooksPath .githooks`; `--no-verify` skips it; Windows only (it starts `powershell.exe`); about 20 s
+  per scanned ref here, and no timeout of its own. New suite `tests/hooks/prepush.test.ps1` (P0-P7, real pushes into a
+  bare repo from a copy of the repo with a throwaway denylist): red before the hook existed. Mutations seen red: the
+  hook ignoring a failed scan (P1, P2, P4, P7), and a `-History` run no longer requiring the denylist (SG2, P4). Not
+  covered by a row: a push with no `<remote>/HEAD` (reasoned). `.gitattributes` checks `.githooks/*` out with LF.
 
 - **Fix (Q24, F9)**: the SessionStart anchor is no longer dropped when the host is slow. `coord-scope-guard.ps1` refused
   to write the anchor when its stopwatch, which starts on the script's first line and so also counts the stdin wait,
