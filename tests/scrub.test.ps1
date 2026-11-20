@@ -225,7 +225,8 @@ function Read-ScrubIdentAllow([string]$Path) {
 
 # Hits in $Lines of the file named $Path (its extension picks the .md rule).
 # Returns objects { Line; Rule; Text } where Text is the matched text cut to 80
-# characters, or '' for a denylist hit. -SkipPatterns leaves the pattern rules
+# characters, or '' for a denylist hit and for a pattern hit whose matched text
+# holds a denylist entry. -SkipPatterns leaves the pattern rules
 # out (the denylist still applies). The pattern rules run line by line; the
 # denylist runs over the whole text (Get-ScrubDenyText), so a multi-word entry
 # wrapped across lines hits (on the line it starts on), at most once per line
@@ -250,6 +251,11 @@ function Find-ScrubHits {
                     if ($rule.Name -like 'user home path*' -and $m.Groups[1].Value -ceq 'home' -and $m.Groups[2].Value -ceq 'me') { continue }
                     $txt = $m.Value
                     if ($txt.Length -gt 80) { $txt = $txt.Substring(0, 80) }
+                    # A matched text that holds a denylist entry (a /home/<name> path) is
+                    # never printed: the hit is reported without its text.
+                    for ($d = 0; $d -lt $deny.Count; $d++) {
+                        if ($denyPlain[$d].IsMatch($m.Value.Normalize([System.Text.NormalizationForm]::FormC)) -or $deny[$d].IsMatch((Get-ScrubDenyText $m.Value))) { $txt = ''; break }
+                    }
                     $hits.Add([pscustomobject]@{ Line = $i + 1; Rule = $rule.Name; Text = $txt })
                 }
             }
@@ -1588,6 +1594,14 @@ $shyTip = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
 Invoke-HookTestGit $hRepo @('checkout', '--quiet', 'main')
 $r = Invoke-ScrubHistory -Repo $hRepo -Range "$shyTip ^$rawParent" -SelfRel $selfName
 Assert-Coord 'SG6 a path that differs from the self file only by a soft hyphen is not the self file: its pattern rules run and hit' (@($r.Hits | Where-Object { $_.Rule -ceq 'internal follow-up number' }).Count -eq 1) "ok=$($r.DiscoveryOk) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# Codex round 2: the work-tree scan matches the self file ordinally too, and a
+# pattern-rule hit whose matched text holds a denylist entry prints no text.
+$shyWt = New-ScrubTestRepo 'selfshy-wt' @{ $shyRel = ('see ' + 'FU' + '-12' + "`n") }
+$r = Invoke-ScrubScan -Repo $shyWt -SelfRel $selfName
+Assert-Coord 'SG4 a work-tree path that differs from the self file only by a soft hyphen keeps its pattern rules' (@($r.Hits | Where-Object { $_.Rule -ceq 'internal follow-up number' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$ph = @(Find-ScrubHits -Path 'n.txt' -Lines @('see /home/zzbeta/x') -Denylist @('zzbeta'))
+$phText = (($ph | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+Assert-Coord 'SG2 a pattern hit whose matched text holds a denylist entry is reported without its text' (@($ph | Where-Object { $_.Rule -like 'user home path*' }).Count -eq 1 -and $phText -notmatch 'zzbeta') $phText.Replace('zzbeta', '<entry>')
 # %B is asked for in UTF-8: i18n.logOutputEncoding does not change what is read.
 Invoke-HookTestGit $hRepo @('config', 'i18n.logOutputEncoding', 'ISO-8859-2')
 try { $r = Invoke-ScrubHistory -Repo $hRepo -Range ((New-ScrubRawObject $hRepo 'commit' ([byte[]]((Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "encoding ISO-8859-2`n`nmsg zzq")) + @(0xE8) + (Get-ScrubAscii " log`n")))) + " ^$rawParent") -Denylist @($czech) }

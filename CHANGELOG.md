@@ -36,13 +36,14 @@
   commit header as text, a `gpgsig` signature header included, but for the sha a `tree` or `parent` line starts with
   (only that sha is skipped: text after it and a continuation line are read); a `mergetag` header's tagger line as an
   identity and the rest of it as text, its `type` and `gpgsig` lines included, but for the sha its `object` line
-  starts with; annotated tags in the range (every header, its key included, `type` and a `gpgsig` one too, but for
+  starts with; annotated tags in the range (every header, an extra header's key included, `type` and a `gpgsig` one too, but for
   the sha the `object` line starts with; the tagger line and the message, a signed tag's PGP block in it included; a tag chain is
   followed by each tag's first `object` header, as git follows it, and a tag that does not end on a commit fails
   discovery); and, with `-PushRefs`, the ref names a push
   writes (parted at ASCII spaces only, so a no-break space inside a ref name stays inside it). A hit in a header is
   named by its header block (`commit headers of <sha>`, `tag <sha> headers`), never by a key the object chose (only
-  fixed words such as `author of commit`), which can hold the entry. Hits that share a place (label, line, rule and text) are merged, so a hit two readings find is one hit;
+  fixed words such as `author of commit`), which can hold the entry; a pattern-rule hit whose matched text holds a
+  denylist entry (a `/home/<name>` path) is reported without its text. Hits that share a place (label, line, rule and text) are merged, so a hit two readings find is one hit;
   header hits are numbered by line within their header's text, and a re-encoded message's hex tokens may be counted
   twice for the commit-sha rule. When a
   commit's or tag's header block is not valid UTF-8 it is read as Windows-1252 too, as a whole, so a valid non-ASCII
@@ -95,7 +96,8 @@
   `gpgsig` line, a commit `gpgsig` header, a tag `gpgsig` header, `%B` under `i18n.logOutputEncoding` and a tag with
   a second `object` header (the walk followed the last one, so the tag git follows was never read); after the Codex
   review and its fix-diff panel, the SG6 rows for a path that differs from the self file by a soft hyphen (its
-  pattern rules were skipped), an extra tag header's key (not read, and printed in the hit label), an identity that
+  pattern rules were skipped), an extra tag header's key (not read, and printed in the hit label), a pattern-rule hit printing a denylist entry in
+  its matched text (Codex round 2), an identity that
   differs from an allowed one by a soft hyphen (allowed by the culture-aware `-ccontains`) and a pushed ref name with
   a no-break space (parted there). Mutations
   seen red: the hook ignoring a failed scan (P1, P2, P4, P7), a `-History` run no longer requiring the
