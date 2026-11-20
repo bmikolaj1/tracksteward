@@ -5,8 +5,9 @@
 # account's Actions minutes have a hard monthly cap.
 #
 # The scrub suite's private denylist is not in this repo and not on the runner.
-# The suite sees GITHUB_ACTIONS=true and skips its denylist rows with an
-# UNCHECKED "denylist absent" line; outside CI an absent denylist fails it.
+# With TRACKSTEWARD_SCRUB_DENYLIST unset and no -History range the suite skips
+# its denylist rows with an UNCHECKED "NOT CHECKED: denylist absent" line; a set
+# variable or a -History run fails without the denylist.
 # TRACKSTEWARD_SKIP_TIMING=1 skips the guard suite's G9 timing rows (SKIP lines,
 # not passed); a local run without it keeps them. No secret is set here.
 name: test

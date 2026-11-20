@@ -4,7 +4,9 @@
 # NUL-separated so no name is lost to git's quoting). With -History <range> (or
 # $env:TRACKSTEWARD_SCRUB_HISTORY, which tests\run.ps1's child processes inherit)
 # it also scans the history of a range of commits (group SG6, the S7 release gate:
-# origin/main..HEAD); without one the SG6 history row is reported UNCHECKED. The suite fails on:
+# origin/main..HEAD, run right after a git fetch: a stale origin/main, left behind
+# by a remote rewound since, would hide the commits the remote no longer has);
+# without one the SG6 history row is reported UNCHECKED. The suite fails on:
 #   - an absolute user or project path: a drive letter, then \Users\ or
 #     \Projects\ (either slash, also JSON-escaped as C:\\Users\\), or the
 #     Git-Bash / WSL spellings /c/Users/, /c/Projects/, /mnt/c/Users/ (any
@@ -15,13 +17,22 @@
 #   - an internal follow-up number (FU- and digits)
 #   - every whole-word, case-insensitive entry of the denylist file named by
 #     $env:TRACKSTEWARD_SCRUB_DENYLIST (one entry per line, # comments and blank
-#     lines ignored). The denylist is private and lives outside this repo.
+#     lines ignored), matched over two readings of the whole text, their hits
+#     joined: NFC, and NFKC with U+200B-U+200D, U+2060, U+FEFF and the soft
+#     hyphen U+00AD removed (folding alone could glue an entry to the next
+#     word, so it only adds hits): the words of a
+#     multi-word entry may be parted by any run of white space (a line break
+#     too), comment markers (# > * / ;) and the joiners - . _ , (not by nothing:
+#     CamelCase is not matched). The denylist is private and lives outside this
+#     repo.
 #     If the variable is unset, the file is missing, or the file holds no
-#     entry, the denylist is absent: in a GitHub Actions run ($env:GITHUB_ACTIONS
-#     is exactly 'true'; the runner has no copy of the private file) the
-#     denylist rows are skipped with an UNCHECKED "denylist absent" line (not
-#     passed); in every other run they FAIL, so a local run never passes
-#     without the denylist.
+#     entry, the denylist is absent. The denylist rows then FAIL when the
+#     variable is set (to anything: a broken setup, not a skip) and in a
+#     -History run (the release gate and the .githooks/pre-push gate never pass
+#     unscanned); otherwise (a clone without the private file, a GitHub Actions
+#     run, a shell without the variable) they are skipped with a loud UNCHECKED
+#     "NOT CHECKED: denylist absent" line (not passed). -Strict makes that a
+#     FAIL as well.
 #   - a token of 7 to 40 hex digits that is a commit of any repo listed in
 #     $env:TRACKSTEWARD_SCRUB_REPOS (paths separated by ';'), checked with
 #     git -C <repo> cat-file -e <hex>^{commit}. The repo paths are never
@@ -42,7 +53,10 @@
 # UTF-32 BOMs, FF FE 00 00 and 00 00 FE FF, are tested first: FF FE 00 00 also
 # starts with the UTF-16 LE BOM, so it is UTF-32 only when it decodes cleanly
 # as whole 4-byte units). A file with NUL bytes and no BOM cannot be
-# scanned: it is reported UNCHECKED by name. For a tracked file with unstaged
+# scanned: it is reported UNCHECKED by name (a FAIL in a -History run's history
+# rows). Bytes that are not valid UTF-8 are read as Windows-1252 as well. File
+# names are scanned as text, each hit named by the entry's position (by its
+# blob in the history), never by the name. For a tracked file with unstaged
 # changes (git diff --name-only -z) the version in the index
 # (git cat-file blob :<path>) is scanned too, because that is what a commit
 # would ship.
@@ -64,8 +78,8 @@
 #      stays quiet where it should (the rule itself can fail); hex tokens
 # SG2  the denylist reader and matcher: comments and blanks skipped, whole word,
 #      case-insensitive; an unset variable, a missing file and an empty file
-#      have no denylist; an absent denylist is skipped only when GITHUB_ACTIONS
-#      is 'true', and fails otherwise
+#      have no denylist; an absent denylist fails when the variable is set or in
+#      a history run, and is skipped (UNCHECKED) otherwise
 # SG3  strict mode and the repo list (an unset variable gives an empty array)
 # SG4  the scanner on synthetic repos: discovery failures, git-quoted names,
 #      untracked and ignored files, UTF-16 and UTF-32, NUL files, the index
@@ -73,19 +87,39 @@
 #      symlinks), an unreadable file, the accounting, the skipped self file, the
 #      commit-sha rule with good, mistyped, blank and unset repo entries
 # SG5  the shipped files: the scan covers them, one row per rule: no hit
-# SG6  the history scan (a UNCHECKED line from it, for a blob it could not read, is
-#      not a pass: the release gate allows none) on synthetic repos (a blob added and removed, modified, a type
-#      change, a merge's message and a blob only a merge brings in, bad, empty and
-#      dash-leading ranges), then on the real range when one is given. Not read: author
-#      and committer lines, tags, notes, and file names as such
+# SG6  the history scan on synthetic repos (a blob added and removed, modified, a
+#      type change, a merge's message and a blob only a merge brings in, bad, empty
+#      and dash-leading ranges, a range of several revisions, -AllowEmpty, file
+#      names, author and committer lines with and without an allowed identity,
+#      annotated tags, tags on a blob, pushed ref names), then on the real range
+#      when one is given. In that real run a blob it could not read (NUL bytes
+#      and no BOM, or git failed) is a FAIL: the release gate and the pre-push
+#      gate allow none. Allowed identities: the file named by
+#      $env:TRACKSTEWARD_SCRUB_ALLOW_IDENT, one exact "Name <email>" per line; an
+#      author, committer or tagger line that is one of them is let through, every
+#      other one is scanned (unset: all are; set to a missing or empty file: a
+#      FAIL). Commits and tags are read as stored (git cat-file; every scan git
+#      call passes --no-replace-objects): the message as a file is read, and
+#      git's re-encoded reading (%B) too when an encoding header names another
+#      encoding than UTF-8 (asked for in UTF-8); every header is read, a
+#      signature (gpgsig) and a tag's type included, but for the sha a tree,
+#      parent or object line starts with; a mergetag's tagger is an identity.
+#      Not read: notes, grafts
+#      (.git/info/grafts), a lightweight tag's name unless it is pushed
+#      (-PushRefs), and file names in bytes that are not valid UTF-8
 #
 # This file's pattern rules are skipped by the scan, so the rule patterns and the
 # examples below may appear in it. Examples are still built from pieces where that
 # is easy, and no private word is written in it.
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scrub.test.ps1 [-Strict] [-History <range>]
+#       [-PushRefs "<ref> <ref>"] [-AllowEmptyRange]
+# <range> is one or more revisions parted by spaces ("a..b", or "<tip> ^<sha>").
+# -PushRefs names the ref names a push writes, parted by ASCII spaces (scanned as
+# text); -AllowEmptyRange
+# lets a range with no commit pass discovery (the pre-push gate passes both).
 # Exit: 0 = all passed, 1 = a case failed.
-param([switch]$Strict, [string]$History = '')
+param([switch]$Strict, [string]$History = '', [string]$PushRefs = '', [switch]$AllowEmptyRange)
 if (-not $History) { $History = [string]$env:TRACKSTEWARD_SCRUB_HISTORY }
 
 $testsDir = $PSScriptRoot
@@ -134,35 +168,78 @@ function Read-ScrubDenylist([string]$Path) {
     if ($entries.Count -eq 0) { return $null }
     return , ([string[]]$entries)
 }
-# What an absent denylist counts as: SKIP (reported UNCHECKED) in a GitHub
-# Actions run, where the private file cannot be, and FAIL everywhere else, so
-# a local run never passes without it.
-function Get-ScrubDenylistAbsentVerdict([string]$GithubActions) {
-    if ($GithubActions -ceq 'true') { return 'SKIP' }
-    return 'FAIL'
+# What an absent denylist counts as. FAIL when TRACKSTEWARD_SCRUB_DENYLIST is
+# set (to anything, a space included: whoever set it has a denylist, so a
+# missing or empty file is a broken setup, not a skip) and in a history run
+# (-History, the release gate, which must never pass unscanned). Otherwise SKIP,
+# reported as a loud UNCHECKED line (a clone without the private file, a GitHub
+# Actions run); -Strict turns that into a FAIL too.
+function Get-ScrubDenylistAbsentVerdict([string]$DenylistVar, [bool]$HistoryRun) {
+    if ($DenylistVar -or $HistoryRun) { return 'FAIL' }
+    return 'SKIP'
 }
 function Write-ScrubDenylistAbsent([string]$Label) {
-    $reason = 'TRACKSTEWARD_SCRUB_DENYLIST is unset, the file is missing, or it holds no entry'
-    if ((Get-ScrubDenylistAbsentVerdict ([string]$env:GITHUB_ACTIONS)) -ceq 'SKIP') {
-        Write-ScrubUnchecked "$Label skipped: denylist absent (GitHub Actions run: the private denylist is not on the runner)" $reason
+    $var = [string]$env:TRACKSTEWARD_SCRUB_DENYLIST
+    if ((Get-ScrubDenylistAbsentVerdict $var ([bool]$History)) -ceq 'SKIP') {
+        $where = if ([string]$env:GITHUB_ACTIONS -ceq 'true') { 'GitHub Actions run: the private denylist is not on the runner' } else { 'TRACKSTEWARD_SCRUB_DENYLIST is unset' }
+        Write-ScrubUnchecked "$Label NOT CHECKED: denylist absent ($where); the private-name scrub did not run, so this run does not show that no private name ships" 'set TRACKSTEWARD_SCRUB_DENYLIST to the private denylist file to run it; a run with the variable set, and every -History run, fails without it'
+    }
+    elseif ($var) {
+        Assert-Coord "${Label}: denylist absent (TRACKSTEWARD_SCRUB_DENYLIST is set, but the file is missing or holds no entry)" $false 'fix the path or the file'
     }
     else {
-        Assert-Coord "${Label}: denylist absent (a run outside CI needs it: set TRACKSTEWARD_SCRUB_DENYLIST to the private denylist file)" $false $reason
+        Assert-Coord "${Label}: denylist absent (a -History run is the release gate and needs it: set TRACKSTEWARD_SCRUB_DENYLIST to the private denylist file)" $false 'TRACKSTEWARD_SCRUB_DENYLIST is unset'
     }
 }
-function Get-ScrubDenyRegex([string]$Entry) {
-    return [regex]::new('(?i)(?<![A-Za-z0-9_])' + [regex]::Escape($Entry) + '(?![A-Za-z0-9_])')
+# Text as the denylist sees it: NFKC (fullwidth letters fold to ASCII, a
+# letter with a combining mark to its one-code-point form), with the invisible
+# characters that can sit inside a word removed (zero-width space, joiner and
+# non-joiner, word joiner, BOM, soft hyphen). Line breaks are kept where they
+# are. The characters are built from their code points here.
+$scrubInvisible = [regex]::new('[' + [string][char]0x200B + '-' + [string][char]0x200D + [string][char]0x2060 + [string][char]0xFEFF + [string][char]0x00AD + ']')
+function Get-ScrubDenyText([string]$Text) {
+    return $scrubInvisible.Replace($Text.Normalize([System.Text.NormalizationForm]::FormKC), '')
+}
+# The matcher of one entry: whole word, case-insensitive, on the text of
+# Get-ScrubDenyText. The words of a multi-word entry may be parted by any run
+# of white space (a line break included), comment markers (# > * / ;) and the
+# joiners - . _ , (a hard-wrapped name, in a comment or not, an email local
+# part, a snake_case name, a "Surname, Given" list). Not matched: words run
+# together (CamelCase).
+# -Plain: the matcher for the plain reading (NFC only, nothing removed), which
+# Find-ScrubHits runs as well, so the folded reading only ever adds hits.
+function Get-ScrubDenyRegex([string]$Entry, [switch]$Plain) {
+    $form = if ($Plain) { $Entry.Normalize([System.Text.NormalizationForm]::FormC) } else { Get-ScrubDenyText $Entry }
+    $words = @($form -split '\s+' | Where-Object { $_ } | ForEach-Object { [regex]::Escape($_) })
+    return [regex]::new('(?i)(?<![A-Za-z0-9_])' + ($words -join '[\s#>*/;,._-]+') + '(?![A-Za-z0-9_])')
+}
+# The allowed identities of a file (one "Name <email>" per line, # comments
+# and blank lines ignored), or $null when there is none (path empty, file
+# missing, no entry).
+function Read-ScrubIdentAllow([string]$Path) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    $entries = @([System.IO.File]::ReadAllLines($Path) | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+    if ($entries.Count -eq 0) { return $null }
+    return , ([string[]]$entries)
 }
 
 # Hits in $Lines of the file named $Path (its extension picks the .md rule).
 # Returns objects { Line; Rule; Text } where Text is the matched text cut to 80
-# characters, or '' for a denylist hit. -SkipPatterns leaves the pattern rules
-# out (the denylist still applies).
+# characters, or '' for a denylist hit and for a pattern hit whose matched text
+# holds a denylist entry. -SkipPatterns leaves the pattern rules
+# out (the denylist still applies). The pattern rules run line by line; the
+# denylist runs over the whole text (Get-ScrubDenyText), so a multi-word entry
+# wrapped across lines hits (on the line it starts on), at most once per line
+# and entry.
 function Find-ScrubHits {
     param([string]$Path, [string[]]$Lines, [string[]]$Denylist = $null, [switch]$SkipPatterns)
     $isMd = $Path.EndsWith('.md', [System.StringComparison]::OrdinalIgnoreCase)
     $deny = @()
-    if ($Denylist) { $deny = @($Denylist | ForEach-Object { Get-ScrubDenyRegex $_ }) }
+    $denyPlain = @()
+    if ($Denylist) {
+        $deny = @($Denylist | ForEach-Object { Get-ScrubDenyRegex $_ })
+        $denyPlain = @($Denylist | ForEach-Object { Get-ScrubDenyRegex $_ -Plain })
+    }
     $hits = New-Object System.Collections.Generic.List[object]
     for ($i = 0; $i -lt $Lines.Count; $i++) {
         $line = $Lines[$i]
@@ -174,12 +251,32 @@ function Find-ScrubHits {
                     if ($rule.Name -like 'user home path*' -and $m.Groups[1].Value -ceq 'home' -and $m.Groups[2].Value -ceq 'me') { continue }
                     $txt = $m.Value
                     if ($txt.Length -gt 80) { $txt = $txt.Substring(0, 80) }
+                    # A matched text that holds a denylist entry (a /home/<name> path) is
+                    # never printed: the hit is reported without its text.
+                    for ($d = 0; $d -lt $deny.Count; $d++) {
+                        if ($denyPlain[$d].IsMatch($m.Value.Normalize([System.Text.NormalizationForm]::FormC)) -or $deny[$d].IsMatch((Get-ScrubDenyText $m.Value))) { $txt = ''; break }
+                    }
                     $hits.Add([pscustomobject]@{ Line = $i + 1; Rule = $rule.Name; Text = $txt })
                 }
             }
         }
+    }
+    if ($deny.Count -gt 0) {
+        # Normalising leaves the line breaks where they are, so a match's line is
+        # the count of breaks before it.
+        # Two readings, their hits joined: the plain one (NFC) and the folded one
+        # (Get-ScrubDenyText). Folding can glue an entry to the next word (a
+        # superscript two becomes 2), so it never replaces the plain reading.
+        $joined = $Lines -join "`n"
+        $texts = @($joined.Normalize([System.Text.NormalizationForm]::FormC), (Get-ScrubDenyText $joined))
         for ($d = 0; $d -lt $deny.Count; $d++) {
-            if ($deny[$d].IsMatch($line)) { $hits.Add([pscustomobject]@{ Line = $i + 1; Rule = "denylist entry $($d + 1)"; Text = '' }) }
+            $lineSet = New-Object System.Collections.Generic.SortedSet[int]
+            foreach ($pair in @(@($texts[0], $denyPlain[$d]), @($texts[1], $deny[$d]))) {
+                foreach ($m in $pair[1].Matches($pair[0])) {
+                    [void]$lineSet.Add(1 + ([regex]::Matches($pair[0].Substring(0, $m.Index), "`n")).Count)
+                }
+            }
+            foreach ($ln in $lineSet) { $hits.Add([pscustomobject]@{ Line = $ln; Rule = "denylist entry $($d + 1)"; Text = '' }) }
         }
     }
     return $hits.ToArray()
@@ -206,6 +303,10 @@ function Get-ScrubRepoList([string]$Raw) {
     return , @($Raw -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
+# The pushed ref names of -PushRefs: parted at ASCII spaces only (the hook joins
+# them so; git refuses a space in a ref name but allows a no-break space, which
+# PowerShell's \s would part).
+function Get-ScrubPushRefList([string]$Raw) { return , [string[]]@($Raw -split ' ' | Where-Object { $_ }) }
 # How the platform compares paths: ignoring case on Windows, exactly elsewhere.
 function Get-ScrubPathComparison {
     if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) { return [System.StringComparison]::OrdinalIgnoreCase }
@@ -256,7 +357,9 @@ function Invoke-ScrubGit {
     param([string]$Repo, [string[]]$GitArgs, [int]$Seconds = 120)
     $gitCmd = @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)
     if ($gitCmd.Count -eq 0) { return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Error = 'git was not found on PATH' } }
-    $argv = @('-C', $Repo) + $GitArgs
+    # --no-replace-objects: a replace ref (git replace) must not make the scan
+    # read other objects than the ones a push sends.
+    $argv = @('-C', $Repo, '--no-replace-objects') + $GitArgs
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = [string]$gitCmd[0].Source
     # The quoting rules of ConvertTo-CoordArgLine: backslashes before a quote and
@@ -323,6 +426,7 @@ function Get-ScrubUnstagedNames([string]$Repo) {
 function Add-ScrubContent {
     param($Res, [string]$Rel, [string]$Label, [byte[]]$Bytes, [bool]$SkipPatterns, [string[]]$Denylist)
     $text = $null
+    $alt = $null
     # The UTF-32 BOMs come before the UTF-16 ones: FF FE 00 00 starts with the
     # UTF-16 LE BOM. FF FE 00 00 counts as UTF-32 LE only when the rest is whole
     # 4-byte units that decode without a replacement character; otherwise it is
@@ -352,11 +456,24 @@ function Add-ScrubContent {
         $Res.NulFiles.Add($Label)
         return 'nul'
     }
-    else { $text = $coordUtf8.GetString($Bytes).TrimStart([char]0xFEFF) }
+    else {
+        $text = $coordUtf8.GetString($Bytes).TrimStart([char]0xFEFF)
+        # Bytes that are not valid UTF-8 (an ANSI file: a Windows-1252 accented
+        # letter decodes to U+FFFD) are read as Windows-1252 as well.
+        try { [void](New-Object System.Text.UTF8Encoding($false, $true)).GetString($Bytes) }
+        catch {
+            $alt = [System.Text.Encoding]::GetEncoding(1252).GetString($Bytes)
+            $Res.NonUtf8.Add($Label)
+        }
+    }
     $lines = $text -split "`r?`n"
     $Res.Scanned.Add($Label)
     if ($SkipPatterns) { $Res.PatternSkipped.Add($Label) }
-    foreach ($h in @(Find-ScrubHits -Path $Rel -Lines $lines -Denylist $Denylist -SkipPatterns:$SkipPatterns)) {
+    $found = @(Find-ScrubHits -Path $Rel -Lines $lines -Denylist $Denylist -SkipPatterns:$SkipPatterns)
+    if ($null -ne $alt) { $found += @(Find-ScrubHits -Path $Rel -Lines ($alt -split "`r?`n") -Denylist $Denylist -SkipPatterns:$SkipPatterns) }
+    $seenHit = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($h in $found) {
+        if (-not $seenHit.Add("$($h.Line)`t$($h.Rule)`t$($h.Text)")) { continue }
         $Res.Hits.Add([pscustomobject]@{ File = $Label; Line = $h.Line; Rule = $h.Rule; Text = $h.Text })
     }
     foreach ($t in @(Get-ScrubHexTokens $lines)) {
@@ -364,6 +481,74 @@ function Add-ScrubContent {
         $Res.HexTokens[$t.Token].Add([pscustomobject]@{ File = $Label; Line = $t.Line })
     }
     return 'scanned'
+}
+
+# Hits in a short text that is not a file version (a file name, a ref name, an
+# identity), added under $Label. Not counted as a scanned version, and no hex
+# tokens taken from it.
+function Add-ScrubTextHits {
+    param($Res, [string]$Label, [string]$Text, [string[]]$Denylist)
+    foreach ($h in @(Find-ScrubHits -Path '' -Lines @($Text -split "`r?`n") -Denylist $Denylist)) {
+        $Res.Hits.Add([pscustomobject]@{ File = $Label; Line = $h.Line; Rule = $h.Rule; Text = $h.Text })
+    }
+}
+# An author, committer or tagger header value ("Name <email> <time> <zone>"):
+# its identity, everything before the trailing time and zone ("Name <email>",
+# or the whole value when it does not end in a time and zone), is let through
+# when it is exactly one of $AllowIdent (ordinal), and is scanned as text
+# otherwise. -NoCount: a second reading of the same line, not counted again.
+function Add-ScrubIdent {
+    param($Res, [string]$Label, [string]$Value, [string[]]$Denylist, [string[]]$AllowIdent, [switch]$NoCount)
+    $ident = $Value.TrimEnd()
+    $m = [regex]::Match($ident, '^(.*) \d+ [+-]\d{4}$')
+    if ($m.Success) { $ident = $m.Groups[1].Value }
+    if (-not $NoCount) { $Res.Idents++ }
+    # Ordinal: -ccontains is culture-aware in Windows PowerShell 5.1 and lets a
+    # soft hyphen or another ignorable character through as equal.
+    if ($AllowIdent -and [System.Linq.Enumerable]::Contains([string[]]$AllowIdent, $ident, [System.StringComparer]::Ordinal)) { if (-not $NoCount) { $Res.IdentAllowed++ }; return }
+    Add-ScrubTextHits $Res $Label $ident $Denylist
+}
+# The readings of raw object bytes: UTF-8, and Windows-1252 as well when the
+# bytes are not valid UTF-8 (as Add-ScrubContent reads a file).
+function Get-ScrubReadings([byte[]]$Bytes) {
+    $utf8 = $coordUtf8.GetString($Bytes)
+    try { [void](New-Object System.Text.UTF8Encoding($false, $true)).GetString($Bytes); return , @($utf8) }
+    catch { return , @($utf8, [System.Text.Encoding]::GetEncoding(1252).GetString($Bytes)) }
+}
+# Splits raw commit or tag bytes at the first empty line: { Head (bytes);
+# Body (bytes, empty when there is none) }.
+function Split-ScrubObject([byte[]]$Bytes) {
+    for ($i = 0; $i -lt $Bytes.Length - 1; $i++) {
+        if ($Bytes[$i] -eq 10 -and $Bytes[$i + 1] -eq 10) {
+            $body = [byte[]]@()
+            if ($i + 2 -lt $Bytes.Length) { $body = [byte[]]$Bytes[($i + 2)..($Bytes.Length - 1)] }
+            return [pscustomobject]@{ Head = [byte[]]$Bytes[0..$i]; Body = $body }
+        }
+    }
+    return [pscustomobject]@{ Head = $Bytes; Body = [byte[]]@() }
+}
+# The header lines of a commit or tag object as { Key; Value } (a continuation
+# line, which starts with a space, is added to the header before it).
+function Get-ScrubHeaders([string]$Head) {
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($ln in ($Head -split "`n")) {
+        if (-not $ln) { continue }
+        if ($ln.StartsWith(' ', [System.StringComparison]::Ordinal) -and $out.Count -gt 0) { $out[$out.Count - 1].Value += "`n" + $ln.Substring(1); continue }
+        $sp = $ln.IndexOf([char]' ')
+        if ($sp -lt 0) { $out.Add([pscustomobject]@{ Key = $ln; Value = '' }) }
+        else { $out.Add([pscustomobject]@{ Key = $ln.Substring(0, $sp); Value = $ln.Substring($sp + 1) }) }
+    }
+    return , $out.ToArray()
+}
+# The sha a tree, parent or object header starts with ('' when it starts with
+# none). Only that sha is ever skipped: the rest of the value (text after it on
+# its line, a continuation line) is text.
+$scrubShaStart = [regex]::new('^[0-9a-f]{40}(?:[0-9a-f]{24})?(?![0-9a-f])')
+function Get-ScrubShaStart([string]$Value) { return $scrubShaStart.Match($Value).Value }
+function Add-ScrubShaHeader {
+    param($Res, [string]$Label, [string]$Key, [string]$Value, [string[]]$Denylist)
+    $rest = $Value.Substring((Get-ScrubShaStart $Value).Length)
+    if ($rest.Trim()) { Add-ScrubTextHits $Res $Label ($Key + ' ' + $rest) $Denylist }
 }
 
 # The listed entries the scan accounted for: work-tree versions scanned, NUL
@@ -392,6 +577,7 @@ function Invoke-ScrubScan {
         IndexScanned = (New-Object System.Collections.Generic.List[string])
         Utf16 = (New-Object System.Collections.Generic.List[string])
         Utf32 = (New-Object System.Collections.Generic.List[string])
+        NonUtf8 = (New-Object System.Collections.Generic.List[string])
         NulFiles = (New-Object System.Collections.Generic.List[string])
         Unreadable = (New-Object System.Collections.Generic.List[string])
         Skipped = (New-Object System.Collections.Generic.List[string])
@@ -407,8 +593,14 @@ function Invoke-ScrubScan {
     $res.DiscoveryOk = $true
     $res.Listed = $d.Files.Count
     $unstaged = [System.Collections.Generic.HashSet[string]]::new([string[]]$u.Names, [System.StringComparer]::Ordinal)
+    $pos = 0
     foreach ($rel in $d.Files) {
-        $skip = [bool]($SelfRel -and ($rel -ceq $SelfRel))
+        # The name itself, named by its position: a name that holds a denylist
+        # entry is never printed.
+        $pos++
+        Add-ScrubTextHits $res "file name of listed entry $pos" $rel $Denylist
+        # Ordinal: -ceq is culture-aware (a soft hyphen would make a look-alike path the self file).
+        $skip = [bool]($SelfRel -and [string]::Equals($rel, $SelfRel, [System.StringComparison]::Ordinal))
         $full = Join-Path $Repo $rel
         $isLeaf = $false
         try { $isLeaf = [bool](Test-Path -LiteralPath $full -PathType Leaf) } catch { $isLeaf = $false }
@@ -489,48 +681,157 @@ function Invoke-ScrubRepoRule {
     return [pscustomobject]@{ Listed = $listed; Usable = [int]$n; Unchecked = @($Res.RepoUnchecked); Verdict = $verdict }
 }
 
-# Scans the history of a range of commits ($Range, a git revision range such as
-# origin/main..HEAD): every blob that a commit of the range adds or changes, at
-# its path, and every commit message. A blob seen under the same path twice is
+# Scans the history of a range of commits ($Range: one or more git revisions
+# parted by spaces, such as origin/main..HEAD or "<tip> ^<sha>"): every blob that
+# a commit of the range adds or changes, at its path, every such path as a name
+# (once per path), every commit as stored (git cat-file commit): its message
+# (with git's %B reading too under a non-UTF-8 encoding header), its author and
+# committer lines and a mergetag's tagger (an exact $AllowIdent identity is let
+# through, see Add-ScrubIdent) and every other header, a signature included, but
+# for the sha a tree, parent or object line starts with (Add-ScrubShaHeader);
+# hits that share a place merged; every annotated tag a positive revision names
+# (its headers, tagger and message, along a tag chain by each tag's first
+# object header, as git follows it), and the $RefNames given. A blob seen under the same path twice is
 # scanned once. A merge commit is read too: its message, and the blobs it differs
 # by from each parent (a merge with a parent outside the range also reads what
 # that parent brings in: it errs on the side of reading more). Not read: a gitlink
-# (a submodule's commit; reported unreadable), author and committer lines, tags,
-# notes, replace refs, and, in a shallow clone, anything before its boundary (the
-# range is not checked for that). $SelfRel names the one path whose pattern rules are
-# skipped, as in Invoke-ScrubScan. Returns { DiscoveryOk; Reason; Commits; the
-# same lists as Invoke-ScrubScan (Scanned, PatternSkipped, Utf16, Utf32,
-# NulFiles, Unreadable, RepoUnchecked, Hits, HexTokens); Blobs }. Not
-# DiscoveryOk when git cannot resolve the range, or the range holds no commit.
+# (a submodule's commit; reported unreadable), notes, grafts (replace refs are
+# ignored: Invoke-ScrubGit passes --no-replace-objects), and, in a
+# shallow clone, anything before its boundary (the range is not checked for
+# that). $SelfRel names the one path whose pattern rules are skipped, as in
+# Invoke-ScrubScan. Returns { DiscoveryOk; Reason; Commits; Tags; Idents;
+# IdentAllowed; the same lists as Invoke-ScrubScan (Scanned, PatternSkipped,
+# Utf16, Utf32, NonUtf8, NulFiles, Unreadable, RepoUnchecked, Hits, HexTokens);
+# Blobs }. Not DiscoveryOk when git cannot resolve the range, a positive
+# revision does not end on a commit (a tag on a blob), or the range holds no
+# commit (unless -AllowEmpty).
 function Invoke-ScrubHistory {
-    param([string]$Repo, [string]$Range, [string]$SelfRel = '', [string[]]$Denylist = $null)
+    param([string]$Repo, [string]$Range, [string]$SelfRel = '', [string[]]$Denylist = $null,
+        [string[]]$AllowIdent = $null, [string[]]$RefNames = @(), [switch]$AllowEmpty)
     $res = [pscustomobject]@{
-        DiscoveryOk = $false; Reason = ''; Commits = 0; Blobs = 0
+        DiscoveryOk = $false; Reason = ''; Commits = 0; Blobs = 0; Tags = 0; Idents = 0; IdentAllowed = 0
         Scanned = (New-Object System.Collections.Generic.List[string])
         PatternSkipped = (New-Object System.Collections.Generic.List[string])
         Utf16 = (New-Object System.Collections.Generic.List[string])
         Utf32 = (New-Object System.Collections.Generic.List[string])
+        NonUtf8 = (New-Object System.Collections.Generic.List[string])
         NulFiles = (New-Object System.Collections.Generic.List[string])
         Unreadable = (New-Object System.Collections.Generic.List[string])
         RepoUnchecked = (New-Object System.Collections.Generic.List[int])
         Hits = (New-Object System.Collections.Generic.List[object])
         HexTokens = @{}
     }
-    # --end-of-options: a range that starts with '-' is never read as an option.
-    $c = Invoke-ScrubGit $Repo @('rev-list', '--end-of-options', $Range)
+    # The range is one or more revisions parted by spaces (no ref name holds a
+    # space): "a..b", or "<tip> <tip> ^<sha> ^<sha>" as the pre-push gate passes it.
+    $revs = @($Range -split '\s+' | Where-Object { $_ })
+    if ($revs.Count -eq 0) { $res.Reason = 'no range was given'; return $res }
+    # --end-of-options: a revision that starts with '-' is never read as an option.
+    $c = Invoke-ScrubGit $Repo (@('rev-list', '--end-of-options') + $revs)
     if (-not $c.Ok -or $c.Code -ne 0) { $res.Reason = "git rev-list failed for the range '$Range' (exit $($c.Code)): $($c.Error)"; return $res }
     $shas = @($coordUtf8.GetString($c.Bytes) -split "`r?`n" | Where-Object { $_ })
-    if ($shas.Count -eq 0) { $res.Reason = "the range '$Range' holds no commit"; return $res }
+    # Each positive revision: an annotated tag (a chain of them) is read, its
+    # name, message and tagger; what it ends on must be a commit.
+    $seenTag = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($rv in $revs) {
+        if ($rv.StartsWith('^') -or $rv.Contains('..')) { continue }
+        $o = Invoke-ScrubGit $Repo @('rev-parse', '--verify', '-q', '--end-of-options', $rv)
+        if (-not $o.Ok -or $o.Code -ne 0) { $res.Reason = "git rev-parse could not resolve '$rv' (exit $($o.Code)): $($o.Error)"; return $res }
+        $cur = $coordUtf8.GetString($o.Bytes).Trim()
+        $type = ''
+        for ($depth = 0; $depth -lt 20; $depth++) {
+            $t = Invoke-ScrubGit $Repo @('cat-file', '-t', $cur)
+            if (-not $t.Ok -or $t.Code -ne 0) { $res.Reason = "git cat-file could not read the object '$cur' of '$rv' (exit $($t.Code)): $($t.Error)"; return $res }
+            $type = $coordUtf8.GetString($t.Bytes).Trim()
+            if ($type -cne 'tag') { break }
+            $g = Invoke-ScrubGit $Repo @('cat-file', 'tag', $cur)
+            if (-not $g.Ok -or $g.Code -ne 0) { $res.Reason = "git cat-file could not read the tag '$cur' (exit $($g.Code)): $($g.Error)"; return $res }
+            $parts = Split-ScrubObject $g.Bytes
+            $next = ''
+            if ($seenTag.Add($cur)) {
+                $res.Tags++
+                $short = $cur.Substring(0, 7)
+                $readings = Get-ScrubReadings $parts.Head
+                for ($rd = 0; $rd -lt $readings.Count; $rd++) {
+                    foreach ($h in (Get-ScrubHeaders $readings[$rd])) {
+                        if ($h.Key -ceq 'object') {
+                            # The first object header, as git follows it (a later one is text only).
+                            if ($rd -eq 0 -and -not $next) { $next = Get-ScrubShaStart $h.Value }
+                            Add-ScrubShaHeader $res ('tag ' + $short + ' headers') 'object' $h.Value $Denylist
+                        }
+                        elseif ($h.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of tag ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
+                        # The name, the type, a gpgsig header and any other header, its key
+                        # included; the label never names the key (a key can hold the entry).
+                        else { Add-ScrubTextHits $res ('tag ' + $short + ' headers') ($h.Key + ' ' + $h.Value) $Denylist }
+                    }
+                }
+                # The message, as stored (Add-ScrubContent reads it as UTF-8 and,
+                # when it is not valid UTF-8, as Windows-1252 too).
+                $label = 'tag ' + $short
+                [void](Add-ScrubContent $res $label $label $parts.Body $false $Denylist)
+            }
+            else {
+                foreach ($h in (Get-ScrubHeaders $coordUtf8.GetString($parts.Head))) { if ($h.Key -ceq 'object' -and -not $next) { $next = Get-ScrubShaStart $h.Value } }
+            }
+            if (-not $next) { $res.Reason = "the tag '$cur' of '$rv' names no object"; return $res }
+            $cur = $next
+        }
+        if ($type -cne 'commit') { $res.Reason = "the revision '$rv' names a $type, not a commit"; return $res }
+    }
+    if ($shas.Count -eq 0 -and -not $AllowEmpty) { $res.Reason = "the range '$Range' holds no commit"; return $res }
     $res.DiscoveryOk = $true
     $res.Commits = $shas.Count
+    # The ref names a push writes, named by their position.
+    for ($k = 0; $k -lt $RefNames.Count; $k++) { Add-ScrubTextHits $res "pushed ref name $($k + 1)" $RefNames[$k] $Denylist }
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $seenName = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($sha in $shas) {
-        $m = Invoke-ScrubGit $Repo @('show', '-s', '--format=%B', $sha)
-        if ($m.Ok -and $m.Code -eq 0) {
-            $label = 'commit message ' + $sha.Substring(0, 7)
-            [void](Add-ScrubContent $res $label $label $m.Bytes $false $Denylist)
+        $short = $sha.Substring(0, 7)
+        # The commit object as stored (git cat-file commit, not git show: show
+        # stops a message at a NUL byte and re-encodes it by its encoding
+        # header). The message is read as a file is; every header is read too:
+        # author and committer as identities, tree and parent but for the sha
+        # they start with, any other (encoding, gpgsig, mergetag, an unknown
+        # one) as text.
+        $co = Invoke-ScrubGit $Repo @('cat-file', 'commit', $sha)
+        if ($co.Ok -and $co.Code -eq 0) {
+            $parts = Split-ScrubObject $co.Bytes
+            $label = 'commit message ' + $short
+            [void](Add-ScrubContent $res $label $label $parts.Body $false $Denylist)
+            # A true encoding header (ISO-8859-2, Shift_JIS ...): git's own
+            # re-encoded reading (%B) is read as well, under the same label,
+            # asked for in UTF-8 (i18n.logOutputEncoding would change it).
+            $encLine = [regex]::Match($coordUtf8.GetString($parts.Head), '(?m)^encoding (.+)$')
+            if ($encLine.Success -and $encLine.Groups[1].Value.Trim() -notmatch '^(?i)utf-?8$') {
+                $mb = Invoke-ScrubGit $Repo @('show', '-s', '--encoding=UTF-8', '--format=%B', $sha)
+                if ($mb.Ok -and $mb.Code -eq 0) { [void](Add-ScrubContent $res $label $label $mb.Bytes $false $Denylist) }
+                else { $res.Unreadable.Add('re-encoded message of commit ' + $short) }
+            }
+            $readings = Get-ScrubReadings $parts.Head
+            for ($rd = 0; $rd -lt $readings.Count; $rd++) {
+                foreach ($h in (Get-ScrubHeaders $readings[$rd])) {
+                    if ($h.Key -ceq 'author') { Add-ScrubIdent $res ('author of commit ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
+                    elseif ($h.Key -ceq 'committer') { Add-ScrubIdent $res ('committer of commit ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
+                    elseif ($h.Key -cin @('tree', 'parent')) { Add-ScrubShaHeader $res ('commit headers of ' + $short) $h.Key $h.Value $Denylist }
+                    elseif ($h.Key -ceq 'mergetag') {
+                        # A merged signed tag, embedded: its tagger is an identity, its
+                        # object but for the sha it starts with, every other header
+                        # (type, gpgsig, an unknown one) and its message are text.
+                        $mv = $h.Value
+                        $mcut = $mv.IndexOf("`n`n", [System.StringComparison]::Ordinal)
+                        $mhead = if ($mcut -ge 0) { $mv.Substring(0, $mcut) } else { $mv }
+                        $mbody = if ($mcut -ge 0) { $mv.Substring($mcut + 2) } else { '' }
+                        foreach ($mh in (Get-ScrubHeaders $mhead)) {
+                            if ($mh.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of mergetag in commit ' + $short) $mh.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
+                            elseif ($mh.Key -ceq 'object') { Add-ScrubShaHeader $res ('commit headers of ' + $short) 'object' $mh.Value $Denylist }
+                            else { Add-ScrubTextHits $res ('commit headers of ' + $short) ($mh.Key + ' ' + $mh.Value) $Denylist }
+                        }
+                        if ($mbody) { Add-ScrubTextHits $res ('commit headers of ' + $short) $mbody $Denylist }
+                    }
+                    else { Add-ScrubTextHits $res ('commit headers of ' + $short) ($h.Key + ' ' + $h.Value) $Denylist }
+                }
+            }
         }
-        else { $res.Unreadable.Add('commit message ' + $sha.Substring(0, 7)) }
+        else { $res.Unreadable.Add('commit ' + $short) }
         # The blobs this commit adds or modifies (a type change included; a rename or copy counts as an add), against each parent
         # (-m: a merge is compared with every parent, so what only the merge itself brings in is seen; the empty tree for a root commit).
         $t = Invoke-ScrubGit $Repo @('diff-tree', '-r', '-z', '-m', '--root', '--no-renames', '--diff-filter=AMT', '--no-abbrev', $sha)
@@ -545,14 +846,24 @@ function Invoke-ScrubHistory {
             $path = $parts[$i + 1]
             $i += 2
             if ($newSha -match '^0+$') { continue }
+            # The path itself, once per path, named by its blob: a name that
+            # holds a denylist entry is never printed.
+            if ($seenName.Add($path)) { Add-ScrubTextHits $res ('file name of blob ' + $newSha.Substring(0, 7)) $path $Denylist }
             if (-not $seen.Add($path + [char]0 + $newSha)) { continue }
             $res.Blobs++
             $g = Invoke-ScrubGit $Repo @('cat-file', 'blob', $newSha)
             if (-not $g.Ok -or $g.Code -ne 0) { $res.Unreadable.Add($path + ' (blob ' + $newSha.Substring(0, 7) + ')'); continue }
-            $skip = [bool]($SelfRel -and ($path -ceq $SelfRel))
+            $skip = [bool]($SelfRel -and [string]::Equals($path, $SelfRel, [System.StringComparison]::Ordinal))
             [void](Add-ScrubContent $res $path ($path + ' (blob ' + $newSha.Substring(0, 7) + ')') $g.Bytes $skip $Denylist)
         }
     }
+    # One hit per place: two readings of one text (raw and re-encoded, UTF-8 and
+    # Windows-1252) can find the same hit.
+    $uniq = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $kept = New-Object System.Collections.Generic.List[object]
+    foreach ($x in $res.Hits) { if ($uniq.Add("$($x.File)`t$($x.Line)`t$($x.Rule)`t$($x.Text)")) { $kept.Add($x) } }
+    $res.Hits.Clear()
+    foreach ($x in $kept) { $res.Hits.Add($x) }
     return $res
 }
 
@@ -635,9 +946,46 @@ Assert-Coord 'SG2 a missing file has no denylist' ($null -eq (Read-ScrubDenylist
 $emptyFile = Join-Path $tmp 'empty.txt'
 [System.IO.File]::WriteAllText($emptyFile, "# only a comment`n`n", $coordUtf8)
 Assert-Coord 'SG2 a file with no entry has no denylist' ($null -eq (Read-ScrubDenylist $emptyFile))
-Assert-Coord 'SG2 an absent denylist is skipped in a GitHub Actions run (GITHUB_ACTIONS=true)' ((Get-ScrubDenylistAbsentVerdict 'true') -ceq 'SKIP')
-$offCi = @('', 'false', 'TRUE', '1', ' true')
-Assert-Coord 'SG2 an absent denylist fails outside GitHub Actions (unset, false, TRUE, 1, a padded true)' (@($offCi | Where-Object { (Get-ScrubDenylistAbsentVerdict $_) -cne 'FAIL' }).Count -eq 0)
+Assert-Coord 'SG2 an absent denylist with the variable unset and no history range is skipped (read UNCHECKED)' ((Get-ScrubDenylistAbsentVerdict '' $false) -ceq 'SKIP')
+$setVars = @((Join-Path $tmp 'nope.txt'), $emptyFile, ' ')
+Assert-Coord 'SG2 an absent denylist fails when the variable is set (a missing file, a file with no entry, only a space)' (@($setVars | Where-Object { (Get-ScrubDenylistAbsentVerdict $_ $false) -cne 'FAIL' }).Count -eq 0)
+Assert-Coord 'SG2 an absent denylist fails in a history run (the release gate), the variable unset' ((Get-ScrubDenylistAbsentVerdict '' $true) -ceq 'FAIL')
+# A multi-word entry is matched over the whole text, not line by line: a name
+# hard-wrapped onto the next line, a comment marker in front of the second word.
+$h = @(Find-ScrubHits -Path 'a.md' -Lines @('a zz', 'beta b') -Denylist $dl)
+Assert-Coord 'SG2 a multi-word entry hard-wrapped across two lines hits once, on the line it starts on' ($h.Count -eq 1 -and $h[0].Rule -ceq 'denylist entry 2' -and $h[0].Line -eq 1) (($h | ForEach-Object { "$($_.Line) $($_.Rule)" }) -join ';')
+$h = @(Find-ScrubHits -Path 'a.ps1' -Lines @('# a zz', '# beta b', '//  zz', '//   beta') -Denylist $dl)
+Assert-Coord 'SG2 a multi-word entry wrapped inside # and // comments hits (the comment marker sits between the words)' ($h.Count -eq 2 -and $h[0].Line -eq 1 -and $h[1].Line -eq 3) (($h | ForEach-Object { "$($_.Line) $($_.Rule)" }) -join ';')
+$h = @(Find-ScrubHits -Path 'a.txt' -Lines @('zz    beta', 'zzbeta') -Denylist $dl)
+Assert-Coord 'SG2 a multi-word entry with several spaces between the words hits; the words run together do not' ($h.Count -eq 1 -and $h[0].Line -eq 1) (($h | ForEach-Object { "$($_.Line) $($_.Rule)" }) -join ';')
+$h = @(Find-ScrubHits -Path 'a.txt' -Lines @('zzalpha zzalpha', 'zzalpha') -Denylist $dl)
+Assert-Coord 'SG2 an entry twice on one line is one hit for that line' ($h.Count -eq 2 -and $h[0].Line -eq 1 -and $h[1].Line -eq 2) (($h | ForEach-Object { "$($_.Line) $($_.Rule)" }) -join ';')
+# NFC and NFD: an accented letter written as one code point or as a letter plus
+# a combining mark is the same text (the code points are built at run time).
+$nfc = 'zzcaf' + [string][char]0x00E9
+$nfd = 'zzcafe' + [string][char]0x0301
+$h = @(Find-ScrubHits -Path 'a.txt' -Lines @("x $nfd y") -Denylist @($nfc))
+Assert-Coord 'SG2 an NFC entry hits the NFD spelling of the same word' ($h.Count -eq 1) "hits=$($h.Count)"
+$h = @(Find-ScrubHits -Path 'a.txt' -Lines @("x $nfc y") -Denylist @($nfd))
+Assert-Coord 'SG2 an NFD entry hits the NFC spelling of the same word' ($h.Count -eq 1) "hits=$($h.Count)"
+# The words of a multi-word entry joined by a dot, an underscore or a comma (an
+# email local part, a snake_case name, a "Surname, Given" list) still hit.
+$h = @(Find-ScrubHits -Path 'a.txt' -Lines @('mail zz.beta@example.invalid', 'id zz_beta', 'list zz, beta') -Denylist $dl)
+Assert-Coord 'SG2 a multi-word entry joined by . _ or , hits on each line' ($h.Count -eq 3 -and $h[0].Line -eq 1 -and $h[1].Line -eq 2 -and $h[2].Line -eq 3) (($h | ForEach-Object { "$($_.Line) $($_.Rule)" }) -join ';')
+# Compatibility forms: fullwidth letters fold to ASCII (NFKC), and invisible
+# characters inside a word (zero-width space, soft hyphen) do not hide it.
+$fw = -join ('zzalpha'.ToCharArray() | ForEach-Object { [char]([int]$_ + 0xFEE0) })
+$zw = 'zz' + [string][char]0x200B + 'al' + [string][char]0x00AD + 'pha'
+$h = @(Find-ScrubHits -Path 'a.txt' -Lines @("x $fw y", "x $zw y") -Denylist $dl)
+Assert-Coord 'SG2 an entry in fullwidth letters, and one with a zero-width space and a soft hyphen inside, both hit' ($h.Count -eq 2 -and $h[0].Line -eq 1 -and $h[1].Line -eq 2) (($h | ForEach-Object { "$($_.Line) $($_.Rule)" }) -join ';')
+# The compatibility reading only adds hits: a character that NFKC folds into a
+# letter or digit (a superscript two, a trade mark sign), or a zero-width space
+# used as a separator, must not glue the entry to the next word.
+$sup = 'zzalpha' + [string][char]0x00B2
+$tm = 'zzalpha' + [string][char]0x2122
+$zsep = 'zzalpha' + [string][char]0x200B + 'foo'
+$h = @(Find-ScrubHits -Path 'a.txt' -Lines @("see $sup note", "see $tm brand", "see $zsep") -Denylist $dl)
+Assert-Coord 'SG2 an entry followed by a superscript two, a trade mark sign or a zero-width space and a word still hits (the plain reading is kept)' ($h.Count -eq 3) (($h | ForEach-Object { "$($_.Line) $($_.Rule)" }) -join ';')
 
 # ---- SG3: strict mode and the repo list ---------------------------------------
 Write-Host "(SG3) strict mode and the repo list"
@@ -752,6 +1100,19 @@ Assert-Coord 'SG4 a UTF-32 LE file with a BOM (FF FE 00 00) is decoded as UTF-32
 Assert-Coord 'SG4 a UTF-32 BE file with a BOM (00 00 FE FF) is decoded as UTF-32, not listed as a NUL file, and its hit reported' ($res.Utf32.Contains('u32be.txt') -and -not $res.NulFiles.Contains('u32be.txt') -and @(Get-ScrubHitsOf $res 'u32be.txt' $pathRule).Count -eq 1) "utf32=$($res.Utf32 -join '|') nul=$($res.NulFiles -join '|') hits=$(@(Get-ScrubHitsOf $res 'u32be.txt').Count)"
 Assert-Coord 'SG4 a file with NUL bytes and no BOM is not scanned and is listed by name' ($res.NulFiles.Contains('zerobytes.bin') -and -not $res.Scanned.Contains('zerobytes.bin') -and -not $res.NulFiles.Contains('u16le.txt') -and -not $res.NulFiles.Contains('plain.txt')) "nul=$($res.NulFiles -join '|')"
 Assert-Coord 'SG4 every listed entry is accounted for (7 listed: 6 scanned, 1 NUL file)' ($res.Listed -eq 7 -and $res.WorkTreeScanned -eq 6 -and $res.WorkTreeNul -eq 1 -and (Get-ScrubAccounted $res) -eq $res.Listed) "listed=$($res.Listed) scanned=$($res.WorkTreeScanned) nul=$($res.WorkTreeNul) accounted=$(Get-ScrubAccounted $res)"
+# Text that is not valid UTF-8 (a Windows-1252 byte for the accented letter)
+# decodes to U+FFFD as UTF-8, so it is read as Windows-1252 as well; a hit in
+# both readings is reported once.
+$aRepo = New-ScrubTestRepo 'ansi' @{ 'plain.txt' = "nothing here`n" }
+[System.IO.File]::WriteAllBytes((Join-Path $aRepo 'ansi.txt'), [byte[]]([System.Text.Encoding]::ASCII.GetBytes('x zzcaf') + @(0xE9) + [System.Text.Encoding]::ASCII.GetBytes(" zzalpha y`n")))
+$res = Invoke-ScrubScan -Repo $aRepo -Denylist @($nfc, 'zzalpha')
+Assert-Coord 'SG4 a file that is not valid UTF-8 is read as Windows-1252 too: its accented entry hits, its ASCII entry hits once, and it is listed as not UTF-8' ($res.NonUtf8.Contains('ansi.txt') -and -not $res.NonUtf8.Contains('plain.txt') -and @(Get-ScrubHitsOf $res 'ansi.txt' 'denylist entry 1').Count -eq 1 -and @(Get-ScrubHitsOf $res 'ansi.txt' 'denylist entry 2').Count -eq 1) "nonutf8=$($res.NonUtf8 -join '|') hits=$(($res.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# File names are scanned as text (the hit names the entry by position, not by
+# its name, which holds the word).
+$fRepo = New-ScrubTestRepo 'names' @{ 'a.txt' = "fine`n"; 'notes-zzalpha.md' = "fine`n" }
+$res = Invoke-ScrubScan -Repo $fRepo -Denylist @('zzalpha')
+Assert-Coord 'SG4 a file name that holds a denylist entry hits, named by its position in the listing' (@(Get-ScrubHitsOf $res 'file name of listed entry 2' 'denylist entry 1').Count -eq 1 -and @($res.Hits | Where-Object { $_.File -like '*zzalpha*' }).Count -eq 0) "hits=$(($res.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+Assert-Coord 'SG4 file names do not count as scanned file versions (the accounting is unchanged)' ($res.Listed -eq 2 -and $res.Scanned.Count -eq 2 -and (Get-ScrubAccounted $res) -eq 2) "listed=$($res.Listed) scanned=$($res.Scanned.Count)"
 
 # Listed entries the scan cannot read as a file are accounted for and named, not
 # dropped: a submodule entry (a gitlink; the commit id is built at run time), a
@@ -1070,13 +1431,209 @@ Assert-Coord 'SG6 the new blob of a type change (symlink to regular file) is sca
 # a range that starts with a dash is a revision, never an option
 $dashRes = Invoke-ScrubHistory -Repo $hRepo -Range '--all'
 Assert-Coord 'SG6 a range that starts with a dash is refused by git, not run as an option' ((-not $dashRes.DiscoveryOk) -and $dashRes.Reason) ''
+# A range of several revisions (what the pre-push gate passes: the pushed tips,
+# then ^<sha> for each commit the remote already has).
+$tipNow = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+$multiRes = Invoke-ScrubHistory -Repo $hRepo -Range ("$tipNow ^$typeBase")
+Assert-Coord 'SG6 a range of several revisions split on spaces ("<tip> ^<base>") is the same range as <base>..<tip>' ($multiRes.DiscoveryOk -and $multiRes.Commits -eq $tRes.Commits -and @($multiRes.Hits | Where-Object { $_.File -like 'tlink*' }).Count -eq 1) "ok=$($multiRes.DiscoveryOk) reason=$($multiRes.Reason) commits=$($multiRes.Commits)/$($tRes.Commits)"
+$emptyOk = Invoke-ScrubHistory -Repo $hRepo -Range "$tipNow ^$tipNow" -AllowEmpty
+Assert-Coord 'SG6 -AllowEmpty: a range with no commit is discovered, with 0 commits (the gate pushes a tag or a ref name alone)' ($emptyOk.DiscoveryOk -and $emptyOk.Commits -eq 0) "ok=$($emptyOk.DiscoveryOk) reason=$($emptyOk.Reason)"
+# File names, author and committer lines, and tags (F7).
+$idBase = $tipNow
+Set-CoordFile $hRepo 'plan-zzbeta.md' "clean`n"
+Add-ScrubTestCommit $hRepo 'a clean message'
+Remove-Item -LiteralPath (Join-Path $hRepo 'plan-zzbeta.md')
+Add-ScrubTestCommit $hRepo 'drops it'
+$nameRes = Invoke-ScrubHistory -Repo $hRepo -Range ($idBase + '..HEAD') -Denylist @('zzbeta')
+Assert-Coord 'SG6 a file name in the history that holds a denylist entry hits, named by its blob, not by the name' (@($nameRes.Hits | Where-Object { $_.File -like 'file name of blob *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1 -and @($nameRes.Hits | Where-Object { $_.File -like '*zzbeta*' }).Count -eq 0) (($nameRes.Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+$idBase = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+$leakIdent = 'Zzbeta Q <q@example.invalid>'
+Invoke-HookTestGit $hRepo @('commit', '--quiet', '--allow-empty', '--author', $leakIdent, '-m', 'clean message')
+$idRes = Invoke-ScrubHistory -Repo $hRepo -Range ($idBase + '..HEAD') -Denylist @('zzbeta')
+Assert-Coord 'SG6 an author line that holds a denylist entry hits (no allowed identity given), the clean committer line does not' (@($idRes.Hits | Where-Object { $_.File -like 'author of commit *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1 -and @($idRes.Hits | Where-Object { $_.File -like 'committer of commit *' }).Count -eq 0) (($idRes.Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+$idRes = Invoke-ScrubHistory -Repo $hRepo -Range ($idBase + '..HEAD') -Denylist @('zzbeta') -AllowIdent @($leakIdent)
+Assert-Coord 'SG6 an author line that is exactly an allowed identity is let through' (@($idRes.Hits | Where-Object { $_.File -like 'author of commit *' }).Count -eq 0 -and $idRes.IdentAllowed -eq 1) "allowed=$($idRes.IdentAllowed) $(($idRes.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$idRes = Invoke-ScrubHistory -Repo $hRepo -Range ($idBase + '..HEAD') -Denylist @('zzbeta') -AllowIdent @('Zzbeta Q <other@example.invalid>')
+Assert-Coord 'SG6 the allowed name with another email is not an allowed identity: it hits' (@($idRes.Hits | Where-Object { $_.File -like 'author of commit *' }).Count -eq 1) (($idRes.Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+$idBase = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+Invoke-HookTestGit $hRepo @('-c', 'user.name=Zzbeta C', '-c', 'user.email=c@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'clean message')
+$idRes = Invoke-ScrubHistory -Repo $hRepo -Range ($idBase + '..HEAD') -Denylist @('zzbeta')
+Assert-Coord 'SG6 a committer line that holds a denylist entry hits' (@($idRes.Hits | Where-Object { $_.File -like 'committer of commit *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($idRes.Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+# An annotated tag: its name and message are read, the tagger line as an identity.
+Invoke-HookTestGit $hRepo @('tag', '-a', 'rel-zzbeta', '-m', 'a clean tag message', 'HEAD')
+Invoke-HookTestGit $hRepo @('tag', '-a', 'rel-msg', '-m', ('release ' + $hitLine), 'HEAD')
+$tagHead = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+$tagRes = Invoke-ScrubHistory -Repo $hRepo -Range "refs/tags/rel-zzbeta refs/tags/rel-msg ^$tagHead" -Denylist @('zzbeta') -AllowEmpty
+Assert-Coord 'SG6 an annotated tag is read with no new commit: its name hits the denylist and its message the path rule' ($tagRes.DiscoveryOk -and $tagRes.Tags -eq 2 -and @($tagRes.Hits | Where-Object { $_.File -like 'tag *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1 -and @($tagRes.Hits | Where-Object { $_.File -like 'tag *' -and $_.Rule -ceq $pathRule }).Count -eq 1) "ok=$($tagRes.DiscoveryOk) reason=$($tagRes.Reason) tags=$($tagRes.Tags) $(($tagRes.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$blobSha = Get-CoordGitOut $hRepo @('hash-object', '-w', $tgtFile)
+Invoke-HookTestGit $hRepo @('tag', 'on-blob', $blobSha)
+Invoke-HookTestGit $hRepo @('tag', '-a', 'on-blob-a', '-m', 'x', $blobSha)
+$bRes = Invoke-ScrubHistory -Repo $hRepo -Range 'refs/tags/on-blob' -AllowEmpty
+$baRes = Invoke-ScrubHistory -Repo $hRepo -Range 'refs/tags/on-blob-a' -AllowEmpty
+Assert-Coord 'SG6 a tag on a blob, plain or annotated, is not a pass: discovery fails, naming what it points at' ((-not $bRes.DiscoveryOk) -and $bRes.Reason -match 'blob' -and (-not $baRes.DiscoveryOk) -and $baRes.Reason -match 'blob') "plain: $($bRes.Reason) | annotated: $($baRes.Reason)"
+# Ref names (the gate passes the remote ref names a push writes).
+$refRes = Invoke-ScrubHistory -Repo $hRepo -Range "$tagHead ^$tagHead" -AllowEmpty -Denylist @('zzbeta') -RefNames @('refs/heads/fine', 'refs/heads/fix-zzbeta')
+Assert-Coord 'SG6 a pushed ref name that holds a denylist entry hits, named by its position' (@($refRes.Hits | Where-Object { $_.File -ceq 'pushed ref name 2' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1 -and @($refRes.Hits | Where-Object { $_.File -ceq 'pushed ref name 1' }).Count -eq 0) (($refRes.Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+$tagTwice = Invoke-ScrubHistory -Repo $hRepo -Range "refs/tags/rel-zzbeta refs/tags/rel-zzbeta ^$tagHead" -Denylist @('zzbeta') -AllowEmpty
+Assert-Coord 'SG6 a tag named twice is read once: one tag, one tagger line' ($tagTwice.Tags -eq 1 -and $tagTwice.Idents -eq 1) "tags=$($tagTwice.Tags) idents=$($tagTwice.Idents)"
+# A commit or tag object written byte for byte (git hash-object --literally), so
+# a header, a NUL or an encoding git would not write itself can be tested.
+function New-ScrubRawObject([string]$Repo, [string]$Type, [byte[]]$Bytes) {
+    $f = Join-Path $tmp ('raw-' + [Guid]::NewGuid().ToString('N').Substring(0, 6))
+    [System.IO.File]::WriteAllBytes($f, $Bytes)
+    return Get-CoordGitOut $Repo @('hash-object', '-t', $Type, '-w', '--literally', $f)
+}
+function Get-ScrubAscii([string]$S) { return [byte[]][System.Text.Encoding]::ASCII.GetBytes($S) }
+$rawTree = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD^{tree}')
+$rawParent = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+$rawHead = "tree $rawTree`nparent $rawParent`n"
+$rawIdent = "R Q <r@example.invalid> 1700000000 +0000`n"
+function Invoke-ScrubRaw([byte[]]$Bytes, [string[]]$Allow = $null) {
+    $sha = New-ScrubRawObject $hRepo 'commit' $Bytes
+    return Invoke-ScrubHistory -Repo $hRepo -Range "$sha ^$rawParent" -Denylist @('zzbeta', $nfc) -AllowIdent $Allow
+}
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "x-note zzbeta`n`nclean message`n"))
+Assert-Coord 'SG6 an extra commit header (not author or committer) that holds an entry hits' (@($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$r = Invoke-ScrubRaw ([byte[]]((Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "`nclean")) + @(0) + (Get-ScrubAscii " zzbeta`n")))
+Assert-Coord 'SG6 a commit message with a NUL byte cannot be read whole: it is listed as a NUL text, which a -History run fails' ($r.NulFiles.Count -eq 1 -and $r.NulFiles[0] -like 'commit message *') "nul=$($r.NulFiles -join '|') $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "encoding UTF-16LE`n`nmsg zzbeta`n"))
+Assert-Coord 'SG6 a commit message is read as stored, whatever its encoding header says (git would re-encode it away)' (@($r.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw ([byte[]]((Get-ScrubAscii ($rawHead + 'author Zzcaf')) + @(0xE9) + (Get-ScrubAscii (' <l@example.invalid> 1700000000 +0000' + "`n" + 'committer ' + $rawIdent + "`nclean message`n"))))
+Assert-Coord 'SG6 an author line in Windows-1252 (not valid UTF-8) is read as Windows-1252 too and hits' (@($r.Hits | Where-Object { $_.File -like 'author of commit *' -and $_.Rule -ceq 'denylist entry 2' }).Count -ge 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author Pub Q <pub@example.invalid>zzbeta 1700000000 +0000' + "`n" + 'committer ' + $rawIdent + "`nclean message`n")) @('Pub Q <pub@example.invalid>')
+Assert-Coord 'SG6 an allowed identity followed by other text before the date is not let through: the rest hits' (@($r.Hits | Where-Object { $_.File -like 'author of commit *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) "allowed=$($r.IdentAllowed) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$tagBytes = [byte[]]((Get-ScrubAscii ("object $rawParent`ntype commit`ntag rel-raw`ntagger " + $rawIdent + "`nrelease zzcaf")) + @(0xE9) + (Get-ScrubAscii "`n"))
+$rawTag = New-ScrubRawObject $hRepo 'tag' $tagBytes
+$r = Invoke-ScrubHistory -Repo $hRepo -Range "$rawTag ^$rawParent" -Denylist @('zzbeta', $nfc) -AllowEmpty
+Assert-Coord 'SG6 an annotated tag message in Windows-1252 (not valid UTF-8) is read as Windows-1252 too and hits' (@($r.Hits | Where-Object { $_.File -like 'tag *' -and $_.Rule -ceq 'denylist entry 2' }).Count -eq 1) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# git replace: the scan must read the objects a push sends, not their replacements.
+Invoke-HookTestGit $hRepo @('checkout', '--quiet', '-b', 'replaced', $rawParent)
+Set-CoordFile $hRepo 'rep.txt' "zzbeta here`n"
+Add-ScrubTestCommit $hRepo 'msg zzbeta'
+$repOrig = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+Set-CoordFile $hRepo 'rep.txt' "clean`n"
+Invoke-HookTestGit $hRepo @('add', '-A')
+Invoke-HookTestGit $hRepo @('commit', '--quiet', '--amend', '-m', 'clean')
+$repClean = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+Invoke-HookTestGit $hRepo @('replace', $repOrig, $repClean)
+try { $r = Invoke-ScrubHistory -Repo $hRepo -Range "$repOrig ^$rawParent" -Denylist @('zzbeta') }
+finally { Invoke-HookTestGit $hRepo @('replace', '-d', $repOrig); Invoke-HookTestGit $hRepo @('checkout', '--quiet', 'main') }
+Assert-Coord 'SG6 a commit with a replace ref is read as itself: its message and its blob hit' (@($r.Hits | Where-Object { $_.File -like 'commit message *' }).Count -eq 1 -and @($r.Hits | Where-Object { $_.File -like 'rep.txt*' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+# A message stored in a legacy encoding with a true encoding header: git's own
+# re-encoded reading (%B) is read as well as the stored bytes.
+$czech = 'zzq' + [string][char]0x010D
+$r = Invoke-ScrubHistory -Repo $hRepo -Range ((New-ScrubRawObject $hRepo 'commit' ([byte[]]((Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "encoding ISO-8859-2`n`nmsg zzq")) + @(0xE8) + (Get-ScrubAscii " real`n")))) + " ^$rawParent") -Denylist @($czech)
+Assert-Coord 'SG6 a message in ISO-8859-2 with a true encoding header hits through git''s re-encoded reading' (@($r.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+# A mergetag header (a merged signed tag): its tagger line is an identity, its
+# other lines are text.
+$mtIdent = 'Zzbeta Q <q@example.invalid>'
+$mt = $rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "mergetag object $rawParent`n type commit`n tag rel-mt`n tagger $mtIdent 1700000000 +0000`n `n release notes`n`nmerge it`n"
+$r = Invoke-ScrubRaw (Get-ScrubAscii $mt) @($mtIdent)
+Assert-Coord 'SG6 the tagger line inside a mergetag header is an identity: an allowed one is let through' ($r.Hits.Count -eq 0 -and $r.IdentAllowed -ge 1) "allowed=$($r.IdentAllowed) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$r = Invoke-ScrubRaw (Get-ScrubAscii $mt)
+Assert-Coord 'SG6 the tagger line inside a mergetag header hits as an identity when it is not allowed' (@($r.Hits | Where-Object { $_.File -like 'tagger of mergetag in commit *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead.TrimEnd("`n") + "`n zzbeta hidden under parent`n" + 'author ' + $rawIdent + 'committer ' + $rawIdent + "`nclean message`n"))
+Assert-Coord 'SG6 a continuation line under the parent header is read' (@($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "`nmsg zzbeta`n"))
+Assert-Coord 'SG6 a hit is reported once, not once per reading' (@($r.Hits | Where-Object { $_.File -like 'commit message *' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+# Round 5: a header whose value starts with a sha skips that sha only; every
+# other header value (type, a signature, a continuation line) is text.
+function Test-ScrubHeaderHit($R, [string]$Like = 'commit headers of *') { return (@($R.Hits | Where-Object { $_.File -like $Like -and $_.Rule -ceq 'denylist entry 1' }).Count -ge 1) }
+$mtPre = $rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent
+$mtTail = " tag rel-mt`n tagger R Q <r@example.invalid> 1700000000 +0000`n `n notes`n`nmerge it`n"
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent zzbeta`n type commit`n" + $mtTail))
+Assert-Coord 'SG6 text after the sha on a mergetag object line hits' (Test-ScrubHeaderHit $r) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n  zzbeta under object`n type commit`n" + $mtTail))
+Assert-Coord 'SG6 a continuation line under a mergetag object line hits' (Test-ScrubHeaderHit $r) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit zzbeta`n" + $mtTail))
+Assert-Coord 'SG6 a mergetag type line is text and hits' (Test-ScrubHeaderHit $r) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n gpgsig zzbeta`n" + $mtTail))
+Assert-Coord 'SG6 a gpgsig line inside a mergetag is text and hits' (Test-ScrubHeaderHit $r) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "gpgsig -----BEGIN PGP SIGNATURE-----`n Comment: zzbeta`n -----END PGP SIGNATURE-----`n`nclean message`n"))
+Assert-Coord 'SG6 a commit gpgsig header is text and hits' (Test-ScrubHeaderHit $r) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ("tree $rawTree zzbeta`nparent $rawParent`n" + 'author ' + $rawIdent + 'committer ' + $rawIdent + "`nclean message`n"))
+Assert-Coord 'SG6 text after the sha on a tree line is not a pass: git refuses the commit (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r)) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# The same in an annotated tag. git itself refuses a tag whose object, type or
+# order is not its own (fail-closed); a header after the tagger is kept.
+function Invoke-ScrubRawTag([string]$Head, [string]$Extra = '') {
+    $t = New-ScrubRawObject $hRepo 'tag' (Get-ScrubAscii ($Head + "tag rel-r5`ntagger " + $rawIdent + $Extra + "`nclean notes`n"))
+    return Invoke-ScrubHistory -Repo $hRepo -Range "$t ^$rawParent" -Denylist @('zzbeta') -AllowEmpty
+}
+$r = Invoke-ScrubRawTag "object $rawParent zzbeta`ntype commit`n"
+Assert-Coord 'SG6 text after the sha on a tag object line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * headers')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$r = Invoke-ScrubRawTag "object $rawParent`n zzbeta under object`ntype commit`n"
+Assert-Coord 'SG6 a continuation line under a tag object line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * headers')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$r = Invoke-ScrubRawTag "object $rawParent`ntype commit zzbeta`n"
+Assert-Coord 'SG6 text on a tag type line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * headers')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$r = Invoke-ScrubRawTag "object $rawParent`ntype commit`n" "gpgsig zzbeta`n"
+Assert-Coord 'SG6 a tag gpgsig header (after the tagger, where git keeps extra headers) is text and hits' ($r.DiscoveryOk -and (Test-ScrubHeaderHit $r 'tag * headers')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# A tag with a second object header: git follows the first, and so does the walk.
+$inner = New-ScrubRawObject $hRepo 'tag' (Get-ScrubAscii ("object $rawParent`ntype commit`ntag inner`ntagger " + $rawIdent + "`nnotes zzbeta`n"))
+$outer = New-ScrubRawObject $hRepo 'tag' (Get-ScrubAscii ("object $inner`ntype tag`ntag outer`ntagger " + $rawIdent + "object $rawParent`n`nclean notes`n"))
+$r = Invoke-ScrubHistory -Repo $hRepo -Range "$outer ^$rawParent" -Denylist @('zzbeta') -AllowEmpty
+Assert-Coord 'SG6 a tag with a second object header is walked by its first, as git does: the inner tag is read and hits' ($r.Tags -eq 2 -and (Test-ScrubHeaderHit $r 'tag *')) "ok=$($r.DiscoveryOk) tags=$($r.Tags) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# Codex round 1 (R6): a custom tag header's key is text and is never printed;
+# an allowed identity is exact (ordinal); pushed ref names part at ASCII spaces only.
+$r = Invoke-ScrubRawTag "object $rawParent`ntype commit`n" "x-zzbeta-key clean value`n"
+$printed = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+Assert-Coord 'SG6 the key of an extra tag header is text and hits, and the hit does not print it' ($r.DiscoveryOk -and (Test-ScrubHeaderHit $r 'tag *') -and ($printed -notmatch 'zzbeta')) "ok=$($r.DiscoveryOk) $printed"
+$shy = [string][char]0x00AD
+$r = Invoke-ScrubRaw ([byte[]]((Get-ScrubAscii ($rawHead + 'author Zz')) + $coordUtf8.GetBytes($shy) + (Get-ScrubAscii ('beta Q <q@example.invalid> 1700000000 +0000' + "`n" + 'committer ' + $rawIdent + "`nclean message`n")))) @('Zzbeta Q <q@example.invalid>')
+Assert-Coord 'SG6 an identity that differs from an allowed one only by a soft hyphen is not allowed (ordinal match) and hits' ($r.IdentAllowed -eq 0 -and (Test-ScrubHeaderHit $r 'author of commit *')) "allowed=$($r.IdentAllowed) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$nbsp = [string][char]0x00A0
+$refList = Get-ScrubPushRefList ('refs/heads/ok refs/tags/zzr6a' + $nbsp + 'zzr6b')
+$r = Invoke-ScrubHistory -Repo $hRepo -Range "$rawParent ^$rawParent" -AllowEmpty -Denylist @('zzr6a zzr6b') -RefNames $refList
+Assert-Coord 'SG6 a pushed ref name with a no-break space is one name: a two-word entry across it hits' ($refList.Count -eq 2 -and (Test-ScrubHeaderHit $r 'pushed ref name 2')) "refs=$($refList.Count) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# The self file is matched by path ordinally: a path that differs from it by a
+# soft hyphen keeps its pattern rules.
+Invoke-HookTestGit $hRepo @('checkout', '--quiet', '-b', 'selfshy', $rawParent)
+$shyRel = 'tests/scrub.test.p' + $shy + 's1'
+Set-CoordFile $hRepo $shyRel ('see ' + 'FU' + '-12' + "`n")
+Add-ScrubTestCommit $hRepo 'a look-alike self file'
+$shyTip = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+Invoke-HookTestGit $hRepo @('checkout', '--quiet', 'main')
+$r = Invoke-ScrubHistory -Repo $hRepo -Range "$shyTip ^$rawParent" -SelfRel $selfName
+Assert-Coord 'SG6 a path that differs from the self file only by a soft hyphen is not the self file: its pattern rules run and hit' (@($r.Hits | Where-Object { $_.Rule -ceq 'internal follow-up number' }).Count -eq 1) "ok=$($r.DiscoveryOk) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# Codex round 2: the work-tree scan matches the self file ordinally too, and a
+# pattern-rule hit whose matched text holds a denylist entry prints no text.
+$shyWt = New-ScrubTestRepo 'selfshy-wt' @{ $shyRel = ('see ' + 'FU' + '-12' + "`n") }
+$r = Invoke-ScrubScan -Repo $shyWt -SelfRel $selfName
+Assert-Coord 'SG4 a work-tree path that differs from the self file only by a soft hyphen keeps its pattern rules' (@($r.Hits | Where-Object { $_.Rule -ceq 'internal follow-up number' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$ph = @(Find-ScrubHits -Path 'n.txt' -Lines @('see /home/zzbeta/x') -Denylist @('zzbeta'))
+$phText = (($ph | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+Assert-Coord 'SG2 a pattern hit whose matched text holds a denylist entry is reported without its text' (@($ph | Where-Object { $_.Rule -like 'user home path*' }).Count -eq 1 -and $phText -notmatch 'zzbeta') $phText.Replace('zzbeta', '<entry>')
+# %B is asked for in UTF-8: i18n.logOutputEncoding does not change what is read.
+Invoke-HookTestGit $hRepo @('config', 'i18n.logOutputEncoding', 'ISO-8859-2')
+try { $r = Invoke-ScrubHistory -Repo $hRepo -Range ((New-ScrubRawObject $hRepo 'commit' ([byte[]]((Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "encoding ISO-8859-2`n`nmsg zzq")) + @(0xE8) + (Get-ScrubAscii " log`n")))) + " ^$rawParent") -Denylist @($czech) }
+finally { Invoke-HookTestGit $hRepo @('config', '--unset', 'i18n.logOutputEncoding') }
+Assert-Coord 'SG6 a legacy-encoded message hits through %B under i18n.logOutputEncoding=ISO-8859-2' (@($r.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+# The mergetag head ends at its first truly empty line: a line that holds only
+# a zero-width space does not end it (a guard row: the culture-sensitive split
+# of 3c961e6 passed it too; the split is ordinal now all the same).
+$zw = [string][char]0x200B
+$r = Invoke-ScrubRaw ([byte[]]((Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n tag rel-zw`n ")) + $coordUtf8.GetBytes($zw) + (Get-ScrubAscii "`n tagger $mtIdent 1700000000 +0000`n `n notes`n`nmerge it`n"))) @($mtIdent)
+Assert-Coord 'SG6 a zero-width line inside a mergetag head does not end it: the allowed tagger after it is still an identity' ($r.Hits.Count -eq 0 -and $r.IdentAllowed -ge 1) "allowed=$($r.IdentAllowed) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# The end dedupe: an author line that is not valid UTF-8 is read twice (UTF-8,
+# Windows-1252); a hit both readings find is one hit.
+$r = Invoke-ScrubRaw ([byte[]]((Get-ScrubAscii ($rawHead + 'author Zzbeta ')) + @(0xE9) + (Get-ScrubAscii (' <l@example.invalid> 1700000000 +0000' + "`n" + 'committer ' + $rawIdent + "`nclean message`n"))))
+Assert-Coord 'SG6 a hit both readings of an author line find is reported once' (@($r.Hits | Where-Object { $_.File -like 'author of commit *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
 
 # the real range, when the run names one
 if ($History) {
-    $real = Invoke-ScrubHistory -Repo $repoRoot -Range $History -SelfRel $selfName -Denylist $denylist
+    # Allowed identities: exact "Name <email>" author, committer and tagger
+    # lines (the public ones), from the private file this variable names. Unset:
+    # every identity line is scanned. Set to a missing or empty file: a broken
+    # setup, a FAIL.
+    $identVar = [string]$env:TRACKSTEWARD_SCRUB_ALLOW_IDENT
+    $allowIdent = Read-ScrubIdentAllow $identVar
+    if ($identVar -and -not $allowIdent) { Assert-Coord 'SG6 allowed identities: TRACKSTEWARD_SCRUB_ALLOW_IDENT is set, but the file is missing or holds no entry' $false 'fix the path or the file' }
+    $pushRefList = Get-ScrubPushRefList $PushRefs
+    $real = Invoke-ScrubHistory -Repo $repoRoot -Range $History -SelfRel $selfName -Denylist $denylist -AllowIdent $allowIdent -RefNames $pushRefList -AllowEmpty:$AllowEmptyRange
     Assert-Coord "SG6 history discovery: git lists the commits of $History" $real.DiscoveryOk $real.Reason
     if ($real.DiscoveryOk) {
-        Write-Host "(SG6) no private content in $($real.Commits) commits and $($real.Blobs) blob versions of $History"
+        Write-Host "(SG6) no private content in $($real.Commits) commits, $($real.Tags) annotated tags, $($real.Idents) identity lines ($($real.IdentAllowed) allowed), $($pushRefList.Count) pushed ref names and $($real.Blobs) blob versions of $History"
+        if (-not $identVar) { Write-Host '(SG6) TRACKSTEWARD_SCRUB_ALLOW_IDENT is unset: every author, committer and tagger line is scanned, none is let through' }
+        if ($real.NonUtf8.Count -gt 0) { Write-Host "(SG6) read as Windows-1252 too (not valid UTF-8): $($real.NonUtf8.Count) version(s)" }
         # The one id that earlier versions of coord-handoff.ps1 wrote in a comment as an example of an
         # id followed by a note: 1234abcd is not a session id, and the tip no longer holds it. Only this exact text,
         # in a blob of that script or in the message of the commit that explains it, is let through.
@@ -1087,6 +1644,9 @@ if ($History) {
         }
         if ($denylist) {
             $hs = @($real.Hits | Where-Object { $_.Rule -like 'denylist entry*' } | ForEach-Object { Format-ScrubHit $_ })
+            if (@($real.Hits | Where-Object { $_.Rule -like 'denylist entry*' -and $_.File -match '^(author|committer|tagger) of ' }).Count -gt 0) {
+                $hs += 'an identity line hit: if it is a public identity of the maintainer, add its exact "Name <email>" to the file TRACKSTEWARD_SCRUB_ALLOW_IDENT names'
+            }
             Assert-Coord "SG6 no denylist entry ($($denylist.Count) entries) in the history" ($hs.Count -eq 0) ($hs -join "`n")
         }
         else { Write-ScrubDenylistAbsent 'SG6 history denylist rows' }
@@ -1096,11 +1656,13 @@ if ($History) {
             Assert-Coord "SG6 no hex token that is a commit of the $($histRepoRule.Usable) listed repo(s) in the history" ($hs.Count -eq 0) ($hs -join "`n")
         }
         else { Write-ScrubUnchecked 'SG6 history commit-sha rows' 'TRACKSTEWARD_SCRUB_REPOS is unset, or none of its entries is the top level of a git repo' }
-        if ($real.NulFiles.Count -gt 0) { Write-ScrubUnchecked 'SG6 history blobs with NUL bytes and no BOM' ('not scanned: ' + ($real.NulFiles -join ', ')) }
-        if ($real.Unreadable.Count -gt 0) { Write-ScrubUnchecked 'SG6 history blobs git could not read' ('not scanned: ' + ($real.Unreadable -join ', ')) }
+        # A -History run is a gate (the release gate, the pre-push gate): what it
+        # could not read is a FAIL, never an UNCHECKED that lets the push through.
+        Assert-Coord 'SG6 no history blob with NUL bytes and no BOM (a -History run reads every blob or fails)' ($real.NulFiles.Count -eq 0) ('not scanned: ' + ($real.NulFiles -join ', '))
+        Assert-Coord 'SG6 nothing in the history git could not read (blobs, trees, commit messages, identity lines)' ($real.Unreadable.Count -eq 0) ('not scanned: ' + ($real.Unreadable -join ', '))
     }
 }
-else { Write-ScrubUnchecked 'SG6 the real history' 'no -History range was given (the release gate is -History origin/main..HEAD, or TRACKSTEWARD_SCRUB_HISTORY set to it)' }
+else { Write-ScrubUnchecked 'SG6 the real history' 'no -History range was given (the release gate is -History origin/main..HEAD right after a git fetch, or TRACKSTEWARD_SCRUB_HISTORY set to it)' }
 
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 Write-CoordUncheckedSummary

@@ -1,0 +1,108 @@
+#!/bin/sh
+# pre-push: the private-name gate. Runs this repo's scrub suite
+# (tests/scrub.test.ps1) once per push, with -History over the commits the push
+# sends that the remote does not already advertise, and with the remote ref names
+# the push writes. That run reads those commits as stored (no replace refs):
+# every message, header (author, committer and a mergetag's tagger as
+# identities; a signature as text; only the sha a tree, parent or object line
+# starts with is skipped), file name and
+# blob they add or change, every annotated tag the push sends (its headers,
+# tagger and message) and every pushed ref name, and checks them against the
+# private denylist (SG6). Any failing row refuses the push, and so does a
+# missing denylist: a -History run fails without one (set
+# TRACKSTEWARD_SCRUB_DENYLIST to the private denylist file). An object or blob
+# the run cannot read refuses it too. The suite's work-tree rows (SG5) run as
+# well, over the work tree of the checkout this hook's suite lives in (for a
+# worktree push under an absolute core.hooksPath, the main checkout, not the
+# worktree), and a failing one also refuses.
+#
+# On only where core.hooksPath names this folder (README: set it to the absolute
+# path of the main checkout's .githooks, so a worktree without this file is
+# covered too). Windows only, as the scripts are (it starts powershell.exe).
+# `git push --no-verify` skips it, as it skips every pre-push hook. A deletion
+# is never scanned.
+#
+# Per ref, before any scan: a deletion is skipped. A ref on something that is
+# not a commit (a tag on a blob or a tree) is refused. A ref whose remote sha
+# this clone does not have (a forced push over a commit it has not seen) is
+# refused: fetch first.
+# Then one scan for the whole push: the pushed tips, minus every commit the
+# remote advertises (git ls-remote on the push URL) that this clone has. The
+# local tracking refs are not used: a stale one (a remote rewound behind it)
+# would hide commits the remote no longer has. A push URL that git's url
+# rewriting (insteadOf) would send ls-remote somewhere else is refused, since
+# the advertisement would then come from another remote.
+url="$2"
+# The hook's own git calls read objects as stored, as the suite does.
+GIT_NO_REPLACE_OBJECTS=1
+export GIT_NO_REPLACE_OBJECTS
+hookdir=$(cd "$(dirname "$0")" && { pwd -W 2>/dev/null || pwd; })
+suite="$hookdir/../tests/scrub.test.ps1"
+status=0
+tips=""
+excl=""
+refs=""
+nrefs=0
+while read -r lref lsha rref rsha; do
+    case "$lsha" in
+        *[!0]*) ;;
+        *) echo "pre-push: $rref: a deletion, nothing to scan"; continue ;;
+    esac
+    type=$(git cat-file -t "$lsha" 2>/dev/null)
+    peeled=$(git rev-parse -q --verify "$lsha^{commit}" 2>/dev/null)
+    if [ -z "$peeled" ]; then
+        echo "pre-push: refused $rref: $lsha is not a commit, nor a tag of one (it is a ${type:-missing object})" >&2
+        status=1
+        continue
+    fi
+    case "$rsha" in
+        *[!0]*)
+            if ! git cat-file -e "$rsha" 2>/dev/null; then
+                echo "pre-push: refused $rref: the remote has $rsha, which this clone does not (fetch first)" >&2
+                status=1
+                continue
+            fi
+            if old=$(git rev-parse -q --verify "$rsha^{commit}" 2>/dev/null); then excl="$excl ^$old"; fi
+            ;;
+    esac
+    tips="$tips $lsha"
+    refs="$refs $rref"
+    nrefs=$((nrefs + 1))
+done
+if [ "$status" -ne 0 ]; then exit "$status"; fi
+if [ -z "$tips" ]; then exit 0; fi
+if [ "$(git ls-remote --get-url "$url" 2>/dev/null)" != "$url" ]; then
+    echo "pre-push: refused the push: git ls-remote --get-url failed, or git rewrites the push URL for ls-remote (url.*.insteadOf), so its answer might not come from the remote this push goes to" >&2
+    exit 1
+fi
+if ! adv=$(git ls-remote "$url" 2>/dev/null); then
+    # The URL is not printed: it can carry credentials.
+    echo "pre-push: refused the push: git ls-remote on the push URL failed, so what the remote already has is unknown" >&2
+    exit 1
+fi
+# Every advertised object this clone has, peeled to a commit; "missing" lines
+# (objects this clone does not have) are dropped.
+have=$(printf '%s\n' "$adv" | cut -f1 | grep -E '^[0-9a-f]+$' | sort -u | sed 's/$/^{commit}/' \
+    | git cat-file --batch-check='%(objectname)' 2>/dev/null | grep -E '^[0-9a-f]+$' | sort -u | sed 's/^/^/' | tr '\n' ' ')
+range=$(echo $tips $excl $have)
+if ! n=$(git rev-list --count $range 2>/dev/null); then
+    echo "pre-push: refused the push: git cannot read the range $range" >&2
+    exit 1
+fi
+echo "pre-push: scanning $n commit(s) and $nrefs ref name(s) with the scrub suite (-History over the pushed tips, minus what the remote has)"
+out=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$suite" -History "$range" -PushRefs "$(echo $refs)" -AllowEmptyRange </dev/null 2>&1)
+code=$?
+# What the run could not check is shown on success too.
+printf '%s\n' "$out" | grep -E '^  UNCHECKED: ' >&2
+if [ "$code" -ne 0 ]; then
+    fails=$(printf '%s\n' "$out" | grep -E '^  FAIL: |^    ')
+    if [ -n "$fails" ]; then
+        printf '%s\n' "$fails" >&2
+    else
+        echo "pre-push: the scrub suite printed no FAIL line; its last lines:" >&2
+        printf '%s\n' "$out" | tail -n 20 >&2
+    fi
+    echo "pre-push: refused the push: the scrub suite failed (exit $code). A failing row can be a history row (SG6, what the push sends) or a work-tree row (SG5, the files of the checkout at $hookdir/..)" >&2
+    exit 1
+fi
+exit 0
