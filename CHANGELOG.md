@@ -25,46 +25,64 @@
 
 - **Scrub: a -History run reads more, and lets nothing through unread.** In a `-History` run a blob with NUL bytes and
   no BOM (a UTF-16 file without one), and anything git could not read (a blob, a tree, a commit message, a commit's
-  identity lines), is now a FAIL; it was an UNCHECKED line, so a gate run passed it. The history scan now also reads:
-  file names (once per path, the hit named by its blob, never by the name); author and committer lines; annotated
-  tags in the range (name, message, tagger line; a tag chain is followed, and a tag that does not end on a commit fails
-  discovery); and, with `-PushRefs`, the ref names a push writes. The range may be several revisions parted by spaces
+  identity lines), is now a FAIL; it was an UNCHECKED line, so a gate run passed it. Commits and tags are read as
+  stored (`git cat-file`, and every git call of the suite passes `--no-replace-objects`, so a `git replace` ref no
+  longer makes the scan read a clean stand-in while the push sends the original): the message as a file is read (a
+  NUL byte in it is a FAIL; an `encoding` header does not change what is read). The history scan now also reads:
+  file names (once per path, the hit named by its blob, never by the name); author and committer lines and every
+  other commit header but `tree`, `parent` and the signature (`mergetag` included); annotated tags in the range (their
+  headers, tagger line and message; a tag chain is followed, and a tag that does not end on a commit fails discovery);
+  and, with `-PushRefs`, the ref names a push writes. Identity and other header lines that are not valid UTF-8 are read
+  as Windows-1252 too. The range may be several revisions parted by spaces
   (`<tip> ^<sha> ...`), and `-AllowEmptyRange` lets a range with no commit through discovery (a tag or a ref name pushed
   alone). The work-tree scan (SG5) reads file names too, named by their position in the listing.
 
 - **Scrub: allowed identities.** Every commit's author and committer line carries a name, and the maintainer's public
   author name holds a denylist entry on purpose. An identity line (`Name <email>`) that is exactly one of the lines of
   the private file `TRACKSTEWARD_SCRUB_ALLOW_IDENT` names is let through; every other identity line is scanned like any
-  text, so a commit made with a personal name or email fails. Unset: every identity line is scanned and none is let
+  text, so a commit made with a personal name or email fails. The identity is everything before the trailing time
+  and zone, so text between the `>` and the time is part of it. Unset: every identity line is scanned and none is let
   through. Set to a missing or empty file: a FAIL. The file is private and lives outside this repo, next to the
   denylist.
 
-- **Scrub: a name wrapped across lines, NFD text and ANSI text.** The denylist used to be matched line by line, so a
-  two-word name hard-wrapped onto the next line was missed. It is now matched over the whole text, the words of an entry
-  parted by any run of white space and comment markers (`# > * / ; -`), at most one hit per line and entry. Text and
-  entries are NFC-normalised, so a letter written with a combining mark matches its one-code-point form. A file that is
-  not valid UTF-8 (an ANSI file) is read as Windows-1252 as well, a hit found in both readings reported once.
+- **Scrub: a name wrapped across lines, other Unicode forms and ANSI text.** The denylist used to be matched line by
+  line, so a two-word name hard-wrapped onto the next line was missed. It is now matched over the whole text, the words
+  of an entry parted by any run of white space, comment markers (`# > * / ;`) and the joiners `- . _ ,` (an email local
+  part, a snake_case name, a "Surname, Given" list), at most one hit per line and entry; words run together (CamelCase)
+  are not matched. Text and entries are NFKC-normalised, so a letter written with a combining mark matches its
+  one-code-point form and fullwidth letters match ASCII, and zero-width characters and soft hyphens inside a word are
+  removed first. A file that is not valid UTF-8 (an ANSI file) is read as Windows-1252 as well; a denylist hit found in
+  both readings is reported once (a pattern-rule hit whose matched text differs between them, twice).
 
 - **Pre-push gate**: `.githooks/pre-push` runs `tests\scrub.test.ps1 -History` once per push, over the pushed tips
   minus every commit the remote advertises (`git ls-remote` on the push URL) that this clone has, with the pushed ref
-  names (`-PushRefs`). So a private name in a commit message, an author or committer line, a file name or any file
-  version those commits add or change, in an annotated tag or in a pushed ref name refuses the push before it leaves
-  the machine. Any failing row of that run refuses it (a work-tree row of the checkout included), and so does a missing
-  denylist. Refused before any scan: a ref on something that is not a commit (a tag on a blob), and a forced push over
-  a remote commit this clone does not have (fetch first). A deletion is not scanned. The local tracking refs are not
+  names (`-PushRefs`). So a private name in a commit message or header, an author or committer line, a file name or
+  any file version those commits add or change, in an annotated tag or in a pushed ref name refuses the push before it
+  leaves the machine. Any failing row of that run refuses it, and so does a missing denylist; that includes a work-tree
+  row (SG5), which reads the files of the checkout the hook's suite lives in (for a worktree push under the absolute
+  `core.hooksPath`, the main checkout, not the worktree). Refused before any scan: a ref on something that is not a commit (a tag on a blob), and a forced push over
+  a remote commit this clone does not have (fetch first), and a push URL that `url.*.insteadOf` would rewrite for
+  `ls-remote` (the advertisement would come from another remote). The hook's own git calls ignore replace refs too. A
+  deletion is not scanned. The local tracking refs are not
   used: a stale `<remote>/HEAD` (a remote rewound behind it, as after this release's history rewrite) would hide the
   commits the remote no longer has. UNCHECKED lines of the run are printed on success too; when the run fails without a
   FAIL line, its last 20 lines are printed. On only where `core.hooksPath` names the `.githooks` folder (see the README:
   the absolute path of the main checkout's folder, so a worktree is covered too); `--no-verify` skips it; Windows only
   (it starts `powershell.exe`); about 20 s per push here, and no timeout of its own. New suite
-  `tests/hooks/prepush.test.ps1` (P0-P15, S1-S3, real pushes into a bare repo from a copy of the repo with a throwaway
+  `tests/hooks/prepush.test.ps1` (P0-P17, S1-S3, real pushes into a bare repo from a copy of the repo with a throwaway
   denylist). Seen red: the hook absent (P0-P7, before it existed); the first version of the hook on P5, P8, P9, P10 and
-  P11. Mutations seen red: the hook ignoring a failed scan (P1, P2, P4, P7), a `-History` run no longer requiring the
+  P11; the second on P16 and P17, and its scrub suite on the new SG2 joiner and NFKC rows and the SG6 rows for a tag
+  read twice, an extra commit header, a NUL in a message, Windows-1252 identity and tag text, text after an allowed
+  identity and a replace ref. Mutations seen red: the hook ignoring a failed scan (P1, P2, P4, P7), a `-History` run no longer requiring the
   denylist (SG2, P4), the hook reading only the first pushed ref (P12), the fetch-first check removed (P13), an
   identity allowed by its name alone (SG6), the tag type check removed (SG6), no Windows-1252 reading (SG4), no NFC
-  normalisation (SG2), and history file names not scanned (SG6). Not covered by a row: a remote that advertises so many commits that the `-History` argument
-  passes the Windows command-line limit (the suite then does not start and the push is refused; reasoned), and a stalled
-  scan. `.gitattributes` checks `.githooks/*` out with LF.
+  normalisation (SG2), and history file names not scanned (SG6). Not covered by a row (reasoned): a remote that
+  advertises so many commits (about 760, which a busy GitHub repo's `refs/pull/*` can reach) that the range passes the
+  Windows command-line limit (the hook's own `git rev-list` fails first and the push is refused, for good, until the
+  range is passed another way); an `ls-remote` that fails (refused); a relative local push URL typed from a
+  subfolder (`ls-remote` resolves it from the top level: refused, or, if it names another repo, wrong exclusions);
+  grafts; file names in bytes that are not valid UTF-8; a range with a submodule change (a gitlink is unreadable, so
+  such a push is always refused); and a stalled scan. `.gitattributes` checks `.githooks/*` out with LF.
 
 - **Fix (Q24, F9)**: the SessionStart anchor is no longer dropped when the host is slow. `coord-scope-guard.ps1` refused
   to write the anchor when its stopwatch, which starts on the script's first line and so also counts the stdin wait,

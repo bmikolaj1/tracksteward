@@ -32,14 +32,20 @@
 # P14 a clean commit on a branch whose name holds the entry: refused
 # P15 a clean commit whose author line holds the entry: refused; with that exact
 #     identity in the file TRACKSTEWARD_SCRUB_ALLOW_IDENT names: pushed
+# P16 a commit that a replace ref (git replace) hides behind a clean one: scanned
+#     as itself and refused
+# P17 a push URL that url.<mirror>.insteadOf would rewrite for ls-remote (a
+#     pushInsteadOf keeps the push itself on the real remote): refused before
+#     any scan
 # S1  the copy's scrub suite run without -History, TRACKSTEWARD_SCRUB_DENYLIST
 #     unset: exit 0 with a loud NOT CHECKED line (a clone without the private file)
 # S2  the same, the variable set to a missing file: exit 1
 # S3  the same as S1 with -Strict: exit 1
-# Not covered: a remote that advertises so many commits that the -History argument
-# passes the Windows command-line limit (the scrub suite then does not start, its
-# exit is not 0 and the push is refused; reasoned, no row), and a stalled scan (no
-# timeout of its own; git waits).
+# Not covered (reasoned, no row): a remote that advertises so many commits that
+# the range passes the Windows command-line limit (the hook's own git rev-list
+# fails first and the push is refused); an ls-remote that fails (refused); a
+# relative local push URL typed from a subfolder; and a stalled scan (no timeout
+# of its own; git waits).
 #
 # Exit 0 = every row passed; exit 1 = a row failed.
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\hooks\prepush.test.ps1
@@ -218,6 +224,30 @@ try {
     [System.IO.File]::WriteAllText($allow, "# allowed identities`n$ident`n", $coordUtf8)
     $r = Invoke-TestPush @('origin', 'p15') -AllowIdentFile $allow
     Assert-Coord 'P15 the same push with that exact identity in the allowed-identity file is pushed' (($r.Code -eq 0) -and ((Get-RemoteRef 'refs/heads/p15') -ceq (Get-LocalRef 'p15'))) (Format-Push $r)
+    Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
+
+    Write-Host '(P16) a replace ref'
+    New-TestCommit 'p16' $base "replaced $entry" @{ 'r16.md' = "a note about $entry`n" }
+    $p16 = Get-LocalRef 'p16'
+    New-TestCommit 'p16clean' $base 'clean' @{ 'r16.md' = "nothing private`n" }
+    Invoke-HookTestGit $work @('replace', $p16, (Get-LocalRef 'p16clean'))
+    try { $r = Invoke-TestPush @('origin', 'p16') }
+    finally { Invoke-HookTestGit $work @('replace', '-d', $p16) }
+    Assert-Coord 'P16 a commit with a replace ref (git replace) is scanned as itself and refused' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p16') -and ($r.Out -match 'denylist entry 1')) (Format-Push $r)
+
+    Write-Host '(P17) a push URL that insteadOf rewrites for ls-remote'
+    $mirror = Join-Path $tmp 'mirror.git'
+    Invoke-HookTestGit $tmp @('init', '--bare', '--quiet', 'mirror.git')
+    Invoke-HookTestGit $work @('push', '--quiet', '--no-verify', $mirror, 'p3:refs/heads/p17')
+    Invoke-HookTestGit $work @('config', "url.$mirror.insteadOf", $origin)
+    Invoke-HookTestGit $work @('config', "url.$origin.pushInsteadOf", $origin)
+    New-TestCommit 'p17' 'p3' 'clean on p3' @{ 'c17.md' = "nothing private`n" }
+    try { $r = Invoke-TestPush @('origin', 'p17') }
+    finally {
+        Invoke-HookTestGit $work @('config', '--unset', "url.$mirror.insteadOf")
+        Invoke-HookTestGit $work @('config', '--unset', "url.$origin.pushInsteadOf")
+    }
+    Assert-Coord 'P17 a push whose URL git would rewrite for ls-remote (insteadOf a mirror) is refused before any scan' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p17') -and ($r.Out -match 'insteadOf') -and ($r.Out -notmatch 'scanning')) (Format-Push $r)
     Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
 
     Write-Host '(S1-S3) the copy''s scrub suite with no -History'
