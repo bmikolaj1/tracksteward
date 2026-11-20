@@ -12,25 +12,59 @@
   new history: 136 passed, 0 failed. Pull-request refs on GitHub (`refs/pull/*/head`) are read-only and still point at
   the old commits.
 
-- **Scrub: an absent denylist is UNCHECKED for others, FAIL for the maintainer and the release gate.** The private
-  denylist is not in this repo, so a clone without it used to fail `tests\scrub.test.ps1` outside GitHub Actions (seen on
-  a fresh clone: 12 of 13 suites passed). Now an absent denylist (variable unset, file missing or empty) is a FAIL when
-  `TRACKSTEWARD_SCRUB_DENYLIST` is set to anything (a broken setup) and in every `-History` run (the release gate,
-  `TRACKSTEWARD_SCRUB_HISTORY` included, and the new pre-push gate); otherwise the denylist rows print a loud
-  `UNCHECKED: ... NOT CHECKED: denylist absent ...` line, not a pass, and `-Strict` still makes that a FAIL. CI is
-  unchanged in effect (it sets neither the variable nor a range). New SG2 rows pin the three cases; the unset-variable
-  row was red before. Not pinned by a row: the text of the three messages and which one prints (read).
+- **Scrub: an absent denylist is UNCHECKED for others, FAIL when the variable is set and in the release gate.** The
+  private denylist is not in this repo, so a clone without it used to fail `tests\scrub.test.ps1` outside GitHub Actions
+  (seen on a fresh clone: 12 of 13 suites passed). Now an absent denylist (variable unset, file missing or empty) is a
+  FAIL when `TRACKSTEWARD_SCRUB_DENYLIST` is set to anything (a broken setup) and in every `-History` run (the release
+  gate, `TRACKSTEWARD_SCRUB_HISTORY` included, and the new pre-push gate); otherwise the denylist rows print a loud
+  `UNCHECKED: ... NOT CHECKED: denylist absent ...` line, not a pass, and `-Strict` still makes that a FAIL. A shell
+  without the variable reads UNCHECKED too, the maintainer's included. CI is unchanged in effect (it sets neither the
+  variable nor a range). New SG2 rows pin the three cases; the unset-variable row was red before. The pre-push suite
+  runs the copied scrub suite as a process for the three cases too (S1-S3: exit 0 with the NOT CHECKED line, exit 1,
+  exit 1).
 
-- **Pre-push gate**: `.githooks/pre-push` runs `tests\scrub.test.ps1 -History <range>` for every ref a push sends, over
-  the commits the remote does not have (`<remote sha>..<local sha>`; a new ref: `<remote>/HEAD..<local sha>`, or the
-  whole history with no `<remote>/HEAD`), so a private name in a commit message or in any file version those commits
-  add or change refuses the push before it leaves the machine. Any failing row of that run refuses it, and so does a
-  missing denylist. A deletion and a ref with no new commit (a tag on a pushed commit) are not scanned. On only with
-  `git config core.hooksPath .githooks`; `--no-verify` skips it; Windows only (it starts `powershell.exe`); about 20 s
-  per scanned ref here, and no timeout of its own. New suite `tests/hooks/prepush.test.ps1` (P0-P7, real pushes into a
-  bare repo from a copy of the repo with a throwaway denylist): red before the hook existed. Mutations seen red: the
-  hook ignoring a failed scan (P1, P2, P4, P7), and a `-History` run no longer requiring the denylist (SG2, P4). Not
-  covered by a row: a push with no `<remote>/HEAD` (reasoned). `.gitattributes` checks `.githooks/*` out with LF.
+- **Scrub: a -History run reads more, and lets nothing through unread.** In a `-History` run a blob with NUL bytes and
+  no BOM (a UTF-16 file without one), and anything git could not read (a blob, a tree, a commit message, a commit's
+  identity lines), is now a FAIL; it was an UNCHECKED line, so a gate run passed it. The history scan now also reads:
+  file names (once per path, the hit named by its blob, never by the name); author and committer lines; annotated
+  tags in the range (name, message, tagger line; a tag chain is followed, and a tag that does not end on a commit fails
+  discovery); and, with `-PushRefs`, the ref names a push writes. The range may be several revisions parted by spaces
+  (`<tip> ^<sha> ...`), and `-AllowEmptyRange` lets a range with no commit through discovery (a tag or a ref name pushed
+  alone). The work-tree scan (SG5) reads file names too, named by their position in the listing.
+
+- **Scrub: allowed identities.** Every commit's author and committer line carries a name, and the maintainer's public
+  author name holds a denylist entry on purpose. An identity line (`Name <email>`) that is exactly one of the lines of
+  the private file `TRACKSTEWARD_SCRUB_ALLOW_IDENT` names is let through; every other identity line is scanned like any
+  text, so a commit made with a personal name or email fails. Unset: every identity line is scanned and none is let
+  through. Set to a missing or empty file: a FAIL. The file is private and lives outside this repo, next to the
+  denylist.
+
+- **Scrub: a name wrapped across lines, NFD text and ANSI text.** The denylist used to be matched line by line, so a
+  two-word name hard-wrapped onto the next line was missed. It is now matched over the whole text, the words of an entry
+  parted by any run of white space and comment markers (`# > * / ; -`), at most one hit per line and entry. Text and
+  entries are NFC-normalised, so a letter written with a combining mark matches its one-code-point form. A file that is
+  not valid UTF-8 (an ANSI file) is read as Windows-1252 as well, a hit found in both readings reported once.
+
+- **Pre-push gate**: `.githooks/pre-push` runs `tests\scrub.test.ps1 -History` once per push, over the pushed tips
+  minus every commit the remote advertises (`git ls-remote` on the push URL) that this clone has, with the pushed ref
+  names (`-PushRefs`). So a private name in a commit message, an author or committer line, a file name or any file
+  version those commits add or change, in an annotated tag or in a pushed ref name refuses the push before it leaves
+  the machine. Any failing row of that run refuses it (a work-tree row of the checkout included), and so does a missing
+  denylist. Refused before any scan: a ref on something that is not a commit (a tag on a blob), and a forced push over
+  a remote commit this clone does not have (fetch first). A deletion is not scanned. The local tracking refs are not
+  used: a stale `<remote>/HEAD` (a remote rewound behind it, as after this release's history rewrite) would hide the
+  commits the remote no longer has. UNCHECKED lines of the run are printed on success too; when the run fails without a
+  FAIL line, its last 20 lines are printed. On only where `core.hooksPath` names the `.githooks` folder (see the README:
+  the absolute path of the main checkout's folder, so a worktree is covered too); `--no-verify` skips it; Windows only
+  (it starts `powershell.exe`); about 20 s per push here, and no timeout of its own. New suite
+  `tests/hooks/prepush.test.ps1` (P0-P15, S1-S3, real pushes into a bare repo from a copy of the repo with a throwaway
+  denylist). Seen red: the hook absent (P0-P7, before it existed); the first version of the hook on P5, P8, P9, P10 and
+  P11. Mutations seen red: the hook ignoring a failed scan (P1, P2, P4, P7), a `-History` run no longer requiring the
+  denylist (SG2, P4), the hook reading only the first pushed ref (P12), the fetch-first check removed (P13), an
+  identity allowed by its name alone (SG6), the tag type check removed (SG6), no Windows-1252 reading (SG4), no NFC
+  normalisation (SG2), and history file names not scanned (SG6). Not covered by a row: a remote that advertises so many commits that the `-History` argument
+  passes the Windows command-line limit (the suite then does not start and the push is refused; reasoned), and a stalled
+  scan. `.gitattributes` checks `.githooks/*` out with LF.
 
 - **Fix (Q24, F9)**: the SessionStart anchor is no longer dropped when the host is slow. `coord-scope-guard.ps1` refused
   to write the anchor when its stopwatch, which starts on the script's first line and so also counts the stdin wait,

@@ -1,60 +1,95 @@
 #!/bin/sh
-# pre-push: the private-name gate. For every ref a push sends, runs this repo's
-# scrub suite (tests/scrub.test.ps1) with -History over the commits the remote
-# does not have yet, so every commit message and every file version those commits
-# add or change is checked against the private denylist (SG6) before anything
-# leaves this machine. Any failing row of that run refuses the push, and so does
-# a missing denylist: a -History run fails without one (set
-# TRACKSTEWARD_SCRUB_DENYLIST to the private denylist file).
+# pre-push: the private-name gate. Runs this repo's scrub suite
+# (tests/scrub.test.ps1) once per push, with -History over the commits the push
+# sends that the remote does not already advertise, and with the remote ref names
+# the push writes. That run reads every commit message, author and committer
+# line, file name and blob those commits add or change, every annotated tag the
+# push sends (its name, message and tagger line) and every pushed ref name, and
+# checks them against the private denylist (SG6). Any failing row refuses the
+# push, and so does a missing denylist: a -History run fails without one (set
+# TRACKSTEWARD_SCRUB_DENYLIST to the private denylist file). A blob or object the
+# run cannot read refuses it too. The suite's work-tree rows (SG5, this checkout's
+# files) run as well, and a failing one also refuses.
 #
-# On only where `git config core.hooksPath .githooks` is set. Windows only, as
-# the scripts are (it starts powershell.exe). `git push --no-verify` skips it,
-# as it skips every pre-push hook.
+# On only where core.hooksPath names this folder (README: set it to the absolute
+# path of the main checkout's .githooks, so a worktree without this file is
+# covered too). Windows only, as the scripts are (it starts powershell.exe).
+# `git push --no-verify` skips it, as it skips every pre-push hook. A deletion
+# is never scanned.
 #
-# The range per ref:
-#   a deletion                    nothing to scan
-#   the remote has the ref        <remote sha>..<local sha> (a force-push too);
-#                                 a remote sha this clone does not have refuses
-#                                 the push (fetch first)
-#   a new ref                     <remote>/HEAD..<local sha>; with no
-#                                 <remote>/HEAD (a push to a URL) the local
-#                                 sha's whole history
-#   no commit in that range       nothing new to scan (a tag on a pushed commit)
-remote="$1"
+# Per ref, before any scan:
+#   a deletion                      nothing to scan
+#   a ref on something that is not  refused (a tag on a blob or a tree)
+#   a commit
+#   the remote ref's sha is missing refused (fetch first): a forced push over a
+#   here                            commit this clone has not seen
+# Then one scan for the whole push: the pushed tips, minus every commit the
+# remote advertises (git ls-remote) that this clone has. The local tracking refs
+# are not used: a stale one (a remote rewound behind it) would hide commits the
+# remote no longer has.
+url="$2"
 hookdir=$(cd "$(dirname "$0")" && { pwd -W 2>/dev/null || pwd; })
 suite="$hookdir/../tests/scrub.test.ps1"
 status=0
+tips=""
+excl=""
+refs=""
+nrefs=0
 while read -r lref lsha rref rsha; do
     case "$lsha" in
         *[!0]*) ;;
         *) echo "pre-push: $rref: a deletion, nothing to scan"; continue ;;
     esac
+    type=$(git cat-file -t "$lsha" 2>/dev/null)
+    peeled=$(git rev-parse -q --verify "$lsha^{commit}" 2>/dev/null)
+    if [ -z "$peeled" ]; then
+        echo "pre-push: refused $rref: $lsha is not a commit, nor a tag of one (it is a ${type:-missing object})" >&2
+        status=1
+        continue
+    fi
     case "$rsha" in
-        *[!0]*) range="$rsha..$lsha" ;;
-        *)
-            if git rev-parse -q --verify "refs/remotes/$remote/HEAD" >/dev/null 2>&1; then
-                range="refs/remotes/$remote/HEAD..$lsha"
-            else
-                range="$lsha"
+        *[!0]*)
+            if ! git cat-file -e "$rsha" 2>/dev/null; then
+                echo "pre-push: refused $rref: the remote has $rsha, which this clone does not (fetch first)" >&2
+                status=1
+                continue
             fi
+            if old=$(git rev-parse -q --verify "$rsha^{commit}" 2>/dev/null); then excl="$excl ^$old"; fi
             ;;
     esac
-    if ! n=$(git rev-list --count "$range" 2>/dev/null); then
-        echo "pre-push: refused $rref: git cannot read the range $range (fetch first)" >&2
-        status=1
-        continue
-    fi
-    if [ "$n" = 0 ]; then
-        echo "pre-push: $rref: nothing new to scan"
-        continue
-    fi
-    echo "pre-push: scanning $n commit(s) for $rref with the scrub suite (-History $range)"
-    out=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$suite" -History "$range" </dev/null 2>&1)
-    code=$?
-    if [ "$code" -ne 0 ]; then
-        printf '%s\n' "$out" | grep -E '^  FAIL: |^    ' >&2
-        echo "pre-push: refused $rref: the scrub suite failed (exit $code) over $range" >&2
-        status=1
-    fi
+    tips="$tips $lsha"
+    refs="$refs $rref"
+    nrefs=$((nrefs + 1))
 done
-exit $status
+if [ "$status" -ne 0 ]; then exit "$status"; fi
+if [ -z "$tips" ]; then exit 0; fi
+if ! adv=$(git ls-remote "$url" 2>/dev/null); then
+    echo "pre-push: refused the push: git ls-remote $url failed, so what the remote already has is unknown" >&2
+    exit 1
+fi
+# Every advertised object this clone has, peeled to a commit; "missing" lines
+# (objects this clone does not have) are dropped.
+have=$(printf '%s\n' "$adv" | cut -f1 | grep -E '^[0-9a-f]+$' | sort -u | sed 's/$/^{commit}/' \
+    | git cat-file --batch-check='%(objectname)' 2>/dev/null | grep -E '^[0-9a-f]+$' | sort -u | sed 's/^/^/' | tr '\n' ' ')
+range=$(echo $tips $excl $have)
+if ! n=$(git rev-list --count $range 2>/dev/null); then
+    echo "pre-push: refused the push: git cannot read the range $range" >&2
+    exit 1
+fi
+echo "pre-push: scanning $n commit(s) and $nrefs ref name(s) with the scrub suite (-History over the pushed tips, minus what the remote has)"
+out=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$suite" -History "$range" -PushRefs "$(echo $refs)" -AllowEmptyRange </dev/null 2>&1)
+code=$?
+# What the run could not check is shown on success too.
+printf '%s\n' "$out" | grep -E '^  UNCHECKED: ' >&2
+if [ "$code" -ne 0 ]; then
+    fails=$(printf '%s\n' "$out" | grep -E '^  FAIL: |^    ')
+    if [ -n "$fails" ]; then
+        printf '%s\n' "$fails" >&2
+    else
+        echo "pre-push: the scrub suite printed no FAIL line; its last lines:" >&2
+        printf '%s\n' "$out" | tail -n 20 >&2
+    fi
+    echo "pre-push: refused the push: the scrub suite failed (exit $code). A failing row can be a history row (SG6, what the push sends) or a work-tree row (SG5, this checkout's files)" >&2
+    exit 1
+fi
+exit 0
