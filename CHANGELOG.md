@@ -28,13 +28,21 @@
   identity lines), is now a FAIL; it was an UNCHECKED line, so a gate run passed it. Commits and tags are read as
   stored (`git cat-file`, and every scan git call passes `--no-replace-objects`, so a `git replace` ref no longer
   makes the scan read a clean stand-in while the push sends the original): the message as a file is read (a NUL byte
-  in it is a FAIL), and when an `encoding` header names another encoding than UTF-8, git's re-encoded reading (`%B`)
-  is read as well, so neither a false header nor a true legacy one hides a name. The history scan now also reads: file
-  names (once per path, the hit named by its blob, never by the name); author and committer lines and every other
-  commit header but the signature and the shas of `tree` and `parent` (a continuation line under them is read); a
-  `mergetag` header's tagger line as an identity and the rest of it as text; annotated tags in the range (their
-  headers but `object` and `type`, tagger line and message; a tag chain is followed, and a tag that does not end on a
-  commit fails discovery); and, with `-PushRefs`, the ref names a push writes. Each hit is reported once. When a
+  in it is a FAIL), and when an `encoding` header names another encoding than UTF-8, git's re-encoded reading (`%B`,
+  asked for in UTF-8, so `i18n.logOutputEncoding` does not change it) is read as well: a false header does not hide a
+  name, nor does a true legacy one git can convert (a header git cannot convert, such as one with a CR or a trailing
+  space after the name, or UTF-7, can still hide one; crafted only). The history scan now also reads: file names (once
+  per path, the hit named by its blob, never by the name); author and committer lines as identities and every other
+  commit header as text, a `gpgsig` signature header included, but for the sha a `tree` or `parent` line starts with
+  (only that sha is skipped: text after it and a continuation line are read); a `mergetag` header's tagger line as an
+  identity and the rest of it as text, its `type` and `gpgsig` lines included, but for the sha its `object` line
+  starts with; annotated tags in the range (every header, `type` and a `gpgsig` one included, but for the sha the
+  `object` line starts with; the tagger line and the message, a signed tag's PGP block in it included; a tag chain is
+  followed by each tag's first `object` header, as git follows it, and a tag that does not end on a commit fails
+  discovery); and, with `-PushRefs`, the ref names a push
+  writes. Hits that share a place (label, line, rule and text) are merged, so a hit two readings find is one hit;
+  header hits are numbered by line within their header's text, and a re-encoded message's hex tokens may be counted
+  twice for the commit-sha rule. When a
   commit's or tag's header block is not valid UTF-8 it is read as Windows-1252 too, as a whole, so a valid non-ASCII
   allowed identity in the same block also gets a Windows-1252 reading that is not allowed (a false refusal, not a
   miss). The range may be several revisions parted by spaces
@@ -80,15 +88,23 @@
   P11; the second on P16 and P17, and its scrub suite on the new SG2 joiner and NFKC rows and the SG6 rows for a tag
   read twice, an extra commit header, a NUL in a message, Windows-1252 identity and tag text, text after an allowed
   identity and a replace ref; the third's scrub suite on the plain-reading SG2 row and the SG6 rows for a true legacy
-  encoding, a mergetag tagger (allowed and not) and a continuation line under `parent`. Mutations seen red: the hook ignoring a failed scan (P1, P2, P4, P7), a `-History` run no longer requiring the
-  denylist (SG2, P4), the hook reading only the first pushed ref (P12), the fetch-first check removed (P13), an
+  encoding, a mergetag tagger (allowed and not) and a continuation line under `parent`; the fourth's scrub suite on
+  the SG6 rows for text after the sha on a mergetag `object` line and a continuation under it, a mergetag `type` and
+  `gpgsig` line, a commit `gpgsig` header, a tag `gpgsig` header, `%B` under `i18n.logOutputEncoding` and a tag with
+  a second `object` header (the walk followed the last one, so the tag git follows was never read). Mutations
+  seen red: the hook ignoring a failed scan (P1, P2, P4, P7), a `-History` run no longer requiring the
+  denylist (SG2, P4), the end dedupe of history hits removed (SG6), the hook reading only the first pushed ref (P12), the fetch-first check removed (P13), an
   identity allowed by its name alone (SG6), the tag type check removed (SG6), no Windows-1252 reading (SG4), no NFC
   normalisation (SG2), and history file names not scanned (SG6). Not covered by a row (reasoned): a remote that
   advertises so many commits (about 760, which a busy GitHub repo's `refs/pull/*` can reach) that the range passes the
   Windows command-line limit (the hook's own `git rev-list` fails first and the push is refused, for good, until the
   range is passed another way); an `ls-remote` that fails (refused); a host whose read path lags its write path (a
   replica could advertise a commit a rewind removed); grafts (the push then fails the remote's connectivity check);
-  the signature block of a commit or tag (`gpgsig`), which is not read; a commit sha of a listed repo in a tag name
+  a tree, parent or object line whose sha is in upper-case hex (git accepts it; the scan reads the whole value as
+  text, and a tag whose object is written so fails discovery: a false refusal of a crafted object, accepted); a
+  signature's base64 that happens to spell a short denylist entry as a whole word (a false refusal, not seen in the
+  real history); a header key that differs from a known one only by a character PowerShell's culture-aware `-ceq`
+  ignores (a soft hyphen), which is then read as that header (crafted only); a commit sha of a listed repo in a tag name
   (names take no hex tokens); file names in bytes that are not valid UTF-8; a range with a submodule change (a gitlink is unreadable, so
   such a push is always refused); and a stalled scan. `.gitattributes` checks `.githooks/*` out with LF.
 

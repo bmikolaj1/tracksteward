@@ -101,9 +101,10 @@
 #      FAIL). Commits and tags are read as stored (git cat-file; every scan git
 #      call passes --no-replace-objects): the message as a file is read, and
 #      git's re-encoded reading (%B) too when an encoding header names another
-#      encoding than UTF-8; every header is read but the signature, the shas of
-#      tree and parent and, in a tag, object and type; a mergetag's tagger is an
-#      identity. Not read: notes, grafts
+#      encoding than UTF-8 (asked for in UTF-8); every header is read, a
+#      signature (gpgsig) and a tag's type included, but for the sha a tree,
+#      parent or object line starts with; a mergetag's tagger is an identity.
+#      Not read: notes, grafts
 #      (.git/info/grafts), a lightweight tag's name unless it is pushed
 #      (-PushRefs), and file names in bytes that are not valid UTF-8
 #
@@ -519,12 +520,22 @@ function Get-ScrubHeaders([string]$Head) {
     $out = New-Object System.Collections.Generic.List[object]
     foreach ($ln in ($Head -split "`n")) {
         if (-not $ln) { continue }
-        if ($ln.StartsWith(' ') -and $out.Count -gt 0) { $out[$out.Count - 1].Value += "`n" + $ln.Substring(1); continue }
-        $sp = $ln.IndexOf(' ')
+        if ($ln.StartsWith(' ', [System.StringComparison]::Ordinal) -and $out.Count -gt 0) { $out[$out.Count - 1].Value += "`n" + $ln.Substring(1); continue }
+        $sp = $ln.IndexOf([char]' ')
         if ($sp -lt 0) { $out.Add([pscustomobject]@{ Key = $ln; Value = '' }) }
         else { $out.Add([pscustomobject]@{ Key = $ln.Substring(0, $sp); Value = $ln.Substring($sp + 1) }) }
     }
     return , $out.ToArray()
+}
+# The sha a tree, parent or object header starts with ('' when it starts with
+# none). Only that sha is ever skipped: the rest of the value (text after it on
+# its line, a continuation line) is text.
+$scrubShaStart = [regex]::new('^[0-9a-f]{40}(?:[0-9a-f]{24})?(?![0-9a-f])')
+function Get-ScrubShaStart([string]$Value) { return $scrubShaStart.Match($Value).Value }
+function Add-ScrubShaHeader {
+    param($Res, [string]$Label, [string]$Key, [string]$Value, [string[]]$Denylist)
+    $rest = $Value.Substring((Get-ScrubShaStart $Value).Length)
+    if ($rest.Trim()) { Add-ScrubTextHits $Res $Label ($Key + ' ' + $rest) $Denylist }
 }
 
 # The listed entries the scan accounted for: work-tree versions scanned, NUL
@@ -662,9 +673,11 @@ function Invoke-ScrubRepoRule {
 # (once per path), every commit as stored (git cat-file commit): its message
 # (with git's %B reading too under a non-UTF-8 encoding header), its author and
 # committer lines and a mergetag's tagger (an exact $AllowIdent identity is let
-# through, see Add-ScrubIdent) and every other header but the signature and the
-# shas of tree and parent; each hit once; every annotated tag a positive revision names (its headers, tagger
-# and message, along a tag chain), and the $RefNames given. A blob seen under the same path twice is
+# through, see Add-ScrubIdent) and every other header, a signature included, but
+# for the sha a tree, parent or object line starts with (Add-ScrubShaHeader);
+# hits that share a place merged; every annotated tag a positive revision names
+# (its headers, tagger and message, along a tag chain by each tag's first
+# object header, as git follows it), and the $RefNames given. A blob seen under the same path twice is
 # scanned once. A merge commit is read too: its message, and the blobs it differs
 # by from each parent (a merge with a parent outside the range also reads what
 # that parent brings in: it errs on the side of reading more). Not read: a gitlink
@@ -726,11 +739,14 @@ function Invoke-ScrubHistory {
                 $readings = Get-ScrubReadings $parts.Head
                 for ($rd = 0; $rd -lt $readings.Count; $rd++) {
                     foreach ($h in (Get-ScrubHeaders $readings[$rd])) {
-                        if ($h.Key -ceq 'object') { if ($rd -eq 0) { $next = $h.Value.Trim() } }
-                        elseif ($h.Key -ceq 'type') { }
+                        if ($h.Key -ceq 'object') {
+                            # The first object header, as git follows it (a later one is text only).
+                            if ($rd -eq 0 -and -not $next) { $next = Get-ScrubShaStart $h.Value }
+                            Add-ScrubShaHeader $res ('tag ' + $short + ' header object') 'object' $h.Value $Denylist
+                        }
                         elseif ($h.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of tag ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
-                        # The name and any other header (not the signature).
-                        elseif ($h.Key -cne 'gpgsig' -and $h.Key -cne 'gpgsig-sha256') { Add-ScrubTextHits $res ('tag ' + $short + ' header ' + $h.Key) $h.Value $Denylist }
+                        # The name, the type, a gpgsig header and any other header.
+                        else { Add-ScrubTextHits $res ('tag ' + $short + ' header ' + $h.Key) $h.Value $Denylist }
                     }
                 }
                 # The message, as stored (Add-ScrubContent reads it as UTF-8 and,
@@ -739,7 +755,7 @@ function Invoke-ScrubHistory {
                 [void](Add-ScrubContent $res $label $label $parts.Body $false $Denylist)
             }
             else {
-                foreach ($h in (Get-ScrubHeaders $coordUtf8.GetString($parts.Head))) { if ($h.Key -ceq 'object') { $next = $h.Value.Trim() } }
+                foreach ($h in (Get-ScrubHeaders $coordUtf8.GetString($parts.Head))) { if ($h.Key -ceq 'object' -and -not $next) { $next = Get-ScrubShaStart $h.Value } }
             }
             if (-not $next) { $res.Reason = "the tag '$cur' of '$rv' names no object"; return $res }
             $cur = $next
@@ -757,19 +773,21 @@ function Invoke-ScrubHistory {
         $short = $sha.Substring(0, 7)
         # The commit object as stored (git cat-file commit, not git show: show
         # stops a message at a NUL byte and re-encodes it by its encoding
-        # header). The message is read as a file is; every header but tree,
-        # parent and the signature is read too: author and committer as
-        # identities, any other (encoding, mergetag, an unknown one) as text.
+        # header). The message is read as a file is; every header is read too:
+        # author and committer as identities, tree and parent but for the sha
+        # they start with, any other (encoding, gpgsig, mergetag, an unknown
+        # one) as text.
         $co = Invoke-ScrubGit $Repo @('cat-file', 'commit', $sha)
         if ($co.Ok -and $co.Code -eq 0) {
             $parts = Split-ScrubObject $co.Bytes
             $label = 'commit message ' + $short
             [void](Add-ScrubContent $res $label $label $parts.Body $false $Denylist)
             # A true encoding header (ISO-8859-2, Shift_JIS ...): git's own
-            # re-encoded reading (%B) is read as well, under the same label.
+            # re-encoded reading (%B) is read as well, under the same label,
+            # asked for in UTF-8 (i18n.logOutputEncoding would change it).
             $encLine = [regex]::Match($coordUtf8.GetString($parts.Head), '(?m)^encoding (.+)$')
             if ($encLine.Success -and $encLine.Groups[1].Value.Trim() -notmatch '^(?i)utf-?8$') {
-                $mb = Invoke-ScrubGit $Repo @('show', '-s', '--format=%B', $sha)
+                $mb = Invoke-ScrubGit $Repo @('show', '-s', '--encoding=UTF-8', '--format=%B', $sha)
                 if ($mb.Ok -and $mb.Code -eq 0) { [void](Add-ScrubContent $res $label $label $mb.Bytes $false $Denylist) }
                 else { $res.Unreadable.Add('re-encoded message of commit ' + $short) }
             }
@@ -778,23 +796,19 @@ function Invoke-ScrubHistory {
                 foreach ($h in (Get-ScrubHeaders $readings[$rd])) {
                     if ($h.Key -ceq 'author') { Add-ScrubIdent $res ('author of commit ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
                     elseif ($h.Key -ceq 'committer') { Add-ScrubIdent $res ('committer of commit ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
-                    elseif ($h.Key -cin @('gpgsig', 'gpgsig-sha256')) { }
-                    elseif ($h.Key -cin @('tree', 'parent')) {
-                        # Only the sha is skipped: a continuation line under it is text.
-                        $cut = $h.Value.IndexOf("`n")
-                        if ($cut -ge 0) { Add-ScrubTextHits $res ('commit headers of ' + $short) $h.Value.Substring($cut + 1) $Denylist }
-                    }
+                    elseif ($h.Key -cin @('tree', 'parent')) { Add-ScrubShaHeader $res ('commit headers of ' + $short) $h.Key $h.Value $Denylist }
                     elseif ($h.Key -ceq 'mergetag') {
                         # A merged signed tag, embedded: its tagger is an identity, its
-                        # other headers (not object, type or a signature) and its message
-                        # are text.
+                        # object but for the sha it starts with, every other header
+                        # (type, gpgsig, an unknown one) and its message are text.
                         $mv = $h.Value
-                        $mcut = $mv.IndexOf("`n`n")
+                        $mcut = $mv.IndexOf("`n`n", [System.StringComparison]::Ordinal)
                         $mhead = if ($mcut -ge 0) { $mv.Substring(0, $mcut) } else { $mv }
                         $mbody = if ($mcut -ge 0) { $mv.Substring($mcut + 2) } else { '' }
                         foreach ($mh in (Get-ScrubHeaders $mhead)) {
                             if ($mh.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of mergetag in commit ' + $short) $mh.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
-                            elseif ($mh.Key -cnotin @('object', 'type', 'gpgsig', 'gpgsig-sha256')) { Add-ScrubTextHits $res ('commit headers of ' + $short) ($mh.Key + ' ' + $mh.Value) $Denylist }
+                            elseif ($mh.Key -ceq 'object') { Add-ScrubShaHeader $res ('commit headers of ' + $short) 'object' $mh.Value $Denylist }
+                            else { Add-ScrubTextHits $res ('commit headers of ' + $short) ($mh.Key + ' ' + $mh.Value) $Denylist }
                         }
                         if ($mbody) { Add-ScrubTextHits $res ('commit headers of ' + $short) $mbody $Denylist }
                     }
@@ -1507,6 +1521,57 @@ $r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead.TrimEnd("`n") + "`n zzbeta hidden
 Assert-Coord 'SG6 a continuation line under the parent header is read' (@($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
 $r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "`nmsg zzbeta`n"))
 Assert-Coord 'SG6 a hit is reported once, not once per reading' (@($r.Hits | Where-Object { $_.File -like 'commit message *' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+# Round 5: a header whose value starts with a sha skips that sha only; every
+# other header value (type, a signature, a continuation line) is text.
+function Test-ScrubHeaderHit($R, [string]$Like = 'commit headers of *') { return (@($R.Hits | Where-Object { $_.File -like $Like -and $_.Rule -ceq 'denylist entry 1' }).Count -ge 1) }
+$mtPre = $rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent
+$mtTail = " tag rel-mt`n tagger R Q <r@example.invalid> 1700000000 +0000`n `n notes`n`nmerge it`n"
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent zzbeta`n type commit`n" + $mtTail))
+Assert-Coord 'SG6 text after the sha on a mergetag object line hits' (Test-ScrubHeaderHit $r) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n  zzbeta under object`n type commit`n" + $mtTail))
+Assert-Coord 'SG6 a continuation line under a mergetag object line hits' (Test-ScrubHeaderHit $r) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit zzbeta`n" + $mtTail))
+Assert-Coord 'SG6 a mergetag type line is text and hits' (Test-ScrubHeaderHit $r) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n gpgsig zzbeta`n" + $mtTail))
+Assert-Coord 'SG6 a gpgsig line inside a mergetag is text and hits' (Test-ScrubHeaderHit $r) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "gpgsig -----BEGIN PGP SIGNATURE-----`n Comment: zzbeta`n -----END PGP SIGNATURE-----`n`nclean message`n"))
+Assert-Coord 'SG6 a commit gpgsig header is text and hits' (Test-ScrubHeaderHit $r) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ("tree $rawTree zzbeta`nparent $rawParent`n" + 'author ' + $rawIdent + 'committer ' + $rawIdent + "`nclean message`n"))
+Assert-Coord 'SG6 text after the sha on a tree line is not a pass: git refuses the commit (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r)) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# The same in an annotated tag. git itself refuses a tag whose object, type or
+# order is not its own (fail-closed); a header after the tagger is kept.
+function Invoke-ScrubRawTag([string]$Head, [string]$Extra = '') {
+    $t = New-ScrubRawObject $hRepo 'tag' (Get-ScrubAscii ($Head + "tag rel-r5`ntagger " + $rawIdent + $Extra + "`nclean notes`n"))
+    return Invoke-ScrubHistory -Repo $hRepo -Range "$t ^$rawParent" -Denylist @('zzbeta') -AllowEmpty
+}
+$r = Invoke-ScrubRawTag "object $rawParent zzbeta`ntype commit`n"
+Assert-Coord 'SG6 text after the sha on a tag object line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * header *')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$r = Invoke-ScrubRawTag "object $rawParent`n zzbeta under object`ntype commit`n"
+Assert-Coord 'SG6 a continuation line under a tag object line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * header *')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$r = Invoke-ScrubRawTag "object $rawParent`ntype commit zzbeta`n"
+Assert-Coord 'SG6 text on a tag type line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * header *')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$r = Invoke-ScrubRawTag "object $rawParent`ntype commit`n" "gpgsig zzbeta`n"
+Assert-Coord 'SG6 a tag gpgsig header (after the tagger, where git keeps extra headers) is text and hits' ($r.DiscoveryOk -and (Test-ScrubHeaderHit $r 'tag * header *')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# A tag with a second object header: git follows the first, and so does the walk.
+$inner = New-ScrubRawObject $hRepo 'tag' (Get-ScrubAscii ("object $rawParent`ntype commit`ntag inner`ntagger " + $rawIdent + "`nnotes zzbeta`n"))
+$outer = New-ScrubRawObject $hRepo 'tag' (Get-ScrubAscii ("object $inner`ntype tag`ntag outer`ntagger " + $rawIdent + "object $rawParent`n`nclean notes`n"))
+$r = Invoke-ScrubHistory -Repo $hRepo -Range "$outer ^$rawParent" -Denylist @('zzbeta') -AllowEmpty
+Assert-Coord 'SG6 a tag with a second object header is walked by its first, as git does: the inner tag is read and hits' ($r.Tags -eq 2 -and (Test-ScrubHeaderHit $r 'tag *')) "ok=$($r.DiscoveryOk) tags=$($r.Tags) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# %B is asked for in UTF-8: i18n.logOutputEncoding does not change what is read.
+Invoke-HookTestGit $hRepo @('config', 'i18n.logOutputEncoding', 'ISO-8859-2')
+try { $r = Invoke-ScrubHistory -Repo $hRepo -Range ((New-ScrubRawObject $hRepo 'commit' ([byte[]]((Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "encoding ISO-8859-2`n`nmsg zzq")) + @(0xE8) + (Get-ScrubAscii " log`n")))) + " ^$rawParent") -Denylist @($czech) }
+finally { Invoke-HookTestGit $hRepo @('config', '--unset', 'i18n.logOutputEncoding') }
+Assert-Coord 'SG6 a legacy-encoded message hits through %B under i18n.logOutputEncoding=ISO-8859-2' (@($r.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+# The mergetag head ends at its first truly empty line: a line that holds only
+# a zero-width space does not end it (a guard row: the culture-sensitive split
+# of 3c961e6 passed it too; the split is ordinal now all the same).
+$zw = [string][char]0x200B
+$r = Invoke-ScrubRaw ([byte[]]((Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n tag rel-zw`n ")) + $coordUtf8.GetBytes($zw) + (Get-ScrubAscii "`n tagger $mtIdent 1700000000 +0000`n `n notes`n`nmerge it`n"))) @($mtIdent)
+Assert-Coord 'SG6 a zero-width line inside a mergetag head does not end it: the allowed tagger after it is still an identity' ($r.Hits.Count -eq 0 -and $r.IdentAllowed -ge 1) "allowed=$($r.IdentAllowed) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# The end dedupe: an author line that is not valid UTF-8 is read twice (UTF-8,
+# Windows-1252); a hit both readings find is one hit.
+$r = Invoke-ScrubRaw ([byte[]]((Get-ScrubAscii ($rawHead + 'author Zzbeta ')) + @(0xE9) + (Get-ScrubAscii (' <l@example.invalid> 1700000000 +0000' + "`n" + 'committer ' + $rawIdent + "`nclean message`n"))))
+Assert-Coord 'SG6 a hit both readings of an author line find is reported once' (@($r.Hits | Where-Object { $_.File -like 'author of commit *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
 
 # the real range, when the run names one
 if ($History) {
