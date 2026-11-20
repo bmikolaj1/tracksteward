@@ -43,9 +43,8 @@
 # S3  the same as S1 with -Strict: exit 1
 # Not covered (reasoned, no row): a remote that advertises so many commits that
 # the range passes the Windows command-line limit (the hook's own git rev-list
-# fails first and the push is refused); an ls-remote that fails (refused); a
-# relative local push URL typed from a subfolder; and a stalled scan (no timeout
-# of its own; git waits).
+# fails first and the push is refused); an ls-remote that fails (refused); and
+# a stalled scan (no timeout of its own; git waits).
 #
 # Exit 0 = every row passed; exit 1 = a row failed.
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\hooks\prepush.test.ps1

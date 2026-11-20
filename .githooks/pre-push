@@ -3,7 +3,8 @@
 # (tests/scrub.test.ps1) once per push, with -History over the commits the push
 # sends that the remote does not already advertise, and with the remote ref names
 # the push writes. That run reads those commits as stored (no replace refs):
-# every message, header (author and committer as identities), file name and
+# every message, header but the signature (author, committer and a mergetag's
+# tagger as identities), file name and
 # blob they add or change, every annotated tag the push sends (its headers,
 # tagger and message) and every pushed ref name, and checks them against the
 # private denylist (SG6). Any failing row refuses the push, and so does a
@@ -70,7 +71,7 @@ done
 if [ "$status" -ne 0 ]; then exit "$status"; fi
 if [ -z "$tips" ]; then exit 0; fi
 if [ "$(git ls-remote --get-url "$url" 2>/dev/null)" != "$url" ]; then
-    echo "pre-push: refused the push: git rewrites the push URL for ls-remote (url.*.insteadOf), so its answer would not come from the remote this push goes to" >&2
+    echo "pre-push: refused the push: git ls-remote --get-url failed, or git rewrites the push URL for ls-remote (url.*.insteadOf), so its answer might not come from the remote this push goes to" >&2
     exit 1
 fi
 if ! adv=$(git ls-remote "$url" 2>/dev/null); then

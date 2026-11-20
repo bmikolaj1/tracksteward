@@ -17,8 +17,10 @@
 #   - an internal follow-up number (FU- and digits)
 #   - every whole-word, case-insensitive entry of the denylist file named by
 #     $env:TRACKSTEWARD_SCRUB_DENYLIST (one entry per line, # comments and blank
-#     lines ignored), matched over the whole text after NFKC normalisation with
-#     zero-width characters and soft hyphens removed: the words of a
+#     lines ignored), matched over two readings of the whole text, their hits
+#     joined: NFC, and NFKC with U+200B-U+200D, U+2060, U+FEFF and the soft
+#     hyphen U+00AD removed (folding alone could glue an entry to the next
+#     word, so it only adds hits): the words of a
 #     multi-word entry may be parted by any run of white space (a line break
 #     too), comment markers (# > * / ;) and the joiners - . _ , (not by nothing:
 #     CamelCase is not matched). The denylist is private and lives outside this
@@ -96,9 +98,12 @@
 #      $env:TRACKSTEWARD_SCRUB_ALLOW_IDENT, one exact "Name <email>" per line; an
 #      author, committer or tagger line that is one of them is let through, every
 #      other one is scanned (unset: all are; set to a missing or empty file: a
-#      FAIL). Commits and tags are read as stored (git cat-file, every git call
-#      with --no-replace-objects): the message as a file is read, every header
-#      but tree, parent and the signature. Not read: notes, grafts
+#      FAIL). Commits and tags are read as stored (git cat-file; every scan git
+#      call passes --no-replace-objects): the message as a file is read, and
+#      git's re-encoded reading (%B) too when an encoding header names another
+#      encoding than UTF-8; every header is read but the signature, the shas of
+#      tree and parent and, in a tag, object and type; a mergetag's tagger is an
+#      identity. Not read: notes, grafts
 #      (.git/info/grafts), a lightweight tag's name unless it is pushed
 #      (-PushRefs), and file names in bytes that are not valid UTF-8
 #
@@ -199,8 +204,11 @@ function Get-ScrubDenyText([string]$Text) {
 # joiners - . _ , (a hard-wrapped name, in a comment or not, an email local
 # part, a snake_case name, a "Surname, Given" list). Not matched: words run
 # together (CamelCase).
-function Get-ScrubDenyRegex([string]$Entry) {
-    $words = @((Get-ScrubDenyText $Entry) -split '\s+' | Where-Object { $_ } | ForEach-Object { [regex]::Escape($_) })
+# -Plain: the matcher for the plain reading (NFC only, nothing removed), which
+# Find-ScrubHits runs as well, so the folded reading only ever adds hits.
+function Get-ScrubDenyRegex([string]$Entry, [switch]$Plain) {
+    $form = if ($Plain) { $Entry.Normalize([System.Text.NormalizationForm]::FormC) } else { Get-ScrubDenyText $Entry }
+    $words = @($form -split '\s+' | Where-Object { $_ } | ForEach-Object { [regex]::Escape($_) })
     return [regex]::new('(?i)(?<![A-Za-z0-9_])' + ($words -join '[\s#>*/;,._-]+') + '(?![A-Za-z0-9_])')
 }
 # The allowed identities of a file (one "Name <email>" per line, # comments
@@ -224,7 +232,11 @@ function Find-ScrubHits {
     param([string]$Path, [string[]]$Lines, [string[]]$Denylist = $null, [switch]$SkipPatterns)
     $isMd = $Path.EndsWith('.md', [System.StringComparison]::OrdinalIgnoreCase)
     $deny = @()
-    if ($Denylist) { $deny = @($Denylist | ForEach-Object { Get-ScrubDenyRegex $_ }) }
+    $denyPlain = @()
+    if ($Denylist) {
+        $deny = @($Denylist | ForEach-Object { Get-ScrubDenyRegex $_ })
+        $denyPlain = @($Denylist | ForEach-Object { Get-ScrubDenyRegex $_ -Plain })
+    }
     $hits = New-Object System.Collections.Generic.List[object]
     for ($i = 0; $i -lt $Lines.Count; $i++) {
         $line = $Lines[$i]
@@ -244,15 +256,19 @@ function Find-ScrubHits {
     if ($deny.Count -gt 0) {
         # Normalising leaves the line breaks where they are, so a match's line is
         # the count of breaks before it.
-        $all = Get-ScrubDenyText ($Lines -join "`n")
+        # Two readings, their hits joined: the plain one (NFC) and the folded one
+        # (Get-ScrubDenyText). Folding can glue an entry to the next word (a
+        # superscript two becomes 2), so it never replaces the plain reading.
+        $joined = $Lines -join "`n"
+        $texts = @($joined.Normalize([System.Text.NormalizationForm]::FormC), (Get-ScrubDenyText $joined))
         for ($d = 0; $d -lt $deny.Count; $d++) {
-            $lastLine = 0
-            foreach ($m in $deny[$d].Matches($all)) {
-                $ln = 1 + ([regex]::Matches($all.Substring(0, $m.Index), "`n")).Count
-                if ($ln -eq $lastLine) { continue }
-                $lastLine = $ln
-                $hits.Add([pscustomobject]@{ Line = $ln; Rule = "denylist entry $($d + 1)"; Text = '' })
+            $lineSet = New-Object System.Collections.Generic.SortedSet[int]
+            foreach ($pair in @(@($texts[0], $denyPlain[$d]), @($texts[1], $deny[$d]))) {
+                foreach ($m in $pair[1].Matches($pair[0])) {
+                    [void]$lineSet.Add(1 + ([regex]::Matches($pair[0].Substring(0, $m.Index), "`n")).Count)
+                }
             }
+            foreach ($ln in $lineSet) { $hits.Add([pscustomobject]@{ Line = $ln; Rule = "denylist entry $($d + 1)"; Text = '' }) }
         }
     }
     return $hits.ToArray()
@@ -643,10 +659,11 @@ function Invoke-ScrubRepoRule {
 # Scans the history of a range of commits ($Range: one or more git revisions
 # parted by spaces, such as origin/main..HEAD or "<tip> ^<sha>"): every blob that
 # a commit of the range adds or changes, at its path, every such path as a name
-# (once per path), every commit as stored (git cat-file commit): its message,
-# its author and committer lines (an exact $AllowIdent identity is let through,
-# see Add-ScrubIdent) and every other header but tree, parent and the
-# signature; every annotated tag a positive revision names (its headers, tagger
+# (once per path), every commit as stored (git cat-file commit): its message
+# (with git's %B reading too under a non-UTF-8 encoding header), its author and
+# committer lines and a mergetag's tagger (an exact $AllowIdent identity is let
+# through, see Add-ScrubIdent) and every other header but the signature and the
+# shas of tree and parent; each hit once; every annotated tag a positive revision names (its headers, tagger
 # and message, along a tag chain), and the $RefNames given. A blob seen under the same path twice is
 # scanned once. A merge commit is read too: its message, and the blobs it differs
 # by from each parent (a merge with a parent outside the range also reads what
@@ -748,12 +765,39 @@ function Invoke-ScrubHistory {
             $parts = Split-ScrubObject $co.Bytes
             $label = 'commit message ' + $short
             [void](Add-ScrubContent $res $label $label $parts.Body $false $Denylist)
+            # A true encoding header (ISO-8859-2, Shift_JIS ...): git's own
+            # re-encoded reading (%B) is read as well, under the same label.
+            $encLine = [regex]::Match($coordUtf8.GetString($parts.Head), '(?m)^encoding (.+)$')
+            if ($encLine.Success -and $encLine.Groups[1].Value.Trim() -notmatch '^(?i)utf-?8$') {
+                $mb = Invoke-ScrubGit $Repo @('show', '-s', '--format=%B', $sha)
+                if ($mb.Ok -and $mb.Code -eq 0) { [void](Add-ScrubContent $res $label $label $mb.Bytes $false $Denylist) }
+                else { $res.Unreadable.Add('re-encoded message of commit ' + $short) }
+            }
             $readings = Get-ScrubReadings $parts.Head
             for ($rd = 0; $rd -lt $readings.Count; $rd++) {
                 foreach ($h in (Get-ScrubHeaders $readings[$rd])) {
                     if ($h.Key -ceq 'author') { Add-ScrubIdent $res ('author of commit ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
                     elseif ($h.Key -ceq 'committer') { Add-ScrubIdent $res ('committer of commit ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
-                    elseif ($h.Key -cin @('tree', 'parent', 'gpgsig', 'gpgsig-sha256')) { }
+                    elseif ($h.Key -cin @('gpgsig', 'gpgsig-sha256')) { }
+                    elseif ($h.Key -cin @('tree', 'parent')) {
+                        # Only the sha is skipped: a continuation line under it is text.
+                        $cut = $h.Value.IndexOf("`n")
+                        if ($cut -ge 0) { Add-ScrubTextHits $res ('commit headers of ' + $short) $h.Value.Substring($cut + 1) $Denylist }
+                    }
+                    elseif ($h.Key -ceq 'mergetag') {
+                        # A merged signed tag, embedded: its tagger is an identity, its
+                        # other headers (not object, type or a signature) and its message
+                        # are text.
+                        $mv = $h.Value
+                        $mcut = $mv.IndexOf("`n`n")
+                        $mhead = if ($mcut -ge 0) { $mv.Substring(0, $mcut) } else { $mv }
+                        $mbody = if ($mcut -ge 0) { $mv.Substring($mcut + 2) } else { '' }
+                        foreach ($mh in (Get-ScrubHeaders $mhead)) {
+                            if ($mh.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of mergetag in commit ' + $short) $mh.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
+                            elseif ($mh.Key -cnotin @('object', 'type', 'gpgsig', 'gpgsig-sha256')) { Add-ScrubTextHits $res ('commit headers of ' + $short) ($mh.Key + ' ' + $mh.Value) $Denylist }
+                        }
+                        if ($mbody) { Add-ScrubTextHits $res ('commit headers of ' + $short) $mbody $Denylist }
+                    }
                     else { Add-ScrubTextHits $res ('commit headers of ' + $short) ($h.Key + ' ' + $h.Value) $Denylist }
                 }
             }
@@ -784,6 +828,13 @@ function Invoke-ScrubHistory {
             [void](Add-ScrubContent $res $path ($path + ' (blob ' + $newSha.Substring(0, 7) + ')') $g.Bytes $skip $Denylist)
         }
     }
+    # One hit per place: two readings of one text (raw and re-encoded, UTF-8 and
+    # Windows-1252) can find the same hit.
+    $uniq = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $kept = New-Object System.Collections.Generic.List[object]
+    foreach ($x in $res.Hits) { if ($uniq.Add("$($x.File)`t$($x.Line)`t$($x.Rule)`t$($x.Text)")) { $kept.Add($x) } }
+    $res.Hits.Clear()
+    foreach ($x in $kept) { $res.Hits.Add($x) }
     return $res
 }
 
@@ -898,6 +949,14 @@ $fw = -join ('zzalpha'.ToCharArray() | ForEach-Object { [char]([int]$_ + 0xFEE0)
 $zw = 'zz' + [string][char]0x200B + 'al' + [string][char]0x00AD + 'pha'
 $h = @(Find-ScrubHits -Path 'a.txt' -Lines @("x $fw y", "x $zw y") -Denylist $dl)
 Assert-Coord 'SG2 an entry in fullwidth letters, and one with a zero-width space and a soft hyphen inside, both hit' ($h.Count -eq 2 -and $h[0].Line -eq 1 -and $h[1].Line -eq 2) (($h | ForEach-Object { "$($_.Line) $($_.Rule)" }) -join ';')
+# The compatibility reading only adds hits: a character that NFKC folds into a
+# letter or digit (a superscript two, a trade mark sign), or a zero-width space
+# used as a separator, must not glue the entry to the next word.
+$sup = 'zzalpha' + [string][char]0x00B2
+$tm = 'zzalpha' + [string][char]0x2122
+$zsep = 'zzalpha' + [string][char]0x200B + 'foo'
+$h = @(Find-ScrubHits -Path 'a.txt' -Lines @("see $sup note", "see $tm brand", "see $zsep") -Denylist $dl)
+Assert-Coord 'SG2 an entry followed by a superscript two, a trade mark sign or a zero-width space and a word still hits (the plain reading is kept)' ($h.Count -eq 3) (($h | ForEach-Object { "$($_.Line) $($_.Rule)" }) -join ';')
 
 # ---- SG3: strict mode and the repo list ---------------------------------------
 Write-Host "(SG3) strict mode and the repo list"
@@ -1431,6 +1490,23 @@ Invoke-HookTestGit $hRepo @('replace', $repOrig, $repClean)
 try { $r = Invoke-ScrubHistory -Repo $hRepo -Range "$repOrig ^$rawParent" -Denylist @('zzbeta') }
 finally { Invoke-HookTestGit $hRepo @('replace', '-d', $repOrig); Invoke-HookTestGit $hRepo @('checkout', '--quiet', 'main') }
 Assert-Coord 'SG6 a commit with a replace ref is read as itself: its message and its blob hit' (@($r.Hits | Where-Object { $_.File -like 'commit message *' }).Count -eq 1 -and @($r.Hits | Where-Object { $_.File -like 'rep.txt*' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+# A message stored in a legacy encoding with a true encoding header: git's own
+# re-encoded reading (%B) is read as well as the stored bytes.
+$czech = 'zzq' + [string][char]0x010D
+$r = Invoke-ScrubHistory -Repo $hRepo -Range ((New-ScrubRawObject $hRepo 'commit' ([byte[]]((Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "encoding ISO-8859-2`n`nmsg zzq")) + @(0xE8) + (Get-ScrubAscii " real`n")))) + " ^$rawParent") -Denylist @($czech)
+Assert-Coord 'SG6 a message in ISO-8859-2 with a true encoding header hits through git''s re-encoded reading' (@($r.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+# A mergetag header (a merged signed tag): its tagger line is an identity, its
+# other lines are text.
+$mtIdent = 'Zzbeta Q <q@example.invalid>'
+$mt = $rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "mergetag object $rawParent`n type commit`n tag rel-mt`n tagger $mtIdent 1700000000 +0000`n `n release notes`n`nmerge it`n"
+$r = Invoke-ScrubRaw (Get-ScrubAscii $mt) @($mtIdent)
+Assert-Coord 'SG6 the tagger line inside a mergetag header is an identity: an allowed one is let through' ($r.Hits.Count -eq 0 -and $r.IdentAllowed -ge 1) "allowed=$($r.IdentAllowed) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$r = Invoke-ScrubRaw (Get-ScrubAscii $mt)
+Assert-Coord 'SG6 the tagger line inside a mergetag header hits as an identity when it is not allowed' (@($r.Hits | Where-Object { $_.File -like 'tagger of mergetag in commit *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead.TrimEnd("`n") + "`n zzbeta hidden under parent`n" + 'author ' + $rawIdent + 'committer ' + $rawIdent + "`nclean message`n"))
+Assert-Coord 'SG6 a continuation line under the parent header is read' (@($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "`nmsg zzbeta`n"))
+Assert-Coord 'SG6 a hit is reported once, not once per reading' (@($r.Hits | Where-Object { $_.File -like 'commit message *' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
 
 # the real range, when the run names one
 if ($History) {

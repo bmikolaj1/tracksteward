@@ -247,7 +247,7 @@ Windows-only as shipped, and its stated limits are in the header of `hooks/coord
 
 **The pre-push gate (maintainers).** `.githooks/pre-push` runs `tests\scrub.test.ps1 -History` once per
 push, over the commits it sends that the remote does not already have, and over the ref names it writes. A private
-name in a commit message or header, an author or committer line, a file name, a file version, an annotated tag or
+name in a commit message or header (not its signature), an author or committer line, a file name, a file version, an annotated tag or
 a ref name
 refuses the push, and so does a missing private denylist (`TRACKSTEWARD_SCRUB_DENYLIST`). A deletion is not scanned.
 The public identities your own commits carry go, one exact `Name <email>` per line, in a second private file named by

@@ -26,14 +26,18 @@
 - **Scrub: a -History run reads more, and lets nothing through unread.** In a `-History` run a blob with NUL bytes and
   no BOM (a UTF-16 file without one), and anything git could not read (a blob, a tree, a commit message, a commit's
   identity lines), is now a FAIL; it was an UNCHECKED line, so a gate run passed it. Commits and tags are read as
-  stored (`git cat-file`, and every git call of the suite passes `--no-replace-objects`, so a `git replace` ref no
-  longer makes the scan read a clean stand-in while the push sends the original): the message as a file is read (a
-  NUL byte in it is a FAIL; an `encoding` header does not change what is read). The history scan now also reads:
-  file names (once per path, the hit named by its blob, never by the name); author and committer lines and every
-  other commit header but `tree`, `parent` and the signature (`mergetag` included); annotated tags in the range (their
-  headers, tagger line and message; a tag chain is followed, and a tag that does not end on a commit fails discovery);
-  and, with `-PushRefs`, the ref names a push writes. Identity and other header lines that are not valid UTF-8 are read
-  as Windows-1252 too. The range may be several revisions parted by spaces
+  stored (`git cat-file`, and every scan git call passes `--no-replace-objects`, so a `git replace` ref no longer
+  makes the scan read a clean stand-in while the push sends the original): the message as a file is read (a NUL byte
+  in it is a FAIL), and when an `encoding` header names another encoding than UTF-8, git's re-encoded reading (`%B`)
+  is read as well, so neither a false header nor a true legacy one hides a name. The history scan now also reads: file
+  names (once per path, the hit named by its blob, never by the name); author and committer lines and every other
+  commit header but the signature and the shas of `tree` and `parent` (a continuation line under them is read); a
+  `mergetag` header's tagger line as an identity and the rest of it as text; annotated tags in the range (their
+  headers but `object` and `type`, tagger line and message; a tag chain is followed, and a tag that does not end on a
+  commit fails discovery); and, with `-PushRefs`, the ref names a push writes. Each hit is reported once. When a
+  commit's or tag's header block is not valid UTF-8 it is read as Windows-1252 too, as a whole, so a valid non-ASCII
+  allowed identity in the same block also gets a Windows-1252 reading that is not allowed (a false refusal, not a
+  miss). The range may be several revisions parted by spaces
   (`<tip> ^<sha> ...`), and `-AllowEmptyRange` lets a range with no commit through discovery (a tag or a ref name pushed
   alone). The work-tree scan (SG5) reads file names too, named by their position in the listing.
 
@@ -49,9 +53,11 @@
   line, so a two-word name hard-wrapped onto the next line was missed. It is now matched over the whole text, the words
   of an entry parted by any run of white space, comment markers (`# > * / ;`) and the joiners `- . _ ,` (an email local
   part, a snake_case name, a "Surname, Given" list), at most one hit per line and entry; words run together (CamelCase)
-  are not matched. Text and entries are NFKC-normalised, so a letter written with a combining mark matches its
-  one-code-point form and fullwidth letters match ASCII, and zero-width characters and soft hyphens inside a word are
-  removed first. A file that is not valid UTF-8 (an ANSI file) is read as Windows-1252 as well; a denylist hit found in
+  are not matched. Each text is matched twice and the hits joined: as NFC (a letter written with a combining mark
+  matches its one-code-point form), and as NFKC with U+200B to U+200D, U+2060, U+FEFF and the soft hyphen removed
+  (fullwidth letters match ASCII; a name split by one of those characters hits). The folded reading only adds hits:
+  folding alone would glue a name to the next word (a superscript two, a trade mark sign). Other invisible
+  characters (LRM, RLM, U+2061 to U+2064) are not removed. A file that is not valid UTF-8 (an ANSI file) is read as Windows-1252 as well; a denylist hit found in
   both readings is reported once (a pattern-rule hit whose matched text differs between them, twice).
 
 - **Pre-push gate**: `.githooks/pre-push` runs `tests\scrub.test.ps1 -History` once per push, over the pushed tips
@@ -73,15 +79,17 @@
   denylist). Seen red: the hook absent (P0-P7, before it existed); the first version of the hook on P5, P8, P9, P10 and
   P11; the second on P16 and P17, and its scrub suite on the new SG2 joiner and NFKC rows and the SG6 rows for a tag
   read twice, an extra commit header, a NUL in a message, Windows-1252 identity and tag text, text after an allowed
-  identity and a replace ref. Mutations seen red: the hook ignoring a failed scan (P1, P2, P4, P7), a `-History` run no longer requiring the
+  identity and a replace ref; the third's scrub suite on the plain-reading SG2 row and the SG6 rows for a true legacy
+  encoding, a mergetag tagger (allowed and not) and a continuation line under `parent`. Mutations seen red: the hook ignoring a failed scan (P1, P2, P4, P7), a `-History` run no longer requiring the
   denylist (SG2, P4), the hook reading only the first pushed ref (P12), the fetch-first check removed (P13), an
   identity allowed by its name alone (SG6), the tag type check removed (SG6), no Windows-1252 reading (SG4), no NFC
   normalisation (SG2), and history file names not scanned (SG6). Not covered by a row (reasoned): a remote that
   advertises so many commits (about 760, which a busy GitHub repo's `refs/pull/*` can reach) that the range passes the
   Windows command-line limit (the hook's own `git rev-list` fails first and the push is refused, for good, until the
-  range is passed another way); an `ls-remote` that fails (refused); a relative local push URL typed from a
-  subfolder (`ls-remote` resolves it from the top level: refused, or, if it names another repo, wrong exclusions);
-  grafts; file names in bytes that are not valid UTF-8; a range with a submodule change (a gitlink is unreadable, so
+  range is passed another way); an `ls-remote` that fails (refused); a host whose read path lags its write path (a
+  replica could advertise a commit a rewind removed); grafts (the push then fails the remote's connectivity check);
+  the signature block of a commit or tag (`gpgsig`), which is not read; a commit sha of a listed repo in a tag name
+  (names take no hex tokens); file names in bytes that are not valid UTF-8; a range with a submodule change (a gitlink is unreadable, so
   such a push is always refused); and a stalled scan. `.gitattributes` checks `.githooks/*` out with LF.
 
 - **Fix (Q24, F9)**: the SessionStart anchor is no longer dropped when the host is slow. `coord-scope-guard.ps1` refused
