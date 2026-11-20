@@ -37,6 +37,9 @@
 # P17 a push URL that url.<mirror>.insteadOf would rewrite for ls-remote (a
 #     pushInsteadOf keeps the push itself on the real remote): refused before
 #     any scan
+# P18 a lightweight tag whose name holds the entry, on a commit the remote already
+#     has (0 new commits): refused, the tag not on the remote
+# P19 a tag whose name holds a two-word entry parted by a no-break space: refused
 # S1  the copy's scrub suite run without -History, TRACKSTEWARD_SCRUB_DENYLIST
 #     unset: exit 0 with a loud NOT CHECKED line (a clone without the private file)
 # S2  the same, the variable set to a missing file: exit 1
@@ -59,7 +62,8 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('prepush-test-' + [Guid]::Ne
 [void][IO.Directory]::CreateDirectory($tmp)
 $entry = 'zz' + 'q30' + 'leak'
 $deny = Join-Path $tmp 'denylist.txt'
-[System.IO.File]::WriteAllText($deny, "# test denylist`n$entry`n", $coordUtf8)
+$entry2 = 'zz' + 'r19a zz' + 'r19b'
+[System.IO.File]::WriteAllText($deny, "# test denylist`n$entry`n$entry2`n", $coordUtf8)
 $origin = Join-Path $tmp 'origin.git'
 $work = Join-Path $tmp 'work'
 $scrubEnv = @('TRACKSTEWARD_SCRUB_STRICT', 'TRACKSTEWARD_SCRUB_HISTORY', 'TRACKSTEWARD_SCRUB_REPOS')
@@ -247,6 +251,24 @@ try {
         Invoke-HookTestGit $work @('config', '--unset', "url.$origin.pushInsteadOf")
     }
     Assert-Coord 'P17 a push whose URL git would rewrite for ls-remote (insteadOf a mirror) is refused before any scan' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p17') -and ($r.Out -match 'insteadOf') -and ($r.Out -notmatch 'scanning')) (Format-Push $r)
+
+    Write-Host '(P18) a tag name with the entry, on a commit the remote has'
+    Invoke-HookTestGit $work @('tag', "t18-$entry", $base)
+    $r = Invoke-TestPush @('origin', "refs/tags/t18-$entry")
+    Assert-Coord 'P18 a tag whose name holds the entry, on a commit the remote already has (0 new commits), is refused' (($r.Code -ne 0) -and -not (Get-RemoteRef "refs/tags/t18-$entry") -and ($r.Out -match 'scanning 0 commit') -and ($r.Out -match 'pushed ref name 1:1: denylist entry 1')) (Format-Push $r)
+
+    Write-Host '(P19) a tag name with a no-break space'
+    $t19 = 't19-' + $entry2.Replace(' ', [string][char]0x00A0)
+    Invoke-HookTestGit $work @('tag', $t19, $base)
+    # The push names it by an ASCII glob: Invoke-TestPush writes its arguments
+    # into a script file, which Windows PowerShell 5.1 reads as ANSI.
+    $prevOutEnc = [Console]::OutputEncoding
+    [Console]::OutputEncoding = $coordUtf8
+    try { $localT19 = (& git -C $work for-each-ref --format='%(refname)' 'refs/tags/t19-*' | Out-String).Trim() } finally { [Console]::OutputEncoding = $prevOutEnc }
+    Assert-Coord 'P19 control: the local tag name holds the no-break space' ($localT19 -ceq "refs/tags/$t19") "local=$localT19"
+    $r = Invoke-TestPush @('origin', 'refs/tags/t19-*:refs/tags/t19-*')
+    $remoteT19 = (& git --git-dir $origin for-each-ref --format='%(refname)' 'refs/tags/t19-*' | Out-String).Trim()
+    Assert-Coord 'P19 a tag whose name holds a two-word entry parted by a no-break space is refused' (($r.Code -ne 0) -and -not $remoteT19 -and ($r.Out -match 'pushed ref name 1:1: denylist entry 2')) (Format-Push $r)
     Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
 
     Write-Host '(S1-S3) the copy''s scrub suite with no -History'

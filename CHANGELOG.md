@@ -36,11 +36,13 @@
   commit header as text, a `gpgsig` signature header included, but for the sha a `tree` or `parent` line starts with
   (only that sha is skipped: text after it and a continuation line are read); a `mergetag` header's tagger line as an
   identity and the rest of it as text, its `type` and `gpgsig` lines included, but for the sha its `object` line
-  starts with; annotated tags in the range (every header, `type` and a `gpgsig` one included, but for the sha the
-  `object` line starts with; the tagger line and the message, a signed tag's PGP block in it included; a tag chain is
+  starts with; annotated tags in the range (every header, its key included, `type` and a `gpgsig` one too, but for
+  the sha the `object` line starts with; the tagger line and the message, a signed tag's PGP block in it included; a tag chain is
   followed by each tag's first `object` header, as git follows it, and a tag that does not end on a commit fails
   discovery); and, with `-PushRefs`, the ref names a push
-  writes. Hits that share a place (label, line, rule and text) are merged, so a hit two readings find is one hit;
+  writes (parted at ASCII spaces only, so a no-break space inside a ref name stays inside it). A hit in a header is
+  named by its header block (`commit headers of <sha>`, `tag <sha> headers`), never by a key the object chose (only
+  fixed words such as `author of commit`), which can hold the entry. Hits that share a place (label, line, rule and text) are merged, so a hit two readings find is one hit;
   header hits are numbered by line within their header's text, and a re-encoded message's hex tokens may be counted
   twice for the commit-sha rule. When a
   commit's or tag's header block is not valid UTF-8 it is read as Windows-1252 too, as a whole, so a valid non-ASCII
@@ -50,7 +52,7 @@
   alone). The work-tree scan (SG5) reads file names too, named by their position in the listing.
 
 - **Scrub: allowed identities.** Every commit's author and committer line carries a name, and the maintainer's public
-  author name holds a denylist entry on purpose. An identity line (`Name <email>`) that is exactly one of the lines of
+  author name holds a denylist entry on purpose. An identity line (`Name <email>`) that is exactly (ordinal, character for character) one of the lines of
   the private file `TRACKSTEWARD_SCRUB_ALLOW_IDENT` names is let through; every other identity line is scanned like any
   text, so a commit made with a personal name or email fails. The identity is everything before the trailing time
   and zone, so text between the `>` and the time is part of it. Unset: every identity line is scanned and none is let
@@ -83,7 +85,7 @@
   FAIL line, its last 20 lines are printed. On only where `core.hooksPath` names the `.githooks` folder (see the README:
   the absolute path of the main checkout's folder, so a worktree is covered too); `--no-verify` skips it; Windows only
   (it starts `powershell.exe`); about 20 s per push here, and no timeout of its own. New suite
-  `tests/hooks/prepush.test.ps1` (P0-P17, S1-S3, real pushes into a bare repo from a copy of the repo with a throwaway
+  `tests/hooks/prepush.test.ps1` (P0-P19, S1-S3, real pushes into a bare repo from a copy of the repo with a throwaway
   denylist). Seen red: the hook absent (P0-P7, before it existed); the first version of the hook on P5, P8, P9, P10 and
   P11; the second on P16 and P17, and its scrub suite on the new SG2 joiner and NFKC rows and the SG6 rows for a tag
   read twice, an extra commit header, a NUL in a message, Windows-1252 identity and tag text, text after an allowed
@@ -91,7 +93,11 @@
   encoding, a mergetag tagger (allowed and not) and a continuation line under `parent`; the fourth's scrub suite on
   the SG6 rows for text after the sha on a mergetag `object` line and a continuation under it, a mergetag `type` and
   `gpgsig` line, a commit `gpgsig` header, a tag `gpgsig` header, `%B` under `i18n.logOutputEncoding` and a tag with
-  a second `object` header (the walk followed the last one, so the tag git follows was never read). Mutations
+  a second `object` header (the walk followed the last one, so the tag git follows was never read); after the Codex
+  review and its fix-diff panel, the SG6 rows for a path that differs from the self file by a soft hyphen (its
+  pattern rules were skipped), an extra tag header's key (not read, and printed in the hit label), an identity that
+  differs from an allowed one by a soft hyphen (allowed by the culture-aware `-ccontains`) and a pushed ref name with
+  a no-break space (parted there). Mutations
   seen red: the hook ignoring a failed scan (P1, P2, P4, P7), a `-History` run no longer requiring the
   denylist (SG2, P4), the end dedupe of history hits removed (SG6), the hook reading only the first pushed ref (P12), the fetch-first check removed (P13), an
   identity allowed by its name alone (SG6), the tag type check removed (SG6), no Windows-1252 reading (SG4), no NFC
@@ -106,7 +112,12 @@
   real history); a header key that differs from a known one only by a character PowerShell's culture-aware `-ceq`
   ignores (a soft hyphen), which is then read as that header (crafted only); a commit sha of a listed repo in a tag name
   (names take no hex tokens); file names in bytes that are not valid UTF-8; a range with a submodule change (a gitlink is unreadable, so
-  such a push is always refused); and a stalled scan. `.gitattributes` checks `.githooks/*` out with LF.
+  such a push is always refused); a push from a linked worktree under the absolute `core.hooksPath` (the README
+  setup; the suite's fixture uses a relative path in one checkout); diagnostics that name what they could not read
+  or classify (a NUL, UTF-16, unreadable or skipped file, by its path) and the hook's refusal and deletion lines (by
+  the ref name), which print that text on the local console (nothing more is let through: a deletion was never scanned; a
+  follow-up); and a stalled
+  scan. `.gitattributes` checks `.githooks/*` out with LF.
 
 - **Fix (Q24, F9)**: the SessionStart anchor is no longer dropped when the host is slow. `coord-scope-guard.ps1` refused
   to write the anchor when its stopwatch, which starts on the script's first line and so also counts the stdin wait,

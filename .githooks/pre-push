@@ -76,7 +76,8 @@ if [ "$(git ls-remote --get-url "$url" 2>/dev/null)" != "$url" ]; then
     exit 1
 fi
 if ! adv=$(git ls-remote "$url" 2>/dev/null); then
-    echo "pre-push: refused the push: git ls-remote $url failed, so what the remote already has is unknown" >&2
+    # The URL is not printed: it can carry credentials.
+    echo "pre-push: refused the push: git ls-remote on the push URL failed, so what the remote already has is unknown" >&2
     exit 1
 fi
 # Every advertised object this clone has, peeled to a commit; "missing" lines

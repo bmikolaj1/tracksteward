@@ -115,7 +115,8 @@
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\scrub.test.ps1 [-Strict] [-History <range>]
 #       [-PushRefs "<ref> <ref>"] [-AllowEmptyRange]
 # <range> is one or more revisions parted by spaces ("a..b", or "<tip> ^<sha>").
-# -PushRefs names the ref names a push writes (scanned as text); -AllowEmptyRange
+# -PushRefs names the ref names a push writes, parted by ASCII spaces (scanned as
+# text); -AllowEmptyRange
 # lets a range with no commit pass discovery (the pre-push gate passes both).
 # Exit: 0 = all passed, 1 = a case failed.
 param([switch]$Strict, [string]$History = '', [string]$PushRefs = '', [switch]$AllowEmptyRange)
@@ -296,6 +297,10 @@ function Get-ScrubRepoList([string]$Raw) {
     return , @($Raw -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 }
 
+# The pushed ref names of -PushRefs: parted at ASCII spaces only (the hook joins
+# them so; git refuses a space in a ref name but allows a no-break space, which
+# PowerShell's \s would part).
+function Get-ScrubPushRefList([string]$Raw) { return , [string[]]@($Raw -split ' ' | Where-Object { $_ }) }
 # How the platform compares paths: ignoring case on Windows, exactly elsewhere.
 function Get-ScrubPathComparison {
     if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) { return [System.StringComparison]::OrdinalIgnoreCase }
@@ -492,7 +497,9 @@ function Add-ScrubIdent {
     $m = [regex]::Match($ident, '^(.*) \d+ [+-]\d{4}$')
     if ($m.Success) { $ident = $m.Groups[1].Value }
     if (-not $NoCount) { $Res.Idents++ }
-    if ($AllowIdent -and ($AllowIdent -ccontains $ident)) { if (-not $NoCount) { $Res.IdentAllowed++ }; return }
+    # Ordinal: -ccontains is culture-aware in Windows PowerShell 5.1 and lets a
+    # soft hyphen or another ignorable character through as equal.
+    if ($AllowIdent -and [System.Linq.Enumerable]::Contains([string[]]$AllowIdent, $ident, [System.StringComparer]::Ordinal)) { if (-not $NoCount) { $Res.IdentAllowed++ }; return }
     Add-ScrubTextHits $Res $Label $ident $Denylist
 }
 # The readings of raw object bytes: UTF-8, and Windows-1252 as well when the
@@ -586,7 +593,8 @@ function Invoke-ScrubScan {
         # entry is never printed.
         $pos++
         Add-ScrubTextHits $res "file name of listed entry $pos" $rel $Denylist
-        $skip = [bool]($SelfRel -and ($rel -ceq $SelfRel))
+        # Ordinal: -ceq is culture-aware (a soft hyphen would make a look-alike path the self file).
+        $skip = [bool]($SelfRel -and [string]::Equals($rel, $SelfRel, [System.StringComparison]::Ordinal))
         $full = Join-Path $Repo $rel
         $isLeaf = $false
         try { $isLeaf = [bool](Test-Path -LiteralPath $full -PathType Leaf) } catch { $isLeaf = $false }
@@ -742,11 +750,12 @@ function Invoke-ScrubHistory {
                         if ($h.Key -ceq 'object') {
                             # The first object header, as git follows it (a later one is text only).
                             if ($rd -eq 0 -and -not $next) { $next = Get-ScrubShaStart $h.Value }
-                            Add-ScrubShaHeader $res ('tag ' + $short + ' header object') 'object' $h.Value $Denylist
+                            Add-ScrubShaHeader $res ('tag ' + $short + ' headers') 'object' $h.Value $Denylist
                         }
                         elseif ($h.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of tag ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
-                        # The name, the type, a gpgsig header and any other header.
-                        else { Add-ScrubTextHits $res ('tag ' + $short + ' header ' + $h.Key) $h.Value $Denylist }
+                        # The name, the type, a gpgsig header and any other header, its key
+                        # included; the label never names the key (a key can hold the entry).
+                        else { Add-ScrubTextHits $res ('tag ' + $short + ' headers') ($h.Key + ' ' + $h.Value) $Denylist }
                     }
                 }
                 # The message, as stored (Add-ScrubContent reads it as UTF-8 and,
@@ -838,7 +847,7 @@ function Invoke-ScrubHistory {
             $res.Blobs++
             $g = Invoke-ScrubGit $Repo @('cat-file', 'blob', $newSha)
             if (-not $g.Ok -or $g.Code -ne 0) { $res.Unreadable.Add($path + ' (blob ' + $newSha.Substring(0, 7) + ')'); continue }
-            $skip = [bool]($SelfRel -and ($path -ceq $SelfRel))
+            $skip = [bool]($SelfRel -and [string]::Equals($path, $SelfRel, [System.StringComparison]::Ordinal))
             [void](Add-ScrubContent $res $path ($path + ' (blob ' + $newSha.Substring(0, 7) + ')') $g.Bytes $skip $Denylist)
         }
     }
@@ -1545,18 +1554,40 @@ function Invoke-ScrubRawTag([string]$Head, [string]$Extra = '') {
     return Invoke-ScrubHistory -Repo $hRepo -Range "$t ^$rawParent" -Denylist @('zzbeta') -AllowEmpty
 }
 $r = Invoke-ScrubRawTag "object $rawParent zzbeta`ntype commit`n"
-Assert-Coord 'SG6 text after the sha on a tag object line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * header *')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+Assert-Coord 'SG6 text after the sha on a tag object line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * headers')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
 $r = Invoke-ScrubRawTag "object $rawParent`n zzbeta under object`ntype commit`n"
-Assert-Coord 'SG6 a continuation line under a tag object line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * header *')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+Assert-Coord 'SG6 a continuation line under a tag object line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * headers')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
 $r = Invoke-ScrubRawTag "object $rawParent`ntype commit zzbeta`n"
-Assert-Coord 'SG6 text on a tag type line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * header *')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+Assert-Coord 'SG6 text on a tag type line is not a pass: git refuses the tag (discovery fails) or it hits' ((-not $r.DiscoveryOk) -or (Test-ScrubHeaderHit $r 'tag * headers')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
 $r = Invoke-ScrubRawTag "object $rawParent`ntype commit`n" "gpgsig zzbeta`n"
-Assert-Coord 'SG6 a tag gpgsig header (after the tagger, where git keeps extra headers) is text and hits' ($r.DiscoveryOk -and (Test-ScrubHeaderHit $r 'tag * header *')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+Assert-Coord 'SG6 a tag gpgsig header (after the tagger, where git keeps extra headers) is text and hits' ($r.DiscoveryOk -and (Test-ScrubHeaderHit $r 'tag * headers')) "ok=$($r.DiscoveryOk) $($r.Reason) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
 # A tag with a second object header: git follows the first, and so does the walk.
 $inner = New-ScrubRawObject $hRepo 'tag' (Get-ScrubAscii ("object $rawParent`ntype commit`ntag inner`ntagger " + $rawIdent + "`nnotes zzbeta`n"))
 $outer = New-ScrubRawObject $hRepo 'tag' (Get-ScrubAscii ("object $inner`ntype tag`ntag outer`ntagger " + $rawIdent + "object $rawParent`n`nclean notes`n"))
 $r = Invoke-ScrubHistory -Repo $hRepo -Range "$outer ^$rawParent" -Denylist @('zzbeta') -AllowEmpty
 Assert-Coord 'SG6 a tag with a second object header is walked by its first, as git does: the inner tag is read and hits' ($r.Tags -eq 2 -and (Test-ScrubHeaderHit $r 'tag *')) "ok=$($r.DiscoveryOk) tags=$($r.Tags) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# Codex round 1 (R6): a custom tag header's key is text and is never printed;
+# an allowed identity is exact (ordinal); pushed ref names part at ASCII spaces only.
+$r = Invoke-ScrubRawTag "object $rawParent`ntype commit`n" "x-zzbeta-key clean value`n"
+$printed = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+Assert-Coord 'SG6 the key of an extra tag header is text and hits, and the hit does not print it' ($r.DiscoveryOk -and (Test-ScrubHeaderHit $r 'tag *') -and ($printed -notmatch 'zzbeta')) "ok=$($r.DiscoveryOk) $printed"
+$shy = [string][char]0x00AD
+$r = Invoke-ScrubRaw ([byte[]]((Get-ScrubAscii ($rawHead + 'author Zz')) + $coordUtf8.GetBytes($shy) + (Get-ScrubAscii ('beta Q <q@example.invalid> 1700000000 +0000' + "`n" + 'committer ' + $rawIdent + "`nclean message`n")))) @('Zzbeta Q <q@example.invalid>')
+Assert-Coord 'SG6 an identity that differs from an allowed one only by a soft hyphen is not allowed (ordinal match) and hits' ($r.IdentAllowed -eq 0 -and (Test-ScrubHeaderHit $r 'author of commit *')) "allowed=$($r.IdentAllowed) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+$nbsp = [string][char]0x00A0
+$refList = Get-ScrubPushRefList ('refs/heads/ok refs/tags/zzr6a' + $nbsp + 'zzr6b')
+$r = Invoke-ScrubHistory -Repo $hRepo -Range "$rawParent ^$rawParent" -AllowEmpty -Denylist @('zzr6a zzr6b') -RefNames $refList
+Assert-Coord 'SG6 a pushed ref name with a no-break space is one name: a two-word entry across it hits' ($refList.Count -eq 2 -and (Test-ScrubHeaderHit $r 'pushed ref name 2')) "refs=$($refList.Count) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
+# The self file is matched by path ordinally: a path that differs from it by a
+# soft hyphen keeps its pattern rules.
+Invoke-HookTestGit $hRepo @('checkout', '--quiet', '-b', 'selfshy', $rawParent)
+$shyRel = 'tests/scrub.test.p' + $shy + 's1'
+Set-CoordFile $hRepo $shyRel ('see ' + 'FU' + '-12' + "`n")
+Add-ScrubTestCommit $hRepo 'a look-alike self file'
+$shyTip = Get-CoordGitOut $hRepo @('rev-parse', 'HEAD')
+Invoke-HookTestGit $hRepo @('checkout', '--quiet', 'main')
+$r = Invoke-ScrubHistory -Repo $hRepo -Range "$shyTip ^$rawParent" -SelfRel $selfName
+Assert-Coord 'SG6 a path that differs from the self file only by a soft hyphen is not the self file: its pattern rules run and hit' (@($r.Hits | Where-Object { $_.Rule -ceq 'internal follow-up number' }).Count -eq 1) "ok=$($r.DiscoveryOk) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
 # %B is asked for in UTF-8: i18n.logOutputEncoding does not change what is read.
 Invoke-HookTestGit $hRepo @('config', 'i18n.logOutputEncoding', 'ISO-8859-2')
 try { $r = Invoke-ScrubHistory -Repo $hRepo -Range ((New-ScrubRawObject $hRepo 'commit' ([byte[]]((Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "encoding ISO-8859-2`n`nmsg zzq")) + @(0xE8) + (Get-ScrubAscii " log`n")))) + " ^$rawParent") -Denylist @($czech) }
@@ -1582,7 +1613,7 @@ if ($History) {
     $identVar = [string]$env:TRACKSTEWARD_SCRUB_ALLOW_IDENT
     $allowIdent = Read-ScrubIdentAllow $identVar
     if ($identVar -and -not $allowIdent) { Assert-Coord 'SG6 allowed identities: TRACKSTEWARD_SCRUB_ALLOW_IDENT is set, but the file is missing or holds no entry' $false 'fix the path or the file' }
-    $pushRefList = @($PushRefs -split '\s+' | Where-Object { $_ })
+    $pushRefList = Get-ScrubPushRefList $PushRefs
     $real = Invoke-ScrubHistory -Repo $repoRoot -Range $History -SelfRel $selfName -Denylist $denylist -AllowIdent $allowIdent -RefNames $pushRefList -AllowEmpty:$AllowEmptyRange
     Assert-Coord "SG6 history discovery: git lists the commits of $History" $real.DiscoveryOk $real.Reason
     if ($real.DiscoveryOk) {
