@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.2.8 - 2026-11-21
+
+- **A pattern hit in an annotated tag's own name prints no matched text** (F3, the line 0.2.6 and 0.2.7 listed as
+  not covered, reasoned there). Measured first, in the suite: a tag named with a follow-up number, scanned by
+  `Invoke-ScrubHistory`, kept the name's text in its hit. A history run prints a pattern hit's text in its FAIL
+  detail, which the pre-push gate shows (read from the code, not measured through the hook). Since 0.2.6 a file
+  name or a pushed ref name keeps no matched text, because that text is part of the name; the tag object's
+  `tag <name>` header now goes the same way. The sibling sweep of the tag headers found one more: the embedded tag
+  inside a commit's `mergetag` header has its own `tag <name>` line, and printed it too (measured the same way).
+  Both now keep no text. The other tag headers (type, gpgsig, an unknown key) keep their text: they are not the
+  name. A pattern hit whose matched text holds a whole denylist entry already kept no text, so neither leak could
+  print a whole entry.
+
+  New SG6 rows: a pattern hit in an annotated tag's own name, and in a mergetag's embedded tag name (both seen red
+  before the fix, the name's text printed, and green after); and a pattern hit in a gpgsig header of a tag and of a
+  mergetag, which keeps its text (seen red with the switch set for every header).
+
+  Still not covered:
+  - a message keeps its text, so any name a message quotes prints its matched text: git's own merge messages
+    quote one unless the message is edited (`Merge tag '<name>'` for any tag merged, `Merge branch '<name>'`, and
+    `of <url>` after it from `git pull`), and a file name quoted in a message prints the same way (0.2.6 redacted
+    only the names themselves). The panel saw the tag message, for an annotated and a lightweight tag, in a
+    scratch repo; the branch and pull messages are reasoned, not measured; that the hits keep the text is read from
+    the code, not a suite row;
+  - a pattern hit in an author, committer or tagger identity keeps its matched text (an identity is scanned as
+    text, not as a name; reasoned, not measured);
+  - a pattern hit whose matched text holds part of a multi-word denylist entry, but not the whole entry, keeps its
+    text (reasoned, not measured);
+  - `-PushRefs` is still an argument (as in 0.2.6).
+
+- **CI: the test job's timeout is 60 minutes, up from 45.** The suite outgrew 45 minutes on the hosted runner: #32's
+  run was cancelled at 45:00 inside `tests\run.ps1`, after green runs of 27 to 39 minutes on the last releases. The
+  timeout only gives it room; the suite's growth is a follow-up.
+
+- **An annotated tag named inside `a..b` or `a...b` is read as a tag** (F6, found by the panel of the F3 work).
+  The tag walk skipped every revision that held `..`, so `-History origin/main..<annotated tag>` read none of that
+  tag's headers, tagger or message (seen: 0 tags read). It now reads the positive ends: the right side of `a..b`
+  and both sides of `a...b`, an empty side read as HEAD (HEAD can be a symbolic ref to a tag). The revision is split
+  at the first `..`, a `...` when a `.` follows, and only when both sides resolve as commits (`<side>^{commit}`,
+  the hint git gives a range side, so an ambiguous short sha still resolves: measured by hand on a scratch repo
+  whose commit and blob share a 4-digit prefix, where the first split failed discovery on `<prefix>..HEAD`; no row,
+  since building such a collision in the suite is slow); otherwise the revision is walked whole, which reads a
+  message search that holds `..` but whose split does not resolve (`:/dots..here`) as git does. A reason names a side as
+  `revision <n> (left side)` or `(right side)`, never by its text. The pre-push gate was not affected: it passes
+  `<tip> ^<sha>`, not `a..b`. New SG6 rows, seen red before the fix and green after: a tag at the positive end of
+  `a..b` and on either side of `a...b` is read and its message hits (0 tags on each form before); and a tag reached
+  through an empty side while HEAD is a symbolic ref to it, and a message search that holds `..` (0 tags, and a
+  discovery failure, with the first split; panel round on the F6 fix).
+
+  Still not covered (the seam is frozen: three panel rounds each found a defect in the previous fix. The first was
+  a silent miss, the empty side under a symbolic-ref HEAD, fixed above with its row. The second and third were
+  discovery failures, never a pass. The maintainer chose to freeze it here):
+  - a range git splits but this check does not, because `^{commit}` changes the side or the side is not a commit,
+    fails discovery instead of being read: a message-search side (`:/alpha..b`, seen by the panel in a scratch
+    repo), a path side (`HEAD:x..b`, reasoned) and a tree side (`<tree>..b`, seen). A failed discovery refuses the
+    run; it never lets a range through;
+  - a side whose text with `^{commit}` appended names some other object (a file literally named `x^{commit}`) is
+    split where git would not; the split ends are walked in place of the whole revision (reasoned).
+
 ## 0.2.7 - 2026-11-21
 
 - **The scrub suite's reasons never quote git's stderr** (F2 of the 0.2.6 work). When a git call failed, the suite
@@ -66,8 +125,8 @@
     fixture failure through the hook (accepted, test diagnostics only).
 
   Still not covered, as in 0.2.6:
-  - an annotated tag's own name, read in its header block, still prints a pattern hit's text (reasoned, not
-    measured);
+  - an annotated tag's own name, read in its header block, still prints a pattern hit's text (reasoned here, not
+    measured; 0.2.8 measured it and fixed it);
   - `-PushRefs` is still an argument.
 
 ## 0.2.6 - 2026-11-21
@@ -115,9 +174,9 @@
   rows for a range label and a blob-revision reason that hold the entry; (Codex round 2:) a pattern-rule hit in a
   file name or a pushed ref name no longer prints its matched text, which is part of the name (SG4 and SG6 rows,
   red before; not covered: an annotated tag's own name, read in its header block, still prints a pattern hit's
-  text, as every header does; reasoned, not measured; reproduce before fixing; a denylist hit never prints its text
-  anywhere), and the big-range rows (SG6, P21) use a chain of 1100 commits, so only the last exclusion keeps the
-  count at 1, and P21 also refuses a commit with the entry at that scale.
+  text, as every header does; reasoned, not measured; reproduce before fixing (0.2.8 measured it and fixed it); a
+  denylist hit never prints its text anywhere), and the big-range rows (SG6, P21) use a chain of 1100 commits, so
+  only the last exclusion keeps the count at 1, and P21 also refuses a commit with the entry at that scale.
 
 - **Pre-push suite: a push from a linked worktree under the absolute `core.hooksPath`** (the README setup; F6 of the
   0.2.5 review). New row P20: a worktree whose branch has no `.githooks` of its own pushes with `core.hooksPath` set

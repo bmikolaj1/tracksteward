@@ -604,8 +604,9 @@ function Add-ScrubContent {
 # Hits in a short text that is not a file version (a file name, a ref name, an
 # identity), added under $Label. Not counted as a scanned version, and no hex
 # tokens taken from it.
-# -NoText: the hit keeps no matched text (a file name or a ref name, whose
-# matched text is part of the name, which is never printed).
+# -NoText: the hit keeps no matched text (a file name, a ref name, or the tag
+# header of a tag or a mergetag, which holds the tag's name: the matched text is
+# part of the name, which is never printed).
 function Add-ScrubTextHits {
     param($Res, [string]$Label, [string]$Text, [string[]]$Denylist, [switch]$NoText)
     foreach ($h in @(Find-ScrubHits -Path '' -Lines @($Text -split "`r?`n") -Denylist $Denylist)) {
@@ -826,6 +827,8 @@ function Invoke-ScrubRepoRule {
 # through, see Add-ScrubIdent) and every other header, a signature included, but
 # for the sha a tree, parent or object line starts with (Add-ScrubShaHeader);
 # hits that share a place merged; every annotated tag a positive revision names
+# (a plain one, the right side of a..b, either side of a...b, an empty side as
+# HEAD; a revision whose split does not resolve is one revision, as git reads it)
 # (its headers, tagger and message, along a tag chain by each tag's first
 # object header, as git follows it), and the $RefNames given. A blob seen under the same path twice is
 # scanned once. A merge commit is read too: its message, and the blobs it differs
@@ -886,12 +889,45 @@ function Invoke-ScrubHistory {
     # Each positive revision: an annotated tag (a chain of them) is read, its
     # name, message and tagger; what it ends on must be a commit.
     $seenTag = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    # The positive ends: a plain revision, the right side of a..b, both sides of
+    # a...b; an empty side is HEAD (which can be a symbolic ref to a tag). The
+    # split is at the first '..', a '...' when a '.' follows it, and is kept only
+    # when both sides resolve as <side>^{commit} (so an ambiguous short sha
+    # resolves; measured by hand, no row); otherwise the revision is walked whole.
+    # That is not git's own rule in every case: a side the suffix changes (a
+    # message search :/text, a path HEAD:x) or a tree side fails the check where
+    # git splits, and the whole revision then fails to resolve. Every such case
+    # found is a discovery failure, never a pass (seam frozen after three panel
+    # rounds, 0.2.8).
+    $walk = New-Object System.Collections.Generic.List[object]
     $rvPos = 0
     foreach ($rv in $revs) {
         # Named by its position in the range ("revision <n>"), never by its text.
         $rvPos++
-        if ($rv.StartsWith('^') -or $rv.Contains('..')) { continue }
-        $o = Invoke-ScrubGit $Repo @('rev-parse', '--verify', '-q', '--end-of-options', $rv)
+        if ($rv.StartsWith('^')) { continue }
+        $ends = @([pscustomobject]@{ Pos = "$rvPos"; Rev = $rv })
+        $i2 = $rv.IndexOf('..', [System.StringComparison]::Ordinal)
+        if ($i2 -ge 0) {
+            $sym = $rv.Length -gt $i2 + 2 -and $rv[$i2 + 2] -eq [char]'.'
+            $left = $rv.Substring(0, $i2)
+            $right = $rv.Substring($i2 + $(if ($sym) { 3 } else { 2 }))
+            if (-not $left) { $left = 'HEAD' }
+            if (-not $right) { $right = 'HEAD' }
+            $both = $true
+            foreach ($s in @($left, $right)) {
+                $v = Invoke-ScrubGit $Repo @('rev-parse', '--verify', '-q', '--end-of-options', ($s + '^{commit}'))
+                if (-not $v.Ok -or $v.Code -ne 0) { $both = $false }
+            }
+            if ($both) {
+                $ends = @([pscustomobject]@{ Pos = "$rvPos (right side)"; Rev = $right })
+                if ($sym) { $ends = @([pscustomobject]@{ Pos = "$rvPos (left side)"; Rev = $left }) + $ends }
+            }
+        }
+        foreach ($e in $ends) { $walk.Add($e) }
+    }
+    foreach ($w in $walk) {
+        $rvPos = $w.Pos
+        $o = Invoke-ScrubGit $Repo @('rev-parse', '--verify', '-q', '--end-of-options', $w.Rev)
         if (-not $o.Ok -or $o.Code -ne 0) { $res.Reason = "git rev-parse could not resolve revision $rvPos of the range ($(Get-ScrubGitFailure $o))"; return $res }
         $cur = $coordUtf8.GetString($o.Bytes).Trim()
         $type = ''
@@ -918,7 +954,9 @@ function Invoke-ScrubHistory {
                         elseif ($h.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of tag ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
                         # The name, the type, a gpgsig header and any other header, its key
                         # included; the label never names the key (a key can hold the entry).
-                        else { Add-ScrubTextHits $res ('tag ' + $short + ' headers') ($h.Key + ' ' + $h.Value) $Denylist }
+                        # The name's hits keep no matched text: it is part of the name (a
+                        # continuation line under it is blanked too, which only prints less).
+                        else { Add-ScrubTextHits $res ('tag ' + $short + ' headers') ($h.Key + ' ' + $h.Value) $Denylist -NoText:($h.Key -ceq 'tag') }
                     }
                 }
                 # The message, as stored (Add-ScrubContent reads it as UTF-8 and,
@@ -980,7 +1018,8 @@ function Invoke-ScrubHistory {
                         foreach ($mh in (Get-ScrubHeaders $mhead)) {
                             if ($mh.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of mergetag in commit ' + $short) $mh.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
                             elseif ($mh.Key -ceq 'object') { Add-ScrubShaHeader $res ('commit headers of ' + $short) 'object' $mh.Value $Denylist }
-                            else { Add-ScrubTextHits $res ('commit headers of ' + $short) ($mh.Key + ' ' + $mh.Value) $Denylist }
+                            # The embedded tag's name keeps no matched text, as a tag's own name.
+                            else { Add-ScrubTextHits $res ('commit headers of ' + $short) ($mh.Key + ' ' + $mh.Value) $Denylist -NoText:($mh.Key -ceq 'tag') }
                         }
                         if ($mbody) { Add-ScrubTextHits $res ('commit headers of ' + $short) $mbody $Denylist }
                     }
@@ -1945,6 +1984,45 @@ Invoke-HookTestGit $dhRepo @('commit', '--quiet', '-m', 'a pattern name')
 $r = Invoke-ScrubHistory -Repo $dhRepo -Range 'HEAD ^HEAD~1' -RefNames @('refs/heads/x-FU' + '-34')
 $pnText = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
 Assert-Coord 'SG6 a pattern hit in a history file name or a pushed ref name prints no matched text' (@($r.Hits | Where-Object { $_.File -like 'file name of blob *' -and $_.Rule -ceq 'internal follow-up number' -and -not $_.Text }).Count -eq 1 -and @($r.Hits | Where-Object { $_.File -ceq 'pushed ref name 1' -and $_.Rule -ceq 'internal follow-up number' -and -not $_.Text }).Count -eq 1 -and $pnText -notmatch '-12|-34') $pnText
+# An annotated tag's own name (its tag header) and a mergetag's embedded tag
+# name are names too: a pattern hit in either prints no matched text.
+$tnName = 'rel-FU' + '-56'
+Invoke-HookTestGit $dhRepo @('tag', '-a', $tnName, '-m', 'a clean tag message', 'HEAD')
+$r = Invoke-ScrubHistory -Repo $dhRepo -Range ('refs/tags/' + $tnName + ' ^HEAD') -AllowEmpty
+$tnText = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+Assert-Coord "SG6 a pattern hit in an annotated tag's own name prints no matched text" ($r.DiscoveryOk -and $r.Tags -eq 1 -and @($r.Hits | Where-Object { $_.File -like 'tag * headers' -and $_.Rule -ceq 'internal follow-up number' -and -not $_.Text }).Count -eq 1 -and $tnText -notmatch '-56') "ok=$($r.DiscoveryOk) tags=$($r.Tags) name text printed=$($tnText -match '-56') hits=$($r.Hits.Count)"
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "mergetag object $rawParent`n type commit`n tag rel-FU" + "-78`n tagger $mtIdent 1700000000 +0000`n `n notes`n`nmerge it`n")) @($mtIdent)
+$mnText = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+Assert-Coord "SG6 a pattern hit in a mergetag's embedded tag name prints no matched text" ($r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'internal follow-up number' -and -not $_.Text }).Count -eq 1 -and $mnText -notmatch '-78') "ok=$($r.DiscoveryOk) name text printed=$($mnText -match '-78') hits=$($r.Hits.Count)"
+# Only the name: a pattern hit in another tag header (here a gpgsig) keeps its
+# text, in a tag and in a mergetag.
+$r = Invoke-ScrubRawTag "object $rawParent`ntype commit`n" ('gpgsig FU' + "-91`n")
+$okTag = $r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'tag * headers' -and $_.Rule -ceq 'internal follow-up number' -and $_.Text -match '-91' }).Count -eq 1
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n gpgsig FU" + "-92`n" + $mtTail))
+$okMt = $r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'internal follow-up number' -and $_.Text -match '-92' }).Count -eq 1
+Assert-Coord 'SG6 a pattern hit in a tag header that is not the name (gpgsig) keeps its text, in a tag and in a mergetag' ($okTag -and $okMt) "tag=$okTag mergetag=$okMt"
+# A tag named inside a range written a..b (its positive end) or a...b (either
+# side) is read as a tag too: its message hits.
+Invoke-HookTestGit $dhRepo @('tag', '-a', 'rel-dots', '-m', ('release ' + $hitLine), 'HEAD')
+$dotRes = @(
+    (Invoke-ScrubHistory -Repo $dhRepo -Range 'HEAD~1..refs/tags/rel-dots'),
+    (Invoke-ScrubHistory -Repo $dhRepo -Range 'refs/tags/rel-dots...HEAD~1'),
+    (Invoke-ScrubHistory -Repo $dhRepo -Range 'HEAD~1...refs/tags/rel-dots')
+)
+$dotOk = @($dotRes | ForEach-Object { $_.DiscoveryOk -and $_.Tags -eq 1 -and @($_.Hits | Where-Object { $_.File -like 'tag *' -and $_.Rule -ceq $pathRule }).Count -eq 1 })
+Assert-Coord 'SG6 an annotated tag at the positive end of a..b, or on either side of a...b, is read: its message hits' (-not ($dotOk -contains $false)) "a..b=$($dotOk[0]) left of a...b=$($dotOk[1]) right of a...b=$($dotOk[2]) tags=$(($dotRes | ForEach-Object { $_.Tags }) -join ',')"
+# An empty side is HEAD, and HEAD can be a symbolic ref to a tag; a revision
+# whose own text holds '..' (a message search) is one revision when a side of
+# the split does not resolve, as git reads it.
+$r1 = Invoke-ScrubHistory -Repo $dhRepo -Range 'refs/tags/rel-dots...' -AllowEmpty
+$dhBranch = Get-CoordGitOut $dhRepo @('symbolic-ref', 'HEAD')
+Invoke-HookTestGit $dhRepo @('symbolic-ref', 'HEAD', 'refs/tags/rel-dots')
+try { $r2 = Invoke-ScrubHistory -Repo $dhRepo -Range 'HEAD~1..' }
+finally { Invoke-HookTestGit $dhRepo @('symbolic-ref', 'HEAD', $dhBranch) }
+Invoke-HookTestGit $dhRepo @('commit', '--quiet', '--allow-empty', '-m', 'dots..here')
+$r3 = Invoke-ScrubHistory -Repo $dhRepo -Range ':/dots..here'
+$emOk = @(($r1.DiscoveryOk -and $r1.Tags -eq 1), ($r2.DiscoveryOk -and $r2.Tags -eq 1), ($r3.DiscoveryOk -and $r3.Commits -ge 1))
+Assert-Coord "SG6 an empty side of a range is HEAD (read even when HEAD names a tag), and a message search that holds '..' is one revision" (-not ($emOk -contains $false)) "a...=$($emOk[0]) HEAD-is-a-tag=$($emOk[1]) search=$($emOk[2]) tags=$($r1.Tags),$($r2.Tags) search-ok=$($r3.DiscoveryOk)"
 # A range is never quoted in a label or a reason (a ref name in it can hold a
 # private word): only how many revisions it holds, and a revision by position.
 Assert-Coord 'SG6 a range label names only how many revisions it holds, never the revisions' ((Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD') -notmatch 'zzbeta' -and (Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD') -match '2 revisions') (Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD').Replace('zzbeta', '<entry>')
