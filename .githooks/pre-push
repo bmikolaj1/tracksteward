@@ -28,8 +28,9 @@
 # the UNCHECKED lines, and on a failure the FAIL lines and the indented detail
 # lines right after each, whose file labels name a file by its path only when
 # the path itself has no hit (with the denylist set; without it a history run
-# fails, and only the pattern rules judge a path). A discovery reason in a
-# detail can still quote git's stderr, which can name a path. No other line is shown: an error record
+# fails, and only the pattern rules judge a path). A failed git call in a
+# reason is named by its exit code and the kind of message git printed; no
+# detail quotes git's own text, which can name a path. No other line is shown: an error record
 # (its indented "+ CategoryInfo" line can name a path) never is, and a failure
 # with no FAIL line shows none of the output. (git's own push output still
 # names the refs.)

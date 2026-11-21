@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.2.7 - 2026-11-21
+
+- **The scrub suite's reasons never quote git's stderr** (F2 of the 0.2.6 work). When a git call failed, the suite
+  put git's own message into the FAIL reason unchanged. Six calls did this:
+  - `git ls-files` and `git diff --name-only` in the work-tree scan;
+  - `git rev-list`, `git rev-parse` and `git cat-file` (twice) in the history scan.
+
+  The pre-push gate prints FAIL details, so any of these could reach the console: a missing folder's absolute path
+  (`cannot change to '<path>'`), a ref typed into a range (`bad revision '<ref>'`), the path in a
+  `dubious ownership` error, or a remote URL. Two fixture rows (the big range and the undecodable path, SG6) also
+  put git fast-import's output into their detail. They now say only whether it printed anything. The repo-sha
+  check's `git cat-file -e` uses the same helper for consistency. It could not quote stderr: it takes no stdin, and
+  its message is thrown as an error record, which the gate never shows. When git cannot start, the reason names the
+  exception's type and Windows error code, not its text: under PowerShell 7 that text names git's path and the
+  working directory (reasoned from .NET's message, not measured; the gate runs Windows PowerShell 5.1). git calls
+  through `Invoke-ScrubGit` run with `LC_ALL=C` (unless two environment names differ only by case, below), so a git built with translations still prints its messages in
+  English and their kind can be named (reasoned, not measured: this host's git prints English either way).
+
+  `Invoke-ScrubGit` now returns git's stderr in a field of its own (`Stderr`), apart from the suite's own error
+  text. The new `Get-ScrubGitFailure` builds every such reason from three things: the exit code, the suite's own
+  text, and the kind of message git printed, taken from a fixed list:
+  - git cannot enter the repository folder;
+  - not a git repository;
+  - git does not trust the repository's owner (safe.directory);
+  - permission denied;
+  - a corrupt or unreadable object or index;
+  - a revision git cannot resolve;
+  - git printed no message.
+
+  Any other message is not printed; the reason says to run the command by hand to see it. A wrong kind is only a
+  wrong hint, never a leak, but the panel rounds narrowed it:
+  - The kind is read from git's `fatal:` and `error:` lines only, so a warning before them (an unreadable
+    attributes file) does not decide it.
+  - The names git quotes are taken out first, so a quoted folder path that holds another kind's words does not
+    pick that kind, unless the name itself holds a quote.
+  - Every phrase has a space ("corrupt" only as "is corrupt" or "corrupt loose"). A ref name holds no space, so an
+    unquoted one cannot pick a kind.
+  - The cause is matched before the symptom. An unreadable or empty object file reads as permission denied or
+    corrupt, not as the `fatal: bad object <sha>` line git prints after it (seen in real `git rev-list` output); so
+    does an object file git cannot open for another reason (a unit case, not seen in real output). A parent git
+    cannot traverse (`Failed to traverse parents`, seen in real output) is named as corrupt or unreadable.
+  - `LC_ALL=C` is set only when no two environment names differ only by case. On .NET Framework, copying such an
+    environment throws halfway and would leave git a partial one (reasoned from the reference source, not
+    measured). With such names, git inherits the environment unchanged.
+
+  New rows, all four seen red before the fix and red again with the stderr appended back:
+  - SG4: a missing folder, and a folder that is not a repository, both at a path that holds the entry;
+  - SG4: `Get-ScrubGitFailure` on each kind of message, on an unknown message that holds a URL, on no message, and
+    on the suite's own error. The panel rounds added cases that each mutation of the classifier turns red:
+    - quoted names left in (a folder path and an ambiguous argument that hold an earlier kind's words);
+    - warning lines read too (a permission warning before a bad revision and before a corrupt object);
+    - a bare "corrupt" (an unquoted object name that holds it);
+    - the revision kind matched before permission and corrupt (git's real output for an unreadable and for an
+      empty object file);
+  - SG6: a range with a ref that holds the entry and does not resolve.
+
+  Still not covered, as in 0.2.6:
+  - an annotated tag's own name, read in its header block, still prints a pattern hit's text (reasoned, not
+    measured);
+  - `-PushRefs` is still an argument.
+
 ## 0.2.6 - 2026-11-21
 
 - **Pre-push gate: the range goes on stdin.** The hook passed every commit the remote advertises as `^<sha>` on the
