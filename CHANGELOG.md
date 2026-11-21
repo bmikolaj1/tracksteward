@@ -33,9 +33,14 @@
 - **An annotated tag named inside `a..b` or `a...b` is read as a tag** (F6, found by the panel of the F3 work).
   The tag walk skipped every revision that held `..`, so `-History origin/main..<annotated tag>` read none of that
   tag's headers, tagger or message (seen: 0 tags read). It now reads the positive ends: the right side of `a..b`
-  and both sides of `a...b`; an empty side is HEAD, which names no tag. The pre-push gate was not affected: it
-  passes `<tip> ^<sha>`, not `a..b`. New SG6 row, seen red before the fix (0 tags on each form) and green after: a
-  tag at the positive end of `a..b` and on either side of `a...b` is read, and its message hits.
+  and both sides of `a...b`, an empty side read as HEAD (HEAD can be a symbolic ref to a tag). The revision is split
+  as git splits it: at the first `..`, a `...` when a `.` follows, and only when both sides resolve; otherwise it is
+  one revision, as git then reads it (a message search such as `:/text` can hold `..`). A reason names a side as
+  `revision <n> (left side)` or `(right side)`, never by its text. The pre-push gate was not affected: it passes
+  `<tip> ^<sha>`, not `a..b`. New SG6 rows, seen red before the fix and green after: a tag at the positive end of
+  `a..b` and on either side of `a...b` is read and its message hits (0 tags on each form before); and a tag reached
+  through an empty side while HEAD is a symbolic ref to it, and a message search that holds `..` (0 tags, and a
+  discovery failure, with the first split; panel round on the F6 fix).
 
 ## 0.2.7 - 2026-11-21
 

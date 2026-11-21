@@ -43,5 +43,5 @@ Version 0.2.8: CHANGELOG and plugin.json. Out of this slice: `-PushRefs` is stil
 
 The panel found that the tag walk in `Invoke-ScrubHistory` skipped every revision holding `..`, so a range written
 `a..b` never read the annotated tag at `b`. Fix: walk the positive ends (the right side of `a..b`, both sides of
-`a...b`). An SG6 row is seen red first. F5 (names quoted in messages) and F7 (identity hits, a partial denylist
+`a...b`). An SG6 row is seen red first. The panel on that fix found the split too loose (a message search holding `..`, an empty side while HEAD is a symbolic ref to a tag); it now splits as git does and reads an empty side as HEAD, with a second row seen red first. F5 (names quoted in messages) and F7 (identity hits, a partial denylist
 entry) are listed as not covered and go to a later slice.
