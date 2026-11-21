@@ -56,6 +56,15 @@
       empty object file);
   - SG6: a range with a ref that holds the entry and does not resolve.
 
+  Codex review (balanced, gpt-6.2-sol at medium), 3 SHOULD-FIX, all fixed:
+  - stderr with only warning lines no longer lets a warning pick the kind; it is "not printed" (a unit case, seen
+    red with the old fallback);
+  - the new rows' FAIL details print what each check found (the kind named or not, each forbidden text present or
+    not), never the reason they check, so a regression cannot print what it leaked;
+  - the fast-import details go through one helper, `Format-ScrubFixtureOutput`, with a unit row (seen red with
+    the helper echoing its text). Restoring the raw output at a call site would still pass: no row forces a
+    fixture failure through the hook (accepted, test diagnostics only).
+
   Still not covered, as in 0.2.6:
   - an annotated tag's own name, read in its header block, still prints a pattern hit's text (reasoned, not
     measured);

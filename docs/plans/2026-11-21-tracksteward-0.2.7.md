@@ -97,3 +97,16 @@ maintainer's call.
   each with a unit case; the "every phrase but one has a space" wording is fixed.
 - Adversary round 3: no BLOCKER or SHOULD-FIX; real-git probes (unreadable or corrupt index, missing tree, missing
   pack, missing parent) all classed right or fall back to "not printed".
+
+## Codex review (balanced, gpt-6.2-sol:medium, the maintainer's pick): REVISE, 3 SHOULD-FIX
+
+- Warning-only stderr fell back to all lines, so a warning picked the kind: the fallback now drops `warning:` and
+  `hint:` lines (a unit case).
+- The new rows' details printed the reason they checked (after a literal replace), so a regression in another
+  case or form would print what it leaked: they now go through `Format-ScrubReasonChecks` (fixed text: kind
+  named, each forbidden text present). Sweep: the other rows that print a Reason in a detail print one built from
+  fixed text, positions, shas and object types, and `Get-ScrubGitFailure`, so they are safe by construction; only the new leak-check rows
+  printed a reason whose leak they were testing.
+- The fast-import details had no row: they now go through `Format-ScrubFixtureOutput`, with a unit row. A raw
+  `$fiOut` restored at a call site would still pass; a hook-level row that forces a fixture failure is not added
+  (accepted: test diagnostics, and it would need a broken fixture on every run).

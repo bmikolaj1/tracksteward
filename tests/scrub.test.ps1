@@ -478,7 +478,7 @@ function Get-ScrubGitFailure($R) {
         # the symptom: an unreadable or empty object file is followed by
         # "fatal: bad object <sha>", and names the kind, not that line.
         $lines = @($se -split "`r?`n" | Where-Object { $_ -match '^(fatal|error): ' })
-        if ($lines.Count -eq 0) { $lines = @($se -split "`r?`n") }
+        if ($lines.Count -eq 0) { $lines = @($se -split "`r?`n" | Where-Object { $_ -notmatch '^(warning|hint): ' }) }
         $msg = (($lines -join "`n") -replace "'[^'`n]*'", "''") -replace '"[^"`n]*"', '""'
         $kind = if (-not $se.Trim()) { 'git printed no message' }
             elseif ($msg -match '(?i)dubious ownership|unsafe repository') { "git does not trust the repository's owner (safe.directory)" }
@@ -491,6 +491,21 @@ function Get-ScrubGitFailure($R) {
         $parts.Add($kind)
     }
     return ($parts -join '; ')
+}
+
+# What a fixture's git output said, for a FAIL detail: only whether there was
+# any (git's text can name a path).
+function Format-ScrubFixtureOutput([string]$Text) {
+    if ($Text -and $Text.Trim()) { return "printed a message (not shown: git's text can name a path)" }
+    return 'quiet'
+}
+
+# A FAIL detail about a reason that must not quote git: what each check found,
+# never the reason itself (a regression would print what it leaked).
+function Format-ScrubReasonChecks([string]$Reason, [string]$Kind, [string[]]$Absent) {
+    $s = "kind '$Kind' named: $([bool]($Reason -match [regex]::Escape($Kind)))"
+    for ($i = 0; $i -lt $Absent.Count; $i++) { $s += "; forbidden text $($i + 1) present: $([bool]($Absent[$i] -and $Reason.IndexOf($Absent[$i], [System.StringComparison]::OrdinalIgnoreCase) -ge 0))" }
+    return $s
 }
 
 # The NUL-separated names of a git -z listing.
@@ -1186,12 +1201,12 @@ Assert-Coord 'SG4 a folder that is not a work tree: discovery fails, with a reas
 $gfMissing = Join-Path $tmp 'zzbeta-nosuch-folder'
 $res = Invoke-ScrubScan -Repo $gfMissing
 $gfReason = [string]$res.Reason
-Assert-Coord 'SG4 a missing folder: the reason names what went wrong (git cannot enter the folder) and quotes no path from git' (-not $res.DiscoveryOk -and $gfReason -match 'cannot enter the repository folder' -and $gfReason -notmatch 'zzbeta' -and -not $gfReason.Contains([string]$tmp) -and $gfReason -notmatch "'") ($gfReason.Replace('zzbeta', '<entry>').Replace([string]$tmp, '<tmp>'))
+Assert-Coord 'SG4 a missing folder: the reason names what went wrong (git cannot enter the folder) and quotes no path from git' (-not $res.DiscoveryOk -and $gfReason -match 'cannot enter the repository folder' -and $gfReason -notmatch 'zzbeta' -and -not $gfReason.Contains([string]$tmp) -and $gfReason -notmatch "'") (Format-ScrubReasonChecks $gfReason 'cannot enter the repository folder' @('zzbeta', [string]$tmp, "'"))
 $gfPlain = Join-Path $tmp 'zzbeta-plain-folder'
 New-Item -ItemType Directory -Path $gfPlain -Force | Out-Null
 $res = Invoke-ScrubScan -Repo $gfPlain
 $gfReason = [string]$res.Reason
-Assert-Coord 'SG4 a folder that is no repository: the reason says so and quotes nothing from git' (-not $res.DiscoveryOk -and $gfReason -match 'not a git repository' -and $gfReason -notmatch 'zzbeta|fatal' -and -not $gfReason.Contains([string]$tmp)) ($gfReason.Replace('zzbeta', '<entry>').Replace([string]$tmp, '<tmp>'))
+Assert-Coord 'SG4 a folder that is no repository: the reason says so and quotes nothing from git' (-not $res.DiscoveryOk -and $gfReason -match 'not a git repository' -and $gfReason -notmatch 'zzbeta|fatal' -and -not $gfReason.Contains([string]$tmp)) (Format-ScrubReasonChecks $gfReason 'not a git repository' @('zzbeta', 'fatal', [string]$tmp))
 # Get-ScrubGitFailure: each class of git's stderr, an unknown message, no
 # message, and the suite's own error text.
 if (-not (Get-Command Get-ScrubGitFailure -CommandType Function -ErrorAction SilentlyContinue)) {
@@ -1216,18 +1231,28 @@ else {
         @{ Err = "warning: unable to access 'C:/zzbeta/.config/git/attributes': Permission denied`nfatal: loose object 0123456 (stored in .git/objects/01/23456) is corrupt"; Want = 'corrupt or unreadable' },
         @{ Err = "error: unable to open loose object 0123456789012345678901234567890123456789: Invalid argument`nfatal: bad object 0123456789012345678901234567890123456789"; Want = 'corrupt or unreadable' },
         @{ Err = "error: Could not read 0123456789012345678901234567890123456789`nfatal: Failed to traverse parents of commit 0123456789012345678901234567890123456789"; Want = 'corrupt or unreadable' },
+        @{ Err = "warning: unable to access 'C:/zzbeta/.config/git/attributes': Permission denied"; Want = 'not printed' },
         @{ Err = "fatal: ambiguous argument 'zzbeta cannot change to x': unknown revision or path not in the working tree."; Want = 'a revision git cannot resolve' },
         @{ Err = ''; Want = 'printed no message' }
     )
     $gfBad = @()
+    $gfN = 0
     foreach ($c in $gfCases) {
+        $gfN++
         $o = Get-ScrubGitFailure ([pscustomobject]@{ Ok = $true; Code = 128; Error = ''; Stderr = $c.Err })
-        if (-not ($o -match [regex]::Escape($c.Want)) -or $o -match 'zzbeta|fatal|error:' -or $o -notmatch 'exit 128') { $gfBad += ($o.Replace('zzbeta', '<entry>') + ' <- want ' + $c.Want) }
+        if (-not ($o -match [regex]::Escape($c.Want)) -or $o -match 'zzbeta|fatal|error:' -or $o -notmatch 'exit 128') { $gfBad += "case ${gfN}: $(Format-ScrubReasonChecks $o $c.Want @('zzbeta', 'fatal', 'error:')); exit code named: $($o -match 'exit 128')" }
     }
     $o = Get-ScrubGitFailure ([pscustomobject]@{ Ok = $false; Code = $null; Error = 'git did not exit within 120 s'; Stderr = 'fatal: zzbeta' })
-    if ($o -notmatch 'did not exit within 120 s' -or $o -match 'zzbeta') { $gfBad += ($o.Replace('zzbeta', '<entry>') + ' <- want the suite''s own error, no stderr') }
+    if ($o -notmatch 'did not exit within 120 s' -or $o -match 'zzbeta') { $gfBad += "own-error case: $(Format-ScrubReasonChecks $o 'did not exit within 120 s' @('zzbeta'))" }
     Assert-Coord 'SG4 Get-ScrubGitFailure names a class of git stderr (or says it is not printed) and the exit code, never the stderr text; the suite''s own error text is kept' ($gfBad.Count -eq 0) ($gfBad -join "`n")
 }
+# The detail helpers print what was checked, never the text they check.
+$gfHelp = @()
+if ((Format-ScrubFixtureOutput "fatal: C:\zzbeta\x: cannot read") -match 'zzbeta|fatal' -or (Format-ScrubFixtureOutput "fatal: C:\zzbeta") -notmatch 'printed a message') { $gfHelp += 'fixture output with text' }
+if ((Format-ScrubFixtureOutput '') -cne 'quiet' -or (Format-ScrubFixtureOutput " `n") -cne 'quiet') { $gfHelp += 'fixture output empty' }
+$gfChk = Format-ScrubReasonChecks "fatal: cannot change to 'C:\ZZBETA\x'" 'not a git repository' @('zzbeta', 'C:\zzbeta')
+if ($gfChk -match '(?i)zzbeta|fatal|cannot change' -or $gfChk -notmatch 'forbidden text 1 present: True' -or $gfChk -notmatch 'forbidden text 2 present: True' -or $gfChk -notmatch 'named: False') { $gfHelp += 'reason checks' }
+Assert-Coord 'SG4 the FAIL-detail helpers (fixture output, reason checks) never print the text they check, and report what they found, a different letter case included' ($gfHelp.Count -eq 0) ($gfHelp -join '; ')
 $emptyRepo = New-ScrubTestRepo 'empty-repo'
 $res = Invoke-ScrubScan -Repo $emptyRepo
 Assert-Coord 'SG4 a work tree with no file to ship: discovery fails (zero files), not a pass' (-not $res.DiscoveryOk -and $res.Reason -match 'no files') "ok=$($res.DiscoveryOk) reason=$($res.Reason)"
@@ -1582,7 +1607,7 @@ Assert-Coord 'SG6 a range git cannot resolve is not a pass: discovery fails with
 # A ref typed into the range is named in git's stderr ("bad revision '<ref>'"):
 # the reason names the class, never the ref.
 $badRes = Invoke-ScrubHistory -Repo $hRepo -Range 'refs/heads/zzbeta-nosuch ^HEAD'
-Assert-Coord 'SG6 a range with a ref git cannot resolve: the reason says a revision cannot be resolved and does not name the ref' ((-not $badRes.DiscoveryOk) -and ([string]$badRes.Reason -match 'a revision git cannot resolve') -and ([string]$badRes.Reason -notmatch 'zzbeta|fatal')) ([string]$badRes.Reason).Replace('zzbeta', '<entry>')
+Assert-Coord 'SG6 a range with a ref git cannot resolve: the reason says a revision cannot be resolved and does not name the ref' ((-not $badRes.DiscoveryOk) -and ([string]$badRes.Reason -match 'a revision git cannot resolve') -and ([string]$badRes.Reason -notmatch 'zzbeta|fatal')) (Format-ScrubReasonChecks ([string]$badRes.Reason) 'a revision git cannot resolve' @('zzbeta', 'fatal'))
 $emptyRes = Invoke-ScrubHistory -Repo $hRepo -Range 'HEAD..HEAD'
 Assert-Coord 'SG6 an empty range is not a pass either: discovery fails' ((-not $emptyRes.DiscoveryOk) -and $emptyRes.Reason)
 # a merge: the commits of a merged branch are in the range
@@ -1840,7 +1865,7 @@ $bigLast = $bigEx[-1]
 $bigTip = Get-CoordGitOut $bigRepo @('commit-tree', ($bigLast + '^{tree}'), '-p', $bigLast, '-m', 'on top')
 $bigRange = $bigTip + ' ' + (($bigEx | ForEach-Object { '^' + $_ }) -join ' ')
 $bigShort = @(Get-CoordGitOut $bigRepo @('rev-list', $bigTip, ('^' + $bigEx[-2])))
-Assert-Coord 'SG6 control: the big range has 1100 excluded commits in chain order, is longer than a Windows command line (32767 characters), and without its last exclusion holds 2 commits' ($bigEx.Count -eq 1100 -and $bigRange.Length -gt 32767 -and (($bigShort -join "`n") -split "`r?`n" | Where-Object { $_ }).Count -eq 2) "excluded=$($bigEx.Count) length=$($bigRange.Length) fast-import=$(if ($fiOut) { 'printed a message (not shown: git''s text can name a path)' } else { 'quiet' })"
+Assert-Coord 'SG6 control: the big range has 1100 excluded commits in chain order, is longer than a Windows command line (32767 characters), and without its last exclusion holds 2 commits' ($bigEx.Count -eq 1100 -and $bigRange.Length -gt 32767 -and (($bigShort -join "`n") -split "`r?`n" | Where-Object { $_ }).Count -eq 2) "excluded=$($bigEx.Count) length=$($bigRange.Length) fast-import=$(Format-ScrubFixtureOutput $fiOut)"
 $r = Invoke-ScrubHistory -Repo $bigRepo -Range $bigRange
 Assert-Coord 'SG6 a range of 1101 revisions (longer than a command line) is read: 1 commit, discovery ok' ($r.DiscoveryOk -and $r.Commits -eq 1) "ok=$($r.DiscoveryOk) commits=$($r.Commits) reason=$(([string]$r.Reason).Substring(0, [Math]::Min(300, ([string]$r.Reason).Length)))"
 
@@ -1896,7 +1921,7 @@ $nuFile = Join-Path $tmp 'nonutf8-path.fi'
 $nuOut = (& cmd.exe /d /c "git -C `"$dhRepo`" fast-import --quiet < `"$nuFile`" 2>&1" | Out-String).Trim()
 $r = Invoke-ScrubHistory -Repo $dhRepo -Range ('refs/heads/nu ^' + $nuHead) -Denylist @('zzbeta')
 $nuText = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
-Assert-Coord 'SG6 a history path in bytes that are not valid UTF-8 is named by its blob alone' ($r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -match '^blob [0-9a-f]{7}$' -and $_.Rule -ceq $pathRule }).Count -eq 1 -and @($r.Hits | Where-Object { $_.File.Contains([string][char]0xFFFD) }).Count -eq 0) "ok=$($r.DiscoveryOk) reason=$($r.Reason) fast-import=$(if ($nuOut) { 'printed a message (not shown: git''s text can name a path)' } else { 'quiet' }) hits=$($nuText.Replace([string][char]0xFFFD, '<U+FFFD>'))"
+Assert-Coord 'SG6 a history path in bytes that are not valid UTF-8 is named by its blob alone' ($r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -match '^blob [0-9a-f]{7}$' -and $_.Rule -ceq $pathRule }).Count -eq 1 -and @($r.Hits | Where-Object { $_.File.Contains([string][char]0xFFFD) }).Count -eq 0) "ok=$($r.DiscoveryOk) reason=$($r.Reason) fast-import=$(Format-ScrubFixtureOutput $nuOut) hits=$($nuText.Replace([string][char]0xFFFD, '<U+FFFD>'))"
 # Under a console input encoding with a preamble (a BOM), git still reads the
 # revisions on stdin (Invoke-ScrubGit swaps in one without a preamble while git
 # starts).
