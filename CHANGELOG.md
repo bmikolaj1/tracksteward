@@ -5,17 +5,24 @@
 - **A pattern hit in an annotated tag's own name prints no matched text** (F3, the line 0.2.6 and 0.2.7 listed as
   not covered, reasoned there). Measured first, in the suite: a tag named with a follow-up number, scanned by
   `Invoke-ScrubHistory`, kept the name's text in its hit. A history run prints a pattern hit's text in its FAIL
-  detail, which the pre-push gate shows (read from the code, not measured through the hook). Since 0.2.6 a file name or a pushed ref name keeps no
-  matched text, because that text is part of the name; the tag object's `tag <name>` header now goes the same way.
-  The sibling sweep found one more: the embedded tag inside a commit's `mergetag` header has its own `tag <name>`
-  line, and printed it too (measured the same way). Both now keep no text. The other tag headers (type, gpgsig, an
-  unknown key) and every message keep their text: they are not names. A denylist hit never printed its text
-  anywhere, so neither leak could print a denylist entry.
+  detail, which the pre-push gate shows (read from the code, not measured through the hook). Since 0.2.6 a file
+  name or a pushed ref name keeps no matched text, because that text is part of the name; the tag object's
+  `tag <name>` header now goes the same way. The sibling sweep of the tag headers found one more: the embedded tag
+  inside a commit's `mergetag` header has its own `tag <name>` line, and printed it too (measured the same way).
+  Both now keep no text. The other tag headers (type, gpgsig, an unknown key) keep their text: they are not the
+  name. A pattern hit whose matched text holds a whole denylist entry already kept no text, so neither leak could
+  print a whole entry.
 
-  New SG6 rows, both seen red before the fix (the name's text printed) and green after: a pattern hit in an
-  annotated tag's own name, and in a mergetag's embedded tag name.
+  New SG6 rows: a pattern hit in an annotated tag's own name, and in a mergetag's embedded tag name (both seen red
+  before the fix, the name's text printed, and green after); and a pattern hit in a gpgsig header of a tag and of a
+  mergetag, which keeps its text (seen red with the switch set for every header).
 
-  Still not covered: `-PushRefs` is still an argument (as in 0.2.6).
+  Still not covered:
+  - a message keeps its text, and a message can quote a tag's name: git's own merge message for a tag
+    (`Merge tag '<name>'`, which git writes when it merges a tag, unless the message is edited) prints
+    the name's matched text, as a file name quoted in a message has since 0.2.6 (the message seen in a scratch repo
+    by the panel; that its hit keeps the text is read from the code, not a suite row);
+  - `-PushRefs` is still an argument (as in 0.2.6).
 
 ## 0.2.7 - 2026-11-21
 
@@ -83,8 +90,8 @@
     fixture failure through the hook (accepted, test diagnostics only).
 
   Still not covered, as in 0.2.6:
-  - an annotated tag's own name, read in its header block, still prints a pattern hit's text (reasoned, not
-    measured; measured and fixed in 0.2.8);
+  - an annotated tag's own name, read in its header block, still prints a pattern hit's text (reasoned here, not
+    measured; 0.2.8 measured it and fixed it);
   - `-PushRefs` is still an argument.
 
 ## 0.2.6 - 2026-11-21
@@ -132,8 +139,8 @@
   rows for a range label and a blob-revision reason that hold the entry; (Codex round 2:) a pattern-rule hit in a
   file name or a pushed ref name no longer prints its matched text, which is part of the name (SG4 and SG6 rows,
   red before; not covered: an annotated tag's own name, read in its header block, still prints a pattern hit's
-  text, as every header does; reasoned, not measured; reproduce before fixing; a denylist hit never prints its text
-  anywhere), and the big-range rows (SG6, P21) use a chain of 1100 commits, so only the last exclusion keeps the
+  text, as every header does; reasoned, not measured; reproduce before fixing (0.2.8 measured it and fixed it); a
+  denylist hit never prints its text anywhere), and the big-range rows (SG6, P21) use a chain of 1100 commits, so only the last exclusion keeps the
   count at 1, and P21 also refuses a commit with the entry at that scale.
 
 - **Pre-push suite: a push from a linked worktree under the absolute `core.hooksPath`** (the README setup; F6 of the

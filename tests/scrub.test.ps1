@@ -604,8 +604,9 @@ function Add-ScrubContent {
 # Hits in a short text that is not a file version (a file name, a ref name, an
 # identity), added under $Label. Not counted as a scanned version, and no hex
 # tokens taken from it.
-# -NoText: the hit keeps no matched text (a file name or a ref name, whose
-# matched text is part of the name, which is never printed).
+# -NoText: the hit keeps no matched text (a file name, a ref name, or the tag
+# header of a tag or a mergetag, which holds the tag's name: the matched text is
+# part of the name, which is never printed).
 function Add-ScrubTextHits {
     param($Res, [string]$Label, [string]$Text, [string[]]$Denylist, [switch]$NoText)
     foreach ($h in @(Find-ScrubHits -Path '' -Lines @($Text -split "`r?`n") -Denylist $Denylist)) {
@@ -918,7 +919,8 @@ function Invoke-ScrubHistory {
                         elseif ($h.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of tag ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
                         # The name, the type, a gpgsig header and any other header, its key
                         # included; the label never names the key (a key can hold the entry).
-                        # The name's hits keep no matched text: it is part of the name.
+                        # The name's hits keep no matched text: it is part of the name (a
+                        # continuation line under it is blanked too, which only prints less).
                         else { Add-ScrubTextHits $res ('tag ' + $short + ' headers') ($h.Key + ' ' + $h.Value) $Denylist -NoText:($h.Key -ceq 'tag') }
                     }
                 }
@@ -1957,6 +1959,13 @@ Assert-Coord "SG6 a pattern hit in an annotated tag's own name prints no matched
 $r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "mergetag object $rawParent`n type commit`n tag rel-FU" + "-78`n tagger $mtIdent 1700000000 +0000`n `n notes`n`nmerge it`n")) @($mtIdent)
 $mnText = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
 Assert-Coord "SG6 a pattern hit in a mergetag's embedded tag name prints no matched text" ($r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'internal follow-up number' -and -not $_.Text }).Count -eq 1 -and $mnText -notmatch '-78') "ok=$($r.DiscoveryOk) name text printed=$($mnText -match '-78') hits=$($r.Hits.Count)"
+# Only the name: a pattern hit in another tag header (here a gpgsig) keeps its
+# text, in a tag and in a mergetag.
+$r = Invoke-ScrubRawTag "object $rawParent`ntype commit`n" ('gpgsig FU' + "-91`n")
+$okTag = $r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'tag * headers' -and $_.Rule -ceq 'internal follow-up number' -and $_.Text }).Count -eq 1
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n gpgsig FU" + "-92`n" + $mtTail))
+$okMt = $r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'internal follow-up number' -and $_.Text }).Count -eq 1
+Assert-Coord 'SG6 a pattern hit in a tag header that is not the name (gpgsig) keeps its text, in a tag and in a mergetag' ($okTag -and $okMt) "tag=$okTag mergetag=$okMt"
 # A range is never quoted in a label or a reason (a ref name in it can hold a
 # private word): only how many revisions it holds, and a revision by position.
 Assert-Coord 'SG6 a range label names only how many revisions it holds, never the revisions' ((Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD') -notmatch 'zzbeta' -and (Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD') -match '2 revisions') (Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD').Replace('zzbeta', '<entry>')

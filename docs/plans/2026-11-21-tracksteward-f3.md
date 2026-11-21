@@ -23,9 +23,13 @@ the hits (as `Format-ScrubHit` prints them) checked for the name's matched text.
 ## Step 2: the fix (only if measured)
 
 Same class as the 0.2.6 name redactions: the tag header whose key is `tag` (the tag's name) is scanned with
-`-NoText`. Sibling sweep: every other place a tag's name is read as text. The one found by reading is the embedded
+`-NoText`. Sibling sweep: every other header that holds a tag's name. The one found by reading is the embedded
 tag of a `mergetag` commit header (its own `tag <name>` line), which gets the same treatment and its own row, seen
-red first. Other headers (type, gpgsig, unknown keys) and the messages keep their text: they are not names.
+red first. Other headers (type, gpgsig, unknown keys) keep their text: they are not the name.
+
+Not in this slice (panel round 1): a message keeps its text, and git's own merge message for a tag quotes the
+tag's name (`Merge tag '<name>'`). Changing what a message prints is a new rule, not this name redaction: listed as
+still not covered, and sent to the coordinator as a finding.
 
 Version 0.2.8: CHANGELOG and plugin.json. Out of this slice: `-PushRefs` is still an argument.
 
