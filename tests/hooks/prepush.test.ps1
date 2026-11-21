@@ -40,14 +40,34 @@
 # P18 a lightweight tag whose name holds the entry, on a commit the remote already
 #     has (0 new commits): refused, the tag not on the remote
 # P19 a tag whose name holds a two-word entry parted by a no-break space: refused
+# P20 a push from a linked worktree whose branch has no hook of its own, under
+#     the absolute core.hooksPath of the main checkout (the README setup): a
+#     commit with the entry is refused, a clean one is pushed
+# P21 a remote that advertises a chain of 1100 more commits (a range longer than
+#     a Windows command line), pushes on top of its last one: a commit with the
+#     entry is scanned and refused, a clean one is scanned and pushed (the range
+#     goes on stdin)
+# P22 a deletion of a ref whose name holds the entry: allowed, and the hook's
+#     deletion line names the ref by its position, not by its name
+# P23 a tag on a blob, and a forced push over a commit this clone does not have,
+#     to refs whose names hold the entry: refused, by position, not by name
+#     (P1 also checks that the closing refusal line names no checkout path)
+# P24 a scrub run that fails without a FAIL line (the suite file missing, so
+#     powershell.exe names its absolute path): refused, and the hook prints none
+#     of that output
+# P25 a suite that stops on an error record (its indented CategoryInfo line names
+#     a path), alone and after a FAIL line with its detail: refused; the FAIL
+#     line and detail are shown, no line of the error record is
 # S1  the copy's scrub suite run without -History, TRACKSTEWARD_SCRUB_DENYLIST
 #     unset: exit 0 with a loud NOT CHECKED line (a clone without the private file)
 # S2  the same, the variable set to a missing file: exit 1
 # S3  the same as S1 with -Strict: exit 1
-# Not covered (reasoned, no row): a remote that advertises so many commits that
-# the range passes the Windows command-line limit (the hook's own git rev-list
-# fails first and the push is refused); an ls-remote that fails (refused); and
-# a stalled scan (no timeout of its own; git waits).
+# S4  -HistoryStdin with nothing on stdin, the denylist set: exit 1
+# S5  -History and -HistoryStdin together: exit 1
+# Not covered (reasoned, no row): an ls-remote that fails (refused); a push of so
+# many refs that their names pass the command-line limit (-PushRefs is still an
+# argument; the push is refused); and a stalled scan (no timeout of its own; git
+# waits).
 #
 # Exit 0 = every row passed; exit 1 = a row failed.
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\hooks\prepush.test.ps1
@@ -70,25 +90,25 @@ $scrubEnv = @('TRACKSTEWARD_SCRUB_STRICT', 'TRACKSTEWARD_SCRUB_HISTORY', 'TRACKS
 
 # Runs `git -C $work push <args>` in a child PowerShell (so a hung hook is killed,
 # not waited on) with the test denylist set, or with no denylist variable at all.
-function Invoke-TestPush([string[]]$PushArgs, [switch]$NoDenylist, [string]$AllowIdentFile = '') {
+function Invoke-TestPush([string[]]$PushArgs, [switch]$NoDenylist, [string]$AllowIdentFile = '', [string]$From = $work) {
     $file = Join-Path $tmp ('push-' + [Guid]::NewGuid().ToString('N').Substring(0, 6) + '.ps1')
     $q = { param($s) "'" + ($s -replace "'", "''") + "'" }
     $argText = ($PushArgs | ForEach-Object { & $q $_ }) -join ', '
-    $body = "`$a = @($argText)`r`n& git -C $(& $q $work) push @a 2>&1 | ForEach-Object { [string]`$_ }`r`nexit `$LASTEXITCODE`r`n"
+    $body = "`$a = @($argText)`r`n& git -C $(& $q $From) push @a 2>&1 | ForEach-Object { [string]`$_ }`r`nexit `$LASTEXITCODE`r`n"
     [System.IO.File]::WriteAllText($file, $body, (New-Object System.Text.UTF8Encoding($false)))
     $extra = @{}
     $remove = $scrubEnv
     if ($NoDenylist) { $remove = $scrubEnv + 'TRACKSTEWARD_SCRUB_DENYLIST' } else { $extra['TRACKSTEWARD_SCRUB_DENYLIST'] = $deny }
     if ($AllowIdentFile) { $extra['TRACKSTEWARD_SCRUB_ALLOW_IDENT'] = $AllowIdentFile } else { $remove = $remove + 'TRACKSTEWARD_SCRUB_ALLOW_IDENT' }
-    return Invoke-HookTestPowerShell -Script $file -StartDir $work -ExtraEnv $extra -RemoveEnv $remove -Seconds 600
+    return Invoke-HookTestPowerShell -Script $file -StartDir $From -ExtraEnv $extra -RemoveEnv $remove -Seconds 600
 }
 # Runs the copy's scrub suite (no -History) in a child PowerShell, with the
 # denylist variable unset or set to $Denylist.
-function Invoke-CopyScrub([string]$Denylist = '', [string]$ScriptArgs = '') {
+function Invoke-CopyScrub([string]$Denylist = '', [string]$ScriptArgs = '', [string]$StdinText = '') {
     $extra = @{}
     $remove = $scrubEnv + 'TRACKSTEWARD_SCRUB_ALLOW_IDENT'
     if ($Denylist) { $extra['TRACKSTEWARD_SCRUB_DENYLIST'] = $Denylist } else { $remove = $remove + 'TRACKSTEWARD_SCRUB_DENYLIST' }
-    return Invoke-HookTestPowerShell -Script (Join-Path $work 'tests\scrub.test.ps1') -StartDir $work -ExtraEnv $extra -RemoveEnv $remove -ScriptArgs $ScriptArgs -Seconds 600
+    return Invoke-HookTestPowerShell -Script (Join-Path $work 'tests\scrub.test.ps1') -StartDir $work -ExtraEnv $extra -RemoveEnv $remove -ScriptArgs $ScriptArgs -StdinText $StdinText -Seconds 600
 }
 function Get-RemoteRef([string]$Ref) {
     $o = (& git -C $origin rev-parse -q --verify $Ref 2>$null | Out-String).Trim()
@@ -131,6 +151,8 @@ try {
     New-TestCommit 'p1' $base "note $entry here"
     $r = Invoke-TestPush @('origin', 'p1')
     Assert-Coord 'P1 a new branch whose commit message holds a denylist entry is refused and does not reach the remote' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p1') -and ($r.Out -match 'commit message [0-9a-f]{7}:1: denylist entry 1') -and ($r.Out -match 'refused')) (Format-Push $r)
+    $workFwd = $work.Replace('\', '/')
+    Assert-Coord 'P1 the refusal names no path of the checkout (a path can hold a private name)' (($r.Out -match 'refused the push: the scrub suite failed') -and -not $r.Out.Contains($work) -and -not $r.Out.Contains($workFwd)) (Format-Push $r)
 
     Write-Host '(P2) file content gone again at the tip'
     New-TestCommit 'p2' $base 'add a note' @{ 'note.md' = "a note about $entry`n" }
@@ -156,7 +178,7 @@ try {
     Write-Host '(P6) a deletion'
     Invoke-HookTestGit $tmp @('--git-dir', $origin, 'branch', 'p6', $base)
     $r = Invoke-TestPush @('origin', '--delete', 'p6')
-    Assert-Coord 'P6 deleting a remote branch is allowed with nothing to scan' (($r.Code -eq 0) -and -not (Get-RemoteRef 'refs/heads/p6') -and ($r.Out -match 'a deletion') -and ($r.Out -notmatch 'scanning')) (Format-Push $r)
+    Assert-Coord 'P6 deleting a remote branch is allowed with nothing to scan' (($r.Code -eq 0) -and -not (Get-RemoteRef 'refs/heads/p6') -and ($r.Out -match 'pre-push: deletion 1 of the push: nothing to scan') -and ($r.Out -notmatch 'scanning')) (Format-Push $r)
 
     Write-Host '(P7) an existing remote branch moved forward'
     $p3Remote = Get-RemoteRef 'refs/heads/p3'
@@ -271,6 +293,123 @@ try {
     Assert-Coord 'P19 a tag whose name holds a two-word entry parted by a no-break space is refused' (($r.Code -ne 0) -and -not $remoteT19 -and ($r.Out -match 'pushed ref name 1:1: denylist entry 2')) (Format-Push $r)
     Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
 
+    Write-Host '(P20) a push from a linked worktree under the absolute core.hooksPath'
+    # The README setup: core.hooksPath in the main checkout names its .githooks by
+    # absolute path, and a worktree whose branch predates the hook (here: has no
+    # .githooks at all) runs the main checkout's hook and scrub suite.
+    $wt = Join-Path $tmp 'wt20'
+    Invoke-HookTestGit $work @('worktree', 'add', '--quiet', '-b', 'p20', $wt, $base)
+    Invoke-HookTestGit $wt @('rm', '-r', '--quiet', '--', '.githooks')
+    Invoke-HookTestGit $wt @('commit', '--quiet', '-m', 'a branch without the hook')
+    Invoke-HookTestGit $work @('config', 'core.hooksPath', (Join-Path $work '.githooks'))
+    try {
+        # git prints the value as UTF-8: read it so (a non-ASCII temp path would
+        # read back garbled under the console code page), as the fixture does.
+        $prevOutEnc = [Console]::OutputEncoding
+        try { [Console]::OutputEncoding = $coordUtf8; $wtHooks = (& git -C $wt config core.hooksPath | Out-String).Trim() } finally { [Console]::OutputEncoding = $prevOutEnc }
+        Assert-Coord 'P20 control: the worktree has no .githooks of its own and reads the absolute core.hooksPath' ((-not (Test-Path -LiteralPath (Join-Path $wt '.githooks'))) -and ($wtHooks -ceq (Join-Path $work '.githooks'))) "read=$wtHooks"
+        [System.IO.File]::WriteAllText((Join-Path $wt 'w20.md'), "a note about $entry`n", $coordUtf8)
+        Invoke-HookTestGit $wt @('-c', 'core.safecrlf=false', 'add', '--', 'w20.md')
+        Invoke-HookTestGit $wt @('commit', '--quiet', '-m', 'a worktree note')
+        $r = Invoke-TestPush @('origin', 'p20') -From $wt
+        Assert-Coord 'P20 a push from the linked worktree of a commit with the entry runs the main checkout''s hook and is refused' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p20') -and ($r.Out -match 'w20\.md \(blob [0-9a-f]{7}\):1: denylist entry 1')) (Format-Push $r)
+        Invoke-HookTestGit $wt @('reset', '--quiet', '--hard', 'HEAD~1')
+        [System.IO.File]::WriteAllText((Join-Path $wt 'c20.md'), "nothing private`n", $coordUtf8)
+        Invoke-HookTestGit $wt @('-c', 'core.safecrlf=false', 'add', '--', 'c20.md')
+        Invoke-HookTestGit $wt @('commit', '--quiet', '-m', 'a clean worktree change')
+        $r = Invoke-TestPush @('origin', 'p20') -From $wt
+        Assert-Coord 'P20 a clean push from the linked worktree is scanned (2 commits) and pushed' (($r.Code -eq 0) -and ((Get-RemoteRef 'refs/heads/p20') -ceq (Get-LocalRef 'p20')) -and ($r.Out -match 'scanning 2 commit')) (Format-Push $r)
+    }
+    finally {
+        Invoke-HookTestGit $work @('config', 'core.hooksPath', '.githooks')
+        Invoke-HookTestGit $work @('worktree', 'remove', '--force', $wt)
+    }
+
+    Write-Host '(P21) a remote that advertises more commits than fit on a command line'
+    # A chain of 1100 commits on the base, each on its own remote branch (a busy
+    # remote's refs/pull/* advertise this many), made with fast-import from a
+    # file (a PowerShell pipe would put a BOM in front of the stream). The pushes
+    # build on the last one, so only its exclusion keeps the count at 1.
+    $fi = New-Object System.Text.StringBuilder
+    for ($i = 1; $i -le 1100; $i++) {
+        $msg = "m$i"
+        $from = if ($i -eq 1) { $base } else { ':' + ($i - 1) }
+        [void]$fi.Append("commit refs/heads/many/$i`nmark :$i`ncommitter t <t@example.invalid> 1700000000 +0000`ndata $($msg.Length)`n$msg`nfrom $from`n`n")
+    }
+    $fiFile = Join-Path $tmp 'many.fi'
+    [System.IO.File]::WriteAllText($fiFile, $fi.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+    $fiOut = (& cmd.exe /d /c "git -C `"$work`" fast-import --quiet < `"$fiFile`" 2>&1" | Out-String).Trim()
+    Invoke-HookTestGit $work @('push', '--quiet', '--no-verify', 'origin', 'refs/heads/many/*:refs/heads/many/*')
+    $advertised = @((& git -C $work ls-remote origin 'refs/heads/many/*' | Out-String) -split "`r?`n" | Where-Object { $_ }).Count
+    Assert-Coord 'P21 control: the remote advertises 1100 more commits (a range of more than 32767 characters)' ($advertised -eq 1100) "advertised=$advertised fast-import=$fiOut"
+    New-TestCommit 'p21d' 'refs/heads/many/1100' "note $entry at scale"
+    $r = Invoke-TestPush @('origin', 'p21d')
+    Assert-Coord 'P21 at that scale a commit whose message holds the entry is scanned (1 commit) and refused, not on the remote' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p21d') -and ($r.Out -match 'scanning 1 commit') -and ($r.Out -match 'commit message [0-9a-f]{7}:1: denylist entry 1')) (Format-Push $r)
+    New-TestCommit 'p21' 'refs/heads/many/1100' 'a clean change' @{ 'c21.md' = "nothing private`n" }
+    $r = Invoke-TestPush @('origin', 'p21')
+    Assert-Coord 'P21 a clean push on top of the 1100 advertised commits is scanned (1 commit) and pushed' (($r.Code -eq 0) -and ((Get-RemoteRef 'refs/heads/p21') -ceq (Get-LocalRef 'p21')) -and ($r.Out -match 'scanning 1 commit')) (Format-Push $r)
+    Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
+
+    # The hook's own lines (git's own push output names the refs too; only what
+    # the hook prints is checked).
+    function Get-HookLines($R) { return @(($R.Out -split "`r?`n") | Where-Object { $_ -match '^pre-push: ' }) }
+
+    Write-Host '(P22) a deletion of a ref whose name holds the entry'
+    Invoke-HookTestGit $tmp @('--git-dir', $origin, 'branch', "del-$entry", $base)
+    $r = Invoke-TestPush @('origin', '--delete', "del-$entry")
+    $hl = Get-HookLines $r
+    Assert-Coord 'P22 a deletion of a ref whose name holds the entry is allowed, and the hook names it by its position, not its name' (($r.Code -eq 0) -and -not (Get-RemoteRef "refs/heads/del-$entry") -and @($hl | Where-Object { $_ -match '^pre-push: deletion 1 of the push: nothing to scan$' }).Count -eq 1 -and @($hl | Where-Object { $_.Contains($entry) }).Count -eq 0) (Format-Push $r)
+
+    Write-Host '(P23) refusals of refs whose names hold the entry'
+    Invoke-HookTestGit $work @('tag', "t23-$entry", $blob)
+    $r = Invoke-TestPush @('origin', "refs/tags/t23-$entry")
+    $hl = Get-HookLines $r
+    Assert-Coord 'P23 a tag on a blob whose name holds the entry is refused, and the refusal names it by its position, not its name' (($r.Code -ne 0) -and -not (Get-RemoteRef "refs/tags/t23-$entry") -and @($hl | Where-Object { $_ -match 'not a commit' }).Count -eq 1 -and @($hl | Where-Object { $_.Contains($entry) }).Count -eq 0) (Format-Push $r)
+    Invoke-HookTestGit $tmp @('--git-dir', $origin, 'update-ref', "refs/heads/f23-$entry", $foreign)
+    $r = Invoke-TestPush @('--force', 'origin', "p3:refs/heads/f23-$entry")
+    $hl = Get-HookLines $r
+    Assert-Coord 'P23 a forced push over a commit this clone does not have, to a ref whose name holds the entry, is refused by position, not by name' (($r.Code -ne 0) -and ((Get-RemoteRef "refs/heads/f23-$entry") -ceq $foreign) -and @($hl | Where-Object { $_ -match 'fetch first' }).Count -eq 1 -and @($hl | Where-Object { $_.Contains($entry) }).Count -eq 0) (Format-Push $r)
+
+    Write-Host '(P24) a scrub suite that fails without a FAIL line'
+    # The suite file is missing: powershell.exe prints an error that names its
+    # absolute path, and no FAIL line. The hook refuses without printing it.
+    $suiteFile = Join-Path $work 'tests\scrub.test.ps1'
+    $suiteAside = Join-Path $tmp 'scrub.test.ps1.aside'
+    [System.IO.File]::Move($suiteFile, $suiteAside)
+    try {
+        New-TestCommit 'p24' $base 'a clean change' @{ 'c24.md' = "nothing private`n" }
+        $r = Invoke-TestPush @('origin', 'p24')
+    }
+    finally { [System.IO.File]::Move($suiteAside, $suiteFile) }
+    Assert-Coord 'P24 a scrub run that fails with no FAIL line refuses the push, and the hook prints none of its output (it can name the checkout path)' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p24') -and ($r.Out -match 'printed no FAIL line') -and -not $r.Out.Contains($work) -and -not $r.Out.Contains($workFwd)) (Format-Push $r)
+    Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
+
+    Write-Host '(P25) a scrub suite that stops on an error record'
+    # The suite replaced by a stub that stops on a terminating error: PowerShell
+    # prints an error record whose indented "+ CategoryInfo" line names the
+    # absolute path. Once alone, once after a FAIL line and its detail: the FAIL
+    # line and its detail are shown, the error record is not.
+    $stubPlain = "Get-Item -LiteralPath (Join-Path `$PSScriptRoot 'no-such-file') -ErrorAction Stop`r`nexit 0`r`n"
+    $stubFail = "Write-Host '  FAIL: a stub row'`r`nWrite-Host '    the stub detail'`r`n" + $stubPlain
+    $r25 = @()
+    [System.IO.File]::Move($suiteFile, $suiteAside)
+    try {
+        New-TestCommit 'p25' $base 'a clean change' @{ 'c25.md' = "nothing private`n" }
+        foreach ($stub in @($stubPlain, $stubFail)) {
+            [System.IO.File]::WriteAllText($suiteFile, $stub, (New-Object System.Text.UTF8Encoding($false)))
+            $r25 += , (Invoke-TestPush @('origin', 'p25'))
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $suiteFile) { Remove-Item -LiteralPath $suiteFile -Force }
+        [System.IO.File]::Move($suiteAside, $suiteFile)
+    }
+    $r = $r25[0]
+    Assert-Coord 'P25 a suite that stops on an error record (no FAIL line) refuses the push, and no line of the record is shown' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p25') -and ($r.Out -match 'printed no FAIL line') -and ($r.Out -notmatch 'CategoryInfo') -and -not $r.Out.Contains($work) -and -not $r.Out.Contains($workFwd)) (Format-Push $r)
+    $r = $r25[1]
+    Assert-Coord 'P25 after a FAIL line and its detail, the FAIL line and the detail are shown, the error record is not' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p25') -and ($r.Out -match 'FAIL: a stub row') -and ($r.Out -match 'the stub detail') -and ($r.Out -notmatch 'CategoryInfo') -and -not $r.Out.Contains($work) -and -not $r.Out.Contains($workFwd)) (Format-Push $r)
+    Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
+
     Write-Host '(S1-S3) the copy''s scrub suite with no -History'
     $r = Invoke-CopyScrub
     Assert-Coord 'S1 without -History and with TRACKSTEWARD_SCRUB_DENYLIST unset the scrub suite exits 0 and says NOT CHECKED (a clone without the private file)' (($r.Code -eq 0) -and ($r.Out -match 'NOT CHECKED: denylist absent')) (Format-Push $r)
@@ -278,6 +417,10 @@ try {
     Assert-Coord 'S2 the variable set to a missing file: exit 1' (($r.Code -eq 1) -and ($r.Out -match 'TRACKSTEWARD_SCRUB_DENYLIST is set')) (Format-Push $r)
     $r = Invoke-CopyScrub '' '-Strict'
     Assert-Coord 'S3 unset with -Strict: exit 1' (($r.Code -eq 1) -and ($r.Out -match 'strict mode')) (Format-Push $r)
+    $r = Invoke-CopyScrub $deny '-HistoryStdin -AllowEmptyRange'
+    Assert-Coord 'S4 -HistoryStdin with nothing on stdin: exit 1 (a gate run with no range is not a pass)' (($r.Code -eq 1) -and ($r.Out -match 'stdin held no revision')) (Format-Push $r)
+    $r = Invoke-CopyScrub $deny ('-History ' + $base + ' -HistoryStdin') ($base + "`n")
+    Assert-Coord 'S5 -History and -HistoryStdin together: exit 1' (($r.Code -eq 1) -and ($r.Out -match 'not both')) (Format-Push $r)
 }
 catch {
     Assert-Coord "the suite ran to its end (it threw: $($_.Exception.Message))" $false ($_.ScriptStackTrace)

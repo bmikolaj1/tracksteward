@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.2.6 - 2026-11-21
+
+- **Pre-push gate: the range goes on stdin.** The hook passed every commit the remote advertises as `^<sha>` on the
+  command line, to `git rev-list --count` and to `powershell.exe -History`, so a remote that advertised about 760
+  commits (a busy GitHub repo's `refs/pull/*`) passed the Windows command-line limit and every push was refused. The
+  hook now writes the range one revision per line to `git rev-list --count --stdin` and to the scrub suite's new
+  `-HistoryStdin` switch. `Invoke-ScrubHistory` hands the revisions to `git rev-list --stdin`. A revision that starts
+  with `-` is refused before git runs, because `--stdin` reads pseudo-options such as `--all`. `Invoke-ScrubGit` takes
+  a stdin text. Under Windows PowerShell 5.1, .NET Framework's `Process.Start` writes the console input encoding's
+  preamble into a redirected stdin. Under a UTF-8 code page that is a BOM, which git would read as part of the first
+  revision (seen: `fatal: bad revision` on every SG6 row). So the input encoding is swapped for
+  one without a preamble while git starts, and a git that cannot be started that way does not run. A `-HistoryStdin`
+  run with no revision on stdin is a FAIL, and so is one with `-History` as well. The suite's labels and reasons never
+  quote the range: they say how many revisions it holds and name a revision by its position (`revision <n> of the
+  range`), so a failing gate prints neither thousands of shas nor a ref name typed into the range (git's own stderr,
+  quoted in a reason, still can). The write of git's stdin is bounded by the same deadline as the process, so a git
+  that never reads it is stopped (reasoned, no row: no git command stays alive without reading its stdin).
+  New rows: SG6, a range of 1101 revisions (46240 characters); P21, a clean push to a remote that advertises 1100
+  more commits; S4 and S5; and an SG6 row that reads a range on stdin under a console input encoding that writes a
+  BOM (seen red with the swap removed). Still an argument: `-PushRefs`, so a push of so many refs that their names
+  pass the limit is refused (reasoned, no row).
+
+- **The gate's own lines and the suite's file labels print no private path or ref name.** The scrub suite named a
+  file by its path in every hit label and in its NUL, unreadable, skipped and index-version lists, and the hook named a ref by its name in its deletion and
+  refusal lines and printed the absolute path of its checkout. A path or ref name that holds a private name was then
+  printed on the console the gate runs on. Now a file is named by its path only when the path itself has no hit
+  (denylist and pattern rules: the check that decides whether it ships; with no denylist, only the pattern rules,
+  and a history run then fails anyway) and holds no U+FFFD (a byte that is not valid UTF-8 reads as one, and the
+  check cannot see through it). Otherwise it is named as its file-name hit already was: `listed entry <n>` in the work tree,
+  `blob <sha7>` in the history. The hook names a ref by its position (`pushed ref <n>`, the same number the suite's
+  `pushed ref name <n>` uses; `deletion <n>`). Its closing refusal line names "the checkout this hook's suite lives
+  in" instead of a path. Of a failed run the hook shows only the FAIL lines and the indented detail lines right after
+  each: it used to show every indented line, so an error record's `    + CategoryInfo` line, which can name an
+  absolute path, was shown too. When the run printed no FAIL line, the hook no longer shows its last 20 lines; it says
+  so and how to run the suite by hand. git's own push output still names the refs. Not covered: a discovery reason
+  in a FAIL detail quotes git's stderr as it is, which can name a path (a "dubious ownership" error names the
+  repository's; a follow-up). New rows: SG4 and SG6, a NUL file, an unreadable file, a skipped entry, an index version and a content hit
+  at paths that hold the entry, plus clean paths still printed, and a path with an undecodable byte (SG4 unit, SG6
+  history); P1, the refusal names no checkout path; P22, a deletion; P23, a tag on a blob and a forced push over an
+  unseen commit, to refs whose names hold the entry; P24, a suite that fails with no FAIL line (its file missing);
+  P25, a suite that stops on an error record, alone and after a FAIL line with its detail (Codex round 1:) an SG4
+  row for an index version git cannot read at such a path (seen red with the label reverted to the path), and SG6
+  rows for a range label and a blob-revision reason that hold the entry; (Codex round 2:) a pattern-rule hit in a
+  file name or a pushed ref name no longer prints its matched text, which is part of the name (SG4 and SG6 rows,
+  red before; not covered: an annotated tag's own name, read in its header block, still prints a pattern hit's
+  text, as every header does; a denylist hit never prints its text anywhere), and the big-range rows (SG6, P21) use a chain of 1100 commits, so only the last exclusion keeps the
+  count at 1, and P21 also refuses a commit with the entry at that scale.
+
+- **Pre-push suite: a push from a linked worktree under the absolute `core.hooksPath`** (the README setup; F6 of the
+  0.2.5 review). New row P20: a worktree whose branch has no `.githooks` of its own pushes with `core.hooksPath` set
+  to the main checkout's absolute `.githooks`. A commit with the entry is refused by the main checkout's hook, and a
+  clean push is scanned and pushed. It was green on arrival: no defect.
+
 ## 0.2.5 - 2026-11-19
 
 - **History rewritten (2026-11-19)**: four commits of 2026-10-30 to 2026-11-03 held private wording in three files

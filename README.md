@@ -3,7 +3,7 @@
 **One thin coordinator session over many parallel Claude Code sessions.** It gives you a daily
 ledger, scoped briefs, a findings protocol, and one verified merge at a time.
 
-> **Status:** v0.2.5, 2026-11-19. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
+> **Status:** v0.2.6, 2026-11-21. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
 > for 10 coordination days: 57 merges verified, 127 findings with recorded outcomes, up to 16 tracks in
 > a day. The scripts and the scope guard came to this plugin in 0.2.0, after those days.
 >
@@ -245,7 +245,7 @@ path outside every git working tree is allowed. If the hook's launcher fails bef
 (probed once, with the plugin root unset), the edit goes ahead and the model is not told. It is
 Windows-only as shipped, and its stated limits are in the header of `hooks/coord-scope-guard.ps1`.
 
-**The pre-push gate (maintainers).** `.githooks/pre-push` runs `tests\scrub.test.ps1 -History` once per
+**The pre-push gate (maintainers).** `.githooks/pre-push` runs `tests\scrub.test.ps1 -HistoryStdin` once per
 push, over the commits it sends that the remote does not already have, and over the ref names it writes. A private
 name in a commit message or header (its signature included), an author or committer line, a file name, a file version, an annotated tag or
 a ref name
@@ -255,7 +255,12 @@ The public identities your own commits carry go, one exact `Name <email>` per li
 `core.hooksPath` names the folder: set it in the main checkout to that checkout's absolute
 `<main checkout>\.githooks` path, not the relative `.githooks`, so a worktree whose branch predates the hook is still
 covered (its pushes run the main checkout's hook and scrub suite, whose work-tree rows then read the main checkout's
-files, not the worktree's). `git push --no-verify` skips it. A clone without
+files, not the worktree's). The hook hands the suite its range on stdin, so a remote that advertises thousands of
+commits does not pass the Windows command-line limit. The gate's own lines name a ref by its position in the push,
+and the suite's lines name a file by its path only when the denylist and pattern rules find nothing in the path
+(otherwise by its position or its blob); of a failed run only the FAIL lines and their details are shown, never an
+error record (a detail that quotes git's stderr can still name a path). git's own push output still
+names the refs. `git push --no-verify` skips it. A clone without
 the denylist (and CI) reads the scrub suite's denylist rows as UNCHECKED, not passed.
 
 ## What is not done
