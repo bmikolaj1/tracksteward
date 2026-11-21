@@ -1,8 +1,9 @@
 #!/bin/sh
 # pre-push: the private-name gate. Runs this repo's scrub suite
-# (tests/scrub.test.ps1) once per push, with -History over the commits the push
-# sends that the remote does not already advertise, and with the remote ref names
-# the push writes. That run reads those commits as stored (no replace refs):
+# (tests/scrub.test.ps1) once per push, with -HistoryStdin over the commits the
+# push sends that the remote does not already advertise (the range on stdin), and
+# with the remote ref names the push writes. That run reads those commits as
+# stored (no replace refs):
 # every message, header (author, committer and a mergetag's tagger as
 # identities; a signature as text; only the sha a tree, parent or object line
 # starts with is skipped), file name and
@@ -21,6 +22,17 @@
 # covered too). Windows only, as the scripts are (it starts powershell.exe).
 # `git push --no-verify` skips it, as it skips every pre-push hook. A deletion
 # is never scanned.
+#
+# The hook's own lines name no ref and no path: a ref by its position in the
+# push, the checkout by what it is. Of the scrub suite's output it passes on only
+# the UNCHECKED lines, and on a failure the FAIL lines and the indented detail
+# lines right after each, whose file labels name a file by its path only when
+# the path itself has no hit (with the denylist set; without it a history run
+# fails, and only the pattern rules judge a path). A discovery reason in a
+# detail can still quote git's stderr, which can name a path. No other line is shown: an error record
+# (its indented "+ CategoryInfo" line can name a path) never is, and a failure
+# with no FAIL line shows none of the output. (git's own push output still
+# names the refs.)
 #
 # Per ref, before any scan: a deletion is skipped. A ref on something that is
 # not a commit (a tag on a blob or a tree) is refused. A ref whose remote sha
@@ -43,22 +55,30 @@ tips=""
 excl=""
 refs=""
 nrefs=0
+# A ref is named by its position, never by its name (a name can hold a private
+# word): "pushed ref <n>" counts the refs that are not deletions, in the order
+# git lists them (the scrub suite's "pushed ref name <n>" is the same number,
+# since the suite runs only when no ref was refused); "deletion <n>" counts the
+# deletions.
+pos=0
+ndel=0
 while read -r lref lsha rref rsha; do
     case "$lsha" in
         *[!0]*) ;;
-        *) echo "pre-push: $rref: a deletion, nothing to scan"; continue ;;
+        *) ndel=$((ndel + 1)); echo "pre-push: deletion $ndel of the push: nothing to scan"; continue ;;
     esac
+    pos=$((pos + 1))
     type=$(git cat-file -t "$lsha" 2>/dev/null)
     peeled=$(git rev-parse -q --verify "$lsha^{commit}" 2>/dev/null)
     if [ -z "$peeled" ]; then
-        echo "pre-push: refused $rref: $lsha is not a commit, nor a tag of one (it is a ${type:-missing object})" >&2
+        echo "pre-push: refused pushed ref $pos: $lsha is not a commit, nor a tag of one (it is a ${type:-missing object})" >&2
         status=1
         continue
     fi
     case "$rsha" in
         *[!0]*)
             if ! git cat-file -e "$rsha" 2>/dev/null; then
-                echo "pre-push: refused $rref: the remote has $rsha, which this clone does not (fetch first)" >&2
+                echo "pre-push: refused pushed ref $pos: the remote has $rsha, which this clone does not (fetch first)" >&2
                 status=1
                 continue
             fi
@@ -84,25 +104,34 @@ fi
 # (objects this clone does not have) are dropped.
 have=$(printf '%s\n' "$adv" | cut -f1 | grep -E '^[0-9a-f]+$' | sort -u | sed 's/$/^{commit}/' \
     | git cat-file --batch-check='%(objectname)' 2>/dev/null | grep -E '^[0-9a-f]+$' | sort -u | sed 's/^/^/' | tr '\n' ' ')
+# The range goes on stdin, one revision per line, never on a command line: it
+# holds every commit the remote advertises, which can pass the Windows
+# command-line limit (32767 characters) on a busy remote.
 range=$(echo $tips $excl $have)
-if ! n=$(git rev-list --count $range 2>/dev/null); then
-    echo "pre-push: refused the push: git cannot read the range $range" >&2
+if ! n=$(printf '%s\n' $range | git rev-list --count --stdin 2>/dev/null); then
+    echo "pre-push: refused the push: git cannot read the range (the pushed tips minus what the remote has)" >&2
     exit 1
 fi
-echo "pre-push: scanning $n commit(s) and $nrefs ref name(s) with the scrub suite (-History over the pushed tips, minus what the remote has)"
-out=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$suite" -History "$range" -PushRefs "$(echo $refs)" -AllowEmptyRange </dev/null 2>&1)
+echo "pre-push: scanning $n commit(s) and $nrefs ref name(s) with the scrub suite (the pushed tips, minus what the remote has, on stdin)"
+out=$(printf '%s\n' $range | powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$suite" -HistoryStdin -PushRefs "$(echo $refs)" -AllowEmptyRange 2>&1)
 code=$?
 # What the run could not check is shown on success too.
 printf '%s\n' "$out" | grep -E '^  UNCHECKED: ' >&2
 if [ "$code" -ne 0 ]; then
-    fails=$(printf '%s\n' "$out" | grep -E '^  FAIL: |^    ')
+    # A FAIL line, and the indented detail lines right after it; any other line
+    # ends the detail. An error record's indented lines ("    + CategoryInfo",
+    # which can name a path) follow a line that is not indented, so they are
+    # never shown.
+    fails=$(printf '%s\n' "$out" | awk '/^  FAIL: /{print; d=1; next} d && /^    /{print; next} {d=0}')
     if [ -n "$fails" ]; then
         printf '%s\n' "$fails" >&2
     else
-        echo "pre-push: the scrub suite printed no FAIL line; its last lines:" >&2
-        printf '%s\n' "$out" | tail -n 20 >&2
+        # Its output is not shown: without a FAIL line it is an error record or
+        # a start failure, which can name absolute paths (the checkout's, git's
+        # stderr).
+        echo "pre-push: the scrub suite printed no FAIL line (it stopped on an error, or could not start); its output is not shown, since it can name local paths. Run it by hand to see it: the range on stdin to powershell -NoProfile -ExecutionPolicy Bypass -File tests\\scrub.test.ps1 -HistoryStdin" >&2
     fi
-    echo "pre-push: refused the push: the scrub suite failed (exit $code). A failing row can be a history row (SG6, what the push sends) or a work-tree row (SG5, the files of the checkout at $hookdir/..)" >&2
+    echo "pre-push: refused the push: the scrub suite failed (exit $code). A failing row can be a history row (SG6, what the push sends) or a work-tree row (SG5, the files of the checkout this hook's suite lives in)" >&2
     exit 1
 fi
 exit 0
