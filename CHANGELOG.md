@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.8 - 2026-11-21
+
+- **A pattern hit in an annotated tag's own name prints no matched text** (F3, the line 0.2.6 and 0.2.7 listed as
+  not covered, reasoned there). Measured first, in the suite: a tag named with a follow-up number, scanned by
+  `Invoke-ScrubHistory`, kept the name's text in its hit. A history run prints a pattern hit's text in its FAIL
+  detail, which the pre-push gate shows (read from the code, not measured through the hook). Since 0.2.6 a file name or a pushed ref name keeps no
+  matched text, because that text is part of the name; the tag object's `tag <name>` header now goes the same way.
+  The sibling sweep found one more: the embedded tag inside a commit's `mergetag` header has its own `tag <name>`
+  line, and printed it too (measured the same way). Both now keep no text. The other tag headers (type, gpgsig, an
+  unknown key) and every message keep their text: they are not names. A denylist hit never printed its text
+  anywhere, so neither leak could print a denylist entry.
+
+  New SG6 rows, both seen red before the fix (the name's text printed) and green after: a pattern hit in an
+  annotated tag's own name, and in a mergetag's embedded tag name.
+
+  Still not covered: `-PushRefs` is still an argument (as in 0.2.6).
+
 ## 0.2.7 - 2026-11-21
 
 - **The scrub suite's reasons never quote git's stderr** (F2 of the 0.2.6 work). When a git call failed, the suite
@@ -67,7 +84,7 @@
 
   Still not covered, as in 0.2.6:
   - an annotated tag's own name, read in its header block, still prints a pattern hit's text (reasoned, not
-    measured);
+    measured; measured and fixed in 0.2.8);
   - `-PushRefs` is still an argument.
 
 ## 0.2.6 - 2026-11-21

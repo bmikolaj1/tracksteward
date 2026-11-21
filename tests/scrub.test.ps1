@@ -918,7 +918,8 @@ function Invoke-ScrubHistory {
                         elseif ($h.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of tag ' + $short) $h.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
                         # The name, the type, a gpgsig header and any other header, its key
                         # included; the label never names the key (a key can hold the entry).
-                        else { Add-ScrubTextHits $res ('tag ' + $short + ' headers') ($h.Key + ' ' + $h.Value) $Denylist }
+                        # The name's hits keep no matched text: it is part of the name.
+                        else { Add-ScrubTextHits $res ('tag ' + $short + ' headers') ($h.Key + ' ' + $h.Value) $Denylist -NoText:($h.Key -ceq 'tag') }
                     }
                 }
                 # The message, as stored (Add-ScrubContent reads it as UTF-8 and,
@@ -980,7 +981,8 @@ function Invoke-ScrubHistory {
                         foreach ($mh in (Get-ScrubHeaders $mhead)) {
                             if ($mh.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of mergetag in commit ' + $short) $mh.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
                             elseif ($mh.Key -ceq 'object') { Add-ScrubShaHeader $res ('commit headers of ' + $short) 'object' $mh.Value $Denylist }
-                            else { Add-ScrubTextHits $res ('commit headers of ' + $short) ($mh.Key + ' ' + $mh.Value) $Denylist }
+                            # The embedded tag's name keeps no matched text, as a tag's own name.
+                            else { Add-ScrubTextHits $res ('commit headers of ' + $short) ($mh.Key + ' ' + $mh.Value) $Denylist -NoText:($mh.Key -ceq 'tag') }
                         }
                         if ($mbody) { Add-ScrubTextHits $res ('commit headers of ' + $short) $mbody $Denylist }
                     }
@@ -1945,6 +1947,16 @@ Invoke-HookTestGit $dhRepo @('commit', '--quiet', '-m', 'a pattern name')
 $r = Invoke-ScrubHistory -Repo $dhRepo -Range 'HEAD ^HEAD~1' -RefNames @('refs/heads/x-FU' + '-34')
 $pnText = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
 Assert-Coord 'SG6 a pattern hit in a history file name or a pushed ref name prints no matched text' (@($r.Hits | Where-Object { $_.File -like 'file name of blob *' -and $_.Rule -ceq 'internal follow-up number' -and -not $_.Text }).Count -eq 1 -and @($r.Hits | Where-Object { $_.File -ceq 'pushed ref name 1' -and $_.Rule -ceq 'internal follow-up number' -and -not $_.Text }).Count -eq 1 -and $pnText -notmatch '-12|-34') $pnText
+# An annotated tag's own name (its tag header) and a mergetag's embedded tag
+# name are names too: a pattern hit in either prints no matched text.
+$tnName = 'rel-FU' + '-56'
+Invoke-HookTestGit $dhRepo @('tag', '-a', $tnName, '-m', 'a clean tag message', 'HEAD')
+$r = Invoke-ScrubHistory -Repo $dhRepo -Range ('refs/tags/' + $tnName + ' ^HEAD') -AllowEmpty
+$tnText = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+Assert-Coord "SG6 a pattern hit in an annotated tag's own name prints no matched text" ($r.DiscoveryOk -and $r.Tags -eq 1 -and @($r.Hits | Where-Object { $_.File -like 'tag * headers' -and $_.Rule -ceq 'internal follow-up number' -and -not $_.Text }).Count -eq 1 -and $tnText -notmatch '-56') "ok=$($r.DiscoveryOk) tags=$($r.Tags) name text printed=$($tnText -match '-56') hits=$($r.Hits.Count)"
+$r = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "mergetag object $rawParent`n type commit`n tag rel-FU" + "-78`n tagger $mtIdent 1700000000 +0000`n `n notes`n`nmerge it`n")) @($mtIdent)
+$mnText = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
+Assert-Coord "SG6 a pattern hit in a mergetag's embedded tag name prints no matched text" ($r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'internal follow-up number' -and -not $_.Text }).Count -eq 1 -and $mnText -notmatch '-78') "ok=$($r.DiscoveryOk) name text printed=$($mnText -match '-78') hits=$($r.Hits.Count)"
 # A range is never quoted in a label or a reason (a ref name in it can hold a
 # private word): only how many revisions it holds, and a revision by position.
 Assert-Coord 'SG6 a range label names only how many revisions it holds, never the revisions' ((Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD') -notmatch 'zzbeta' -and (Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD') -match '2 revisions') (Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD').Replace('zzbeta', '<entry>')
