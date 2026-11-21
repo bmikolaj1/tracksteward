@@ -45,7 +45,8 @@
   rows for a range label and a blob-revision reason that hold the entry; (Codex round 2:) a pattern-rule hit in a
   file name or a pushed ref name no longer prints its matched text, which is part of the name (SG4 and SG6 rows,
   red before; not covered: an annotated tag's own name, read in its header block, still prints a pattern hit's
-  text, as every header does; a denylist hit never prints its text anywhere), and the big-range rows (SG6, P21) use a chain of 1100 commits, so only the last exclusion keeps the
+  text, as every header does; reasoned, not measured; reproduce before fixing; a denylist hit never prints its text
+  anywhere), and the big-range rows (SG6, P21) use a chain of 1100 commits, so only the last exclusion keeps the
   count at 1, and P21 also refuses a commit with the entry at that scale.
 
 - **Pre-push suite: a push from a linked worktree under the absolute `core.hooksPath`** (the README setup; F6 of the
