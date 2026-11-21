@@ -34,8 +34,12 @@
   The tag walk skipped every revision that held `..`, so `-History origin/main..<annotated tag>` read none of that
   tag's headers, tagger or message (seen: 0 tags read). It now reads the positive ends: the right side of `a..b`
   and both sides of `a...b`, an empty side read as HEAD (HEAD can be a symbolic ref to a tag). The revision is split
-  as git splits it: at the first `..`, a `...` when a `.` follows, and only when both sides resolve; otherwise it is
-  one revision, as git then reads it (a message search such as `:/text` can hold `..`). A reason names a side as
+  at the first `..`, a `...` when a `.` follows, and only when both sides resolve as commits (`<side>^{commit}`,
+  the hint git gives a range side, so an ambiguous short sha still resolves: measured by hand on a scratch repo
+  whose commit and blob share a 4-digit prefix, where the first split failed discovery on `<prefix>..HEAD`; no row,
+  since building such a collision in the suite is slow); otherwise it is one
+  revision, as git then reads it (a message search such as `:/text` can hold `..`). A side that is a tree or a blob
+  makes the range fail discovery, never pass. A reason names a side as
   `revision <n> (left side)` or `(right side)`, never by its text. The pre-push gate was not affected: it passes
   `<tip> ^<sha>`, not `a..b`. New SG6 rows, seen red before the fix and green after: a tag at the positive end of
   `a..b` and on either side of `a...b` is read and its message hits (0 tags on each form before); and a tag reached

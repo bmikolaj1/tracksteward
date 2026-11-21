@@ -892,8 +892,11 @@ function Invoke-ScrubHistory {
     # The positive ends: a plain revision, the right side of a..b, both sides of
     # a...b; an empty side is HEAD (which can be a symbolic ref to a tag). Split
     # as git does: at the first '..', a '...' when a '.' follows it, and only
-    # when both sides resolve; otherwise the revision is one revision, as git
-    # then reads it (a message search such as :/text can hold '..').
+    # when both sides resolve as commits (<side>^{commit}, the hint git gives a
+    # range side, so an ambiguous short sha resolves; measured by hand, no row); otherwise
+    # it is one revision, as git then reads it (a message search such as :/text
+    # can hold '..'). A side that is a tree or a blob fails that check, and the
+    # whole revision then fails to resolve: a discovery failure, never a pass.
     $walk = New-Object System.Collections.Generic.List[object]
     $rvPos = 0
     foreach ($rv in $revs) {
@@ -910,7 +913,7 @@ function Invoke-ScrubHistory {
             if (-not $right) { $right = 'HEAD' }
             $both = $true
             foreach ($s in @($left, $right)) {
-                $v = Invoke-ScrubGit $Repo @('rev-parse', '--verify', '-q', '--end-of-options', $s)
+                $v = Invoke-ScrubGit $Repo @('rev-parse', '--verify', '-q', '--end-of-options', ($s + '^{commit}'))
                 if (-not $v.Ok -or $v.Code -ne 0) { $both = $false }
             }
             if ($both) {
