@@ -1962,9 +1962,9 @@ Assert-Coord "SG6 a pattern hit in a mergetag's embedded tag name prints no matc
 # Only the name: a pattern hit in another tag header (here a gpgsig) keeps its
 # text, in a tag and in a mergetag.
 $r = Invoke-ScrubRawTag "object $rawParent`ntype commit`n" ('gpgsig FU' + "-91`n")
-$okTag = $r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'tag * headers' -and $_.Rule -ceq 'internal follow-up number' -and $_.Text }).Count -eq 1
+$okTag = $r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'tag * headers' -and $_.Rule -ceq 'internal follow-up number' -and $_.Text -match '-91' }).Count -eq 1
 $r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n gpgsig FU" + "-92`n" + $mtTail))
-$okMt = $r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'internal follow-up number' -and $_.Text }).Count -eq 1
+$okMt = $r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'internal follow-up number' -and $_.Text -match '-92' }).Count -eq 1
 Assert-Coord 'SG6 a pattern hit in a tag header that is not the name (gpgsig) keeps its text, in a tag and in a mergetag' ($okTag -and $okMt) "tag=$okTag mergetag=$okMt"
 # A range is never quoted in a label or a reason (a ref name in it can hold a
 # private word): only how many revisions it holds, and a revision by position.

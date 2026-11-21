@@ -18,10 +18,12 @@
   mergetag, which keeps its text (seen red with the switch set for every header).
 
   Still not covered:
-  - a message keeps its text, and a message can quote a tag's name: git's own merge message for a tag
-    (`Merge tag '<name>'`, which git writes when it merges a tag, unless the message is edited) prints
-    the name's matched text, as a file name quoted in a message has since 0.2.6 (the message seen in a scratch repo
-    by the panel; that its hit keeps the text is read from the code, not a suite row);
+  - a message keeps its text, so any name a message quotes prints its matched text: git's own merge messages
+    quote one unless the message is edited (`Merge tag '<name>'` for any tag merged, `Merge branch '<name>'`, and
+    `of <url>` after it from `git pull`), and a file name quoted in a message prints the same way (0.2.6 redacted
+    only the names themselves). The panel saw the tag message, for an annotated and a lightweight tag, in a
+    scratch repo; the branch and pull messages are reasoned, not measured; that the hits keep the text is read from
+    the code, not a suite row;
   - `-PushRefs` is still an argument (as in 0.2.6).
 
 ## 0.2.7 - 2026-11-21
@@ -140,8 +142,8 @@
   file name or a pushed ref name no longer prints its matched text, which is part of the name (SG4 and SG6 rows,
   red before; not covered: an annotated tag's own name, read in its header block, still prints a pattern hit's
   text, as every header does; reasoned, not measured; reproduce before fixing (0.2.8 measured it and fixed it); a
-  denylist hit never prints its text anywhere), and the big-range rows (SG6, P21) use a chain of 1100 commits, so only the last exclusion keeps the
-  count at 1, and P21 also refuses a commit with the entry at that scale.
+  denylist hit never prints its text anywhere), and the big-range rows (SG6, P21) use a chain of 1100 commits, so
+  only the last exclusion keeps the count at 1, and P21 also refuses a commit with the entry at that scale.
 
 - **Pre-push suite: a push from a linked worktree under the absolute `core.hooksPath`** (the README setup; F6 of the
   0.2.5 review). New row P20: a worktree whose branch has no `.githooks` of its own pushes with `core.hooksPath` set
