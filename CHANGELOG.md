@@ -37,14 +37,23 @@
   at the first `..`, a `...` when a `.` follows, and only when both sides resolve as commits (`<side>^{commit}`,
   the hint git gives a range side, so an ambiguous short sha still resolves: measured by hand on a scratch repo
   whose commit and blob share a 4-digit prefix, where the first split failed discovery on `<prefix>..HEAD`; no row,
-  since building such a collision in the suite is slow); otherwise it is one
-  revision, as git then reads it (a message search such as `:/text` can hold `..`). A side that is a tree or a blob
-  makes the range fail discovery, never pass. A reason names a side as
+  since building such a collision in the suite is slow); otherwise the revision is walked whole, which reads a
+  message search that holds `..` but whose split does not resolve (`:/dots..here`) as git does. A reason names a side as
   `revision <n> (left side)` or `(right side)`, never by its text. The pre-push gate was not affected: it passes
   `<tip> ^<sha>`, not `a..b`. New SG6 rows, seen red before the fix and green after: a tag at the positive end of
   `a..b` and on either side of `a...b` is read and its message hits (0 tags on each form before); and a tag reached
   through an empty side while HEAD is a symbolic ref to it, and a message search that holds `..` (0 tags, and a
   discovery failure, with the first split; panel round on the F6 fix).
+
+  Still not covered (the seam is frozen: three panel rounds each found a defect in the previous fix. The first was
+  a silent miss, the empty side under a symbolic-ref HEAD, fixed above with its row. The second and third were
+  discovery failures, never a pass. The maintainer chose to freeze it here):
+  - a range git splits but this check does not, because `^{commit}` changes the side or the side is not a commit,
+    fails discovery instead of being read: a message-search side (`:/alpha..b`, seen by the panel in a scratch
+    repo), a path side (`HEAD:x..b`, reasoned) and a tree side (`<tree>..b`, seen). A failed discovery refuses the
+    run; it never lets a range through;
+  - a side whose text with `^{commit}` appended names some other object (a file literally named `x^{commit}`) is
+    split where git would not; the split ends are walked in place of the whole revision (reasoned).
 
 ## 0.2.7 - 2026-11-21
 

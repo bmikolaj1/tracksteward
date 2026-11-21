@@ -890,13 +890,15 @@ function Invoke-ScrubHistory {
     # name, message and tagger; what it ends on must be a commit.
     $seenTag = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     # The positive ends: a plain revision, the right side of a..b, both sides of
-    # a...b; an empty side is HEAD (which can be a symbolic ref to a tag). Split
-    # as git does: at the first '..', a '...' when a '.' follows it, and only
-    # when both sides resolve as commits (<side>^{commit}, the hint git gives a
-    # range side, so an ambiguous short sha resolves; measured by hand, no row); otherwise
-    # it is one revision, as git then reads it (a message search such as :/text
-    # can hold '..'). A side that is a tree or a blob fails that check, and the
-    # whole revision then fails to resolve: a discovery failure, never a pass.
+    # a...b; an empty side is HEAD (which can be a symbolic ref to a tag). The
+    # split is at the first '..', a '...' when a '.' follows it, and is kept only
+    # when both sides resolve as <side>^{commit} (so an ambiguous short sha
+    # resolves; measured by hand, no row); otherwise the revision is walked whole.
+    # That is not git's own rule in every case: a side the suffix changes (a
+    # message search :/text, a path HEAD:x) or a tree side fails the check where
+    # git splits, and the whole revision then fails to resolve. Every such case
+    # found is a discovery failure, never a pass (seam frozen after three panel
+    # rounds, 0.2.8).
     $walk = New-Object System.Collections.Generic.List[object]
     $rvPos = 0
     foreach ($rv in $revs) {
