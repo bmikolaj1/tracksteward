@@ -362,14 +362,26 @@ function Stop-ScrubProcess([System.Diagnostics.Process]$P) {
     }
 }
 
-# Runs `git -C $Repo <args>` and returns { Ok; Code; Bytes; Error }: Bytes is the
-# raw stdout (no console decoding, NUL bytes kept). Ok is $false when git is
-# missing, did not start or did not exit in time; a non-zero Code is still Ok.
+# Why git did not start, without the exception's text: under PowerShell 7 it
+# names git's path and the working directory. The exception's type, and the
+# Windows error code when there is one.
+function Get-ScrubStartError($ErrRecord) {
+    $e = $ErrRecord.Exception.GetBaseException()
+    $s = $e.GetType().Name
+    if ($e -is [System.ComponentModel.Win32Exception]) { $s += " (Windows error $($e.NativeErrorCode))" }
+    return $s
+}
+
+# Runs `git -C $Repo <args>` and returns { Ok; Code; Bytes; Error; Stderr }:
+# Bytes is the raw stdout (no console decoding, NUL bytes kept). Ok is $false
+# when git is missing, did not start or did not exit in time; a non-zero Code is
+# still Ok. Error is this suite's own text only; Stderr is git's, which can name
+# a path, a ref or a URL, so a reason never quotes it (Get-ScrubGitFailure).
 # $StdinText is written to git's stdin as UTF-8 (no BOM), then stdin is closed.
 function Invoke-ScrubGit {
     param([string]$Repo, [string[]]$GitArgs, [int]$Seconds = 120, [string]$StdinText = '')
     $gitCmd = @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)
-    if ($gitCmd.Count -eq 0) { return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Error = 'git was not found on PATH' } }
+    if ($gitCmd.Count -eq 0) { return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Stderr = ''; Error = 'git was not found on PATH' } }
     # --no-replace-objects: a replace ref (git replace) must not make the scan
     # read other objects than the ones a push sends.
     $argv = @('-C', $Repo, '--no-replace-objects') + $GitArgs
@@ -383,6 +395,17 @@ function Invoke-ScrubGit {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
+    # git's messages in English, whatever LANG says: Get-ScrubGitFailure names
+    # the kind of message from its English wording.
+    # Reading EnvironmentVariables copies this process's environment into a
+    # case-insensitive dictionary, and on .NET Framework a copy that meets two
+    # names that differ only by case throws halfway, leaving git a partial
+    # environment. So it is touched only when no two names clash; otherwise git
+    # inherits the environment as it is, and the kind is only less precise.
+    $envNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $envClash = $false
+    foreach ($k in [Environment]::GetEnvironmentVariables().Keys) { if (-not $envNames.Add([string]$k)) { $envClash = $true; break } }
+    if (-not $envClash) { $psi.EnvironmentVariables['LC_ALL'] = 'C' }
     # Process.Start writes the preamble of [Console]::InputEncoding into a
     # redirected stdin as soon as it opens it (Windows PowerShell 5.1, .NET
     # Framework): under a UTF-8 console code page that is a BOM, which git would
@@ -393,10 +416,10 @@ function Invoke-ScrubGit {
     if ($StdinText -and [Console]::InputEncoding.GetPreamble().Length -gt 0) {
         $prevIn = [Console]::InputEncoding
         try { [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false) }
-        catch { return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Error = "git's stdin would start with a BOM, and the console input encoding could not be changed: $($_.Exception.Message)" } }
+        catch { return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Stderr = ''; Error = "git's stdin would start with a BOM, and the console input encoding could not be changed: $($_.Exception.Message)" } }
     }
     try { $p = [System.Diagnostics.Process]::Start($psi) }
-    catch { return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Error = "git did not start: $_" } }
+    catch { return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Stderr = ''; Error = "git did not start: $(Get-ScrubStartError $_)" } }
     finally { if ($null -ne $prevIn) { try { [Console]::InputEncoding = $prevIn } catch { } } }
     $ms = New-Object System.IO.MemoryStream
     $copy = $p.StandardOutput.BaseStream.CopyToAsync($ms)
@@ -413,7 +436,7 @@ function Invoke-ScrubGit {
             $w = $p.StandardInput.BaseStream.WriteAsync($inBytes, 0, $inBytes.Length)
             if (-not $w.Wait($Seconds * 1000)) {
                 Stop-ScrubProcess $p
-                return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Error = "git did not read its stdin within $Seconds s" }
+                return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Stderr = ''; Error = "git did not read its stdin within $Seconds s" }
             }
         }
         catch { $inError = "git's stdin could not be written: $($_.Exception.GetBaseException().Message)" }
@@ -422,17 +445,67 @@ function Invoke-ScrubGit {
     $leftMs = [int][Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
     if (-not $p.WaitForExit($leftMs)) {
         Stop-ScrubProcess $p
-        return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Error = "git did not exit within $Seconds s" }
+        return [pscustomobject]@{ Ok = $false; Code = $null; Bytes = [byte[]]@(); Stderr = ''; Error = "git did not exit within $Seconds s" }
     }
     $p.WaitForExit()
     # A copy still running (a child of git holding stdout open) would hand back
     # a short listing that reads as complete: not Ok instead.
     if (-not $copy.Wait(10000)) {
-        return [pscustomobject]@{ Ok = $false; Code = $p.ExitCode; Bytes = [byte[]]@(); Error = 'git output was not complete within 10 s of its exit' }
+        return [pscustomobject]@{ Ok = $false; Code = $p.ExitCode; Bytes = [byte[]]@(); Stderr = ''; Error = 'git output was not complete within 10 s of its exit' }
     }
     $errText = if ($errRead.Wait(10000)) { ([string]$errRead.Result).Trim() } else { '' }
-    if ($inError) { return [pscustomobject]@{ Ok = $false; Code = $p.ExitCode; Bytes = [byte[]]@(); Error = ($inError + ' ' + $errText).Trim() } }
-    return [pscustomobject]@{ Ok = $true; Code = $p.ExitCode; Bytes = $ms.ToArray(); Error = $errText }
+    if ($inError) { return [pscustomobject]@{ Ok = $false; Code = $p.ExitCode; Bytes = [byte[]]@(); Stderr = $errText; Error = $inError } }
+    return [pscustomobject]@{ Ok = $true; Code = $p.ExitCode; Bytes = $ms.ToArray(); Stderr = $errText; Error = '' }
+}
+
+# The tail of a reason for a git call that failed: its exit code, this suite's
+# own error text, and the kind of message git printed, from a fixed list. Never
+# git's text itself: it can name a path (a missing folder, a repository whose
+# owner is not trusted), a ref typed into a range, or a remote URL, and the
+# pre-push gate prints FAIL details on the console.
+function Get-ScrubGitFailure($R) {
+    $parts = New-Object System.Collections.Generic.List[string]
+    if ($null -ne $R.Code) { $parts.Add("exit $($R.Code)") }
+    if ($R.Error) { $parts.Add([string]$R.Error) }
+    $se = [string]$R.Stderr
+    if ($R.Ok -or $se) {
+        # Classed by git's fatal and error lines (a warning before them, such as
+        # an unreadable attributes file, is not the failure), with the names git
+        # quotes taken out first, so a quoted folder path that holds another
+        # kind's words does not pick the kind. Every phrase has a space
+        # ("corrupt" only as "is corrupt" or "corrupt loose"), so an unquoted ref
+        # name (it holds no space) cannot pick one either. The cause comes before
+        # the symptom: an unreadable or empty object file is followed by
+        # "fatal: bad object <sha>", and names the kind, not that line.
+        $lines = @($se -split "`r?`n" | Where-Object { $_ -match '^(fatal|error): ' })
+        if ($lines.Count -eq 0) { $lines = @($se -split "`r?`n" | Where-Object { $_ -notmatch '^(warning|hint): ' }) }
+        $msg = (($lines -join "`n") -replace "'[^'`n]*'", "''") -replace '"[^"`n]*"', '""'
+        $kind = if (-not $se.Trim()) { 'git printed no message' }
+            elseif ($msg -match '(?i)dubious ownership|unsafe repository') { "git does not trust the repository's owner (safe.directory)" }
+            elseif ($msg -match '(?i)cannot change to ') { 'git cannot enter the repository folder' }
+            elseif ($msg -match '(?i)not a git repository') { 'not a git repository' }
+            elseif ($msg -match '(?i)permission denied|access is denied') { 'permission denied' }
+            elseif ($msg -match '(?i)is corrupt|corrupt loose|unable to read|unable to open loose object|failed to traverse|is empty|bad index|index file') { 'git reported a corrupt or unreadable object or index' }
+            elseif ($msg -match '(?i)bad revision|unknown revision|ambiguous argument|bad object|invalid object name|not a valid object name|needed a single revision') { 'a revision git cannot resolve' }
+            else { "git's message is not printed (it can name a path, a ref or a URL): run the command by hand to see it" }
+        $parts.Add($kind)
+    }
+    return ($parts -join '; ')
+}
+
+# What a fixture's git output said, for a FAIL detail: only whether there was
+# any (git's text can name a path).
+function Format-ScrubFixtureOutput([string]$Text) {
+    if ($Text -and $Text.Trim()) { return "printed a message (not shown: git's text can name a path)" }
+    return 'quiet'
+}
+
+# A FAIL detail about a reason that must not quote git: what each check found,
+# never the reason itself (a regression would print what it leaked).
+function Format-ScrubReasonChecks([string]$Reason, [string]$Kind, [string[]]$Absent) {
+    $s = "kind '$Kind' named: $([bool]($Reason -match [regex]::Escape($Kind)))"
+    for ($i = 0; $i -lt $Absent.Count; $i++) { $s += "; forbidden text $($i + 1) present: $([bool]($Absent[$i] -and $Reason.IndexOf($Absent[$i], [System.StringComparison]::OrdinalIgnoreCase) -ge 0))" }
+    return $s
 }
 
 # The NUL-separated names of a git -z listing.
@@ -446,7 +519,7 @@ function Get-ScrubNames([byte[]]$Bytes) {
 function Get-ScrubShippedFiles([string]$Repo) {
     $r = Invoke-ScrubGit $Repo @('ls-files', '-z', '--cached', '--others', '--exclude-standard')
     if (-not $r.Ok -or $r.Code -ne 0) {
-        return [pscustomobject]@{ Ok = $false; Files = @(); Reason = "git ls-files failed (exit $($r.Code)): $($r.Error)" }
+        return [pscustomobject]@{ Ok = $false; Files = @(); Reason = "git ls-files failed ($(Get-ScrubGitFailure $r))" }
     }
     $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $files = New-Object System.Collections.Generic.List[string]
@@ -460,7 +533,7 @@ function Get-ScrubShippedFiles([string]$Repo) {
 function Get-ScrubUnstagedNames([string]$Repo) {
     $r = Invoke-ScrubGit $Repo @('diff', '--name-only', '-z')
     if (-not $r.Ok -or $r.Code -ne 0) {
-        return [pscustomobject]@{ Ok = $false; Names = @(); Reason = "git diff --name-only failed (exit $($r.Code)): $($r.Error)" }
+        return [pscustomobject]@{ Ok = $false; Names = @(); Reason = "git diff --name-only failed ($(Get-ScrubGitFailure $r))" }
     }
     return [pscustomobject]@{ Ok = $true; Names = @(Get-ScrubNames $r.Bytes); Reason = '' }
 }
@@ -717,7 +790,7 @@ function Add-ScrubRepoShaHits {
             # PowerShell 5.1 hands git a broken -C, which read as "no commit".
             # A git that cannot run at all ends the suite (no silent miss).
             $g = Invoke-ScrubGit $r @('cat-file', '-e', ($tok + '^{commit}')) 30
-            if (-not $g.Ok) { throw "git cat-file could not run in a listed repo: $($g.Error)" }
+            if (-not $g.Ok) { throw "git cat-file could not run in a listed repo: $(Get-ScrubGitFailure $g)" }
             if ($g.Code -eq 0) { $found = $true; break }
         }
         if (-not $found) { continue }
@@ -808,7 +881,7 @@ function Invoke-ScrubHistory {
     # holds every commit the remote advertises, which can pass the Windows
     # command-line limit (32767 characters).
     $c = Invoke-ScrubGit $Repo @('rev-list', '--stdin') -StdinText (($revs -join "`n") + "`n")
-    if (-not $c.Ok -or $c.Code -ne 0) { $res.Reason = "git rev-list failed for the range $rangeText (exit $($c.Code)): $($c.Error)"; return $res }
+    if (-not $c.Ok -or $c.Code -ne 0) { $res.Reason = "git rev-list failed for the range $rangeText ($(Get-ScrubGitFailure $c))"; return $res }
     $shas = @($coordUtf8.GetString($c.Bytes) -split "`r?`n" | Where-Object { $_ })
     # Each positive revision: an annotated tag (a chain of them) is read, its
     # name, message and tagger; what it ends on must be a commit.
@@ -819,16 +892,16 @@ function Invoke-ScrubHistory {
         $rvPos++
         if ($rv.StartsWith('^') -or $rv.Contains('..')) { continue }
         $o = Invoke-ScrubGit $Repo @('rev-parse', '--verify', '-q', '--end-of-options', $rv)
-        if (-not $o.Ok -or $o.Code -ne 0) { $res.Reason = "git rev-parse could not resolve revision $rvPos of the range (exit $($o.Code)): $($o.Error)"; return $res }
+        if (-not $o.Ok -or $o.Code -ne 0) { $res.Reason = "git rev-parse could not resolve revision $rvPos of the range ($(Get-ScrubGitFailure $o))"; return $res }
         $cur = $coordUtf8.GetString($o.Bytes).Trim()
         $type = ''
         for ($depth = 0; $depth -lt 20; $depth++) {
             $t = Invoke-ScrubGit $Repo @('cat-file', '-t', $cur)
-            if (-not $t.Ok -or $t.Code -ne 0) { $res.Reason = "git cat-file could not read the object '$cur' of revision $rvPos (exit $($t.Code)): $($t.Error)"; return $res }
+            if (-not $t.Ok -or $t.Code -ne 0) { $res.Reason = "git cat-file could not read the object '$cur' of revision $rvPos ($(Get-ScrubGitFailure $t))"; return $res }
             $type = $coordUtf8.GetString($t.Bytes).Trim()
             if ($type -cne 'tag') { break }
             $g = Invoke-ScrubGit $Repo @('cat-file', 'tag', $cur)
-            if (-not $g.Ok -or $g.Code -ne 0) { $res.Reason = "git cat-file could not read the tag '$cur' (exit $($g.Code)): $($g.Error)"; return $res }
+            if (-not $g.Ok -or $g.Code -ne 0) { $res.Reason = "git cat-file could not read the tag '$cur' ($(Get-ScrubGitFailure $g))"; return $res }
             $parts = Split-ScrubObject $g.Bytes
             $next = ''
             if ($seenTag.Add($cur)) {
@@ -1122,6 +1195,64 @@ function Get-ScrubHitsOf($Res, [string]$File, [string]$Rule = '') {
 # unusable result here.
 $res = Invoke-ScrubScan -Repo (Join-Path $tmp 'no-such-folder')
 Assert-Coord 'SG4 a folder that is not a work tree: discovery fails, with a reason, and nothing is scanned' (-not $res.DiscoveryOk -and $res.Reason -match 'git ls-files failed' -and $res.Scanned.Count -eq 0) "ok=$($res.DiscoveryOk) reason=$($res.Reason)"
+# git's own stderr is never quoted in a reason: it can name a path (here the
+# folder's, which holds the entry and the temp folder's absolute path), a ref
+# or a URL. The reason names a class of git's message instead.
+$gfMissing = Join-Path $tmp 'zzbeta-nosuch-folder'
+$res = Invoke-ScrubScan -Repo $gfMissing
+$gfReason = [string]$res.Reason
+Assert-Coord 'SG4 a missing folder: the reason names what went wrong (git cannot enter the folder) and quotes no path from git' (-not $res.DiscoveryOk -and $gfReason -match 'cannot enter the repository folder' -and $gfReason -notmatch 'zzbeta' -and -not $gfReason.Contains([string]$tmp) -and $gfReason -notmatch "'") (Format-ScrubReasonChecks $gfReason 'cannot enter the repository folder' @('zzbeta', [string]$tmp, "'"))
+$gfPlain = Join-Path $tmp 'zzbeta-plain-folder'
+New-Item -ItemType Directory -Path $gfPlain -Force | Out-Null
+$res = Invoke-ScrubScan -Repo $gfPlain
+$gfReason = [string]$res.Reason
+Assert-Coord 'SG4 a folder that is no repository: the reason says so and quotes nothing from git' (-not $res.DiscoveryOk -and $gfReason -match 'not a git repository' -and $gfReason -notmatch 'zzbeta|fatal' -and -not $gfReason.Contains([string]$tmp)) (Format-ScrubReasonChecks $gfReason 'not a git repository' @('zzbeta', 'fatal', [string]$tmp))
+# Get-ScrubGitFailure: each class of git's stderr, an unknown message, no
+# message, and the suite's own error text.
+if (-not (Get-Command Get-ScrubGitFailure -CommandType Function -ErrorAction SilentlyContinue)) {
+    Assert-Coord 'SG4 Get-ScrubGitFailure exists (names a class of git stderr, never its text)' $false 'no such function'
+}
+else {
+    $gfCases = @(
+        @{ Err = "fatal: not a git repository (or any of the parent directories): .git"; Want = 'not a git repository' },
+        @{ Err = "fatal: cannot change to 'C:\zzbeta\x': No such file or directory"; Want = 'cannot enter the repository folder' },
+        @{ Err = "fatal: detected dubious ownership in repository at 'C:/zzbeta/x'`nTo add an exception for this directory, call:`n`n`tgit config --global --add safe.directory C:/zzbeta/x"; Want = 'safe.directory' },
+        @{ Err = "fatal: bad revision 'refs/heads/zzbeta-x'"; Want = 'a revision git cannot resolve' },
+        @{ Err = "fatal: ambiguous argument 'zzbeta': unknown revision or path not in the working tree."; Want = 'a revision git cannot resolve' },
+        @{ Err = "fatal: Not a valid object name zzbeta"; Want = 'a revision git cannot resolve' },
+        @{ Err = "error: open(""C:/zzbeta/f""): Permission denied"; Want = 'permission denied' },
+        @{ Err = "error: object file .git/objects/zz/beta is empty`nfatal: loose object zzbeta (stored in .git/objects/zz/beta) is corrupt"; Want = 'corrupt or unreadable' },
+        @{ Err = "fatal: unable to access 'https://zzbeta.example/r.git/': Could not resolve host"; Want = 'not printed' },
+        @{ Err = "fatal: Not a valid object name zzbeta-corrupt-safe.directory"; Want = 'a revision git cannot resolve' },
+        @{ Err = "fatal: cannot change to 'C:\zzbeta\dubious ownership\x': No such file or directory"; Want = 'cannot enter the repository folder' },
+        @{ Err = "error: unable to open loose object 0123456789012345678901234567890123456789: Permission denied`nerror: unable to open loose object 0123456789012345678901234567890123456789: Permission denied`nfatal: bad object 0123456789012345678901234567890123456789"; Want = 'permission denied' },
+        @{ Err = "error: object file .git/objects/01/23456789012345678901234567890123456789 is empty`nerror: object file .git/objects/01/23456789012345678901234567890123456789 is empty`nfatal: bad object 0123456789012345678901234567890123456789"; Want = 'corrupt or unreadable' },
+        @{ Err = "warning: unable to access 'C:/zzbeta/.config/git/attributes': Permission denied`nfatal: bad revision 'zzbeta'"; Want = 'a revision git cannot resolve' },
+        @{ Err = "warning: unable to access 'C:/zzbeta/.config/git/attributes': Permission denied`nfatal: loose object 0123456 (stored in .git/objects/01/23456) is corrupt"; Want = 'corrupt or unreadable' },
+        @{ Err = "error: unable to open loose object 0123456789012345678901234567890123456789: Invalid argument`nfatal: bad object 0123456789012345678901234567890123456789"; Want = 'corrupt or unreadable' },
+        @{ Err = "error: Could not read 0123456789012345678901234567890123456789`nfatal: Failed to traverse parents of commit 0123456789012345678901234567890123456789"; Want = 'corrupt or unreadable' },
+        @{ Err = "warning: unable to access 'C:/zzbeta/.config/git/attributes': Permission denied"; Want = 'not printed' },
+        @{ Err = "fatal: ambiguous argument 'zzbeta cannot change to x': unknown revision or path not in the working tree."; Want = 'a revision git cannot resolve' },
+        @{ Err = ''; Want = 'printed no message' }
+    )
+    $gfBad = @()
+    $gfN = 0
+    foreach ($c in $gfCases) {
+        $gfN++
+        $o = Get-ScrubGitFailure ([pscustomobject]@{ Ok = $true; Code = 128; Error = ''; Stderr = $c.Err })
+        if (-not ($o -match [regex]::Escape($c.Want)) -or $o -match 'zzbeta|fatal|error:' -or $o -notmatch 'exit 128') { $gfBad += "case ${gfN}: $(Format-ScrubReasonChecks $o $c.Want @('zzbeta', 'fatal', 'error:')); exit code named: $($o -match 'exit 128')" }
+    }
+    $o = Get-ScrubGitFailure ([pscustomobject]@{ Ok = $false; Code = $null; Error = 'git did not exit within 120 s'; Stderr = 'fatal: zzbeta' })
+    if ($o -notmatch 'did not exit within 120 s' -or $o -match 'zzbeta') { $gfBad += "own-error case: $(Format-ScrubReasonChecks $o 'did not exit within 120 s' @('zzbeta'))" }
+    Assert-Coord 'SG4 Get-ScrubGitFailure names a class of git stderr (or says it is not printed) and the exit code, never the stderr text; the suite''s own error text is kept' ($gfBad.Count -eq 0) ($gfBad -join "`n")
+}
+# The detail helpers print what was checked, never the text they check.
+$gfHelp = @()
+if ((Format-ScrubFixtureOutput "fatal: C:\zzbeta\x: cannot read") -match 'zzbeta|fatal' -or (Format-ScrubFixtureOutput "fatal: C:\zzbeta") -notmatch 'printed a message') { $gfHelp += 'fixture output with text' }
+if ((Format-ScrubFixtureOutput '') -cne 'quiet' -or (Format-ScrubFixtureOutput " `n") -cne 'quiet') { $gfHelp += 'fixture output empty' }
+$gfChk = Format-ScrubReasonChecks "fatal: cannot change to 'C:\ZZBETA\x'" 'not a git repository' @('zzbeta', 'C:\zzbeta')
+if ($gfChk -match '(?i)zzbeta|fatal|cannot change' -or $gfChk -notmatch 'forbidden text 1 present: True' -or $gfChk -notmatch 'forbidden text 2 present: True' -or $gfChk -notmatch 'named: False') { $gfHelp += 'reason checks' }
+Assert-Coord 'SG4 the FAIL-detail helpers (fixture output, reason checks) never print the text they check, and report what they found, a different letter case included' ($gfHelp.Count -eq 0) ($gfHelp -join '; ')
 $emptyRepo = New-ScrubTestRepo 'empty-repo'
 $res = Invoke-ScrubScan -Repo $emptyRepo
 Assert-Coord 'SG4 a work tree with no file to ship: discovery fails (zero files), not a pass' (-not $res.DiscoveryOk -and $res.Reason -match 'no files') "ok=$($res.DiscoveryOk) reason=$($res.Reason)"
@@ -1473,6 +1604,10 @@ Assert-Coord 'SG6 the self file is scanned for the denylist only' (@($res.Hits |
 Assert-Coord 'SG6 a commit message is scanned (named by its commit, not by a file)' (@($res.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq $pathRule }).Count -eq 1)
 $badRes = Invoke-ScrubHistory -Repo $hRepo -Range 'no-such-rev..HEAD'
 Assert-Coord 'SG6 a range git cannot resolve is not a pass: discovery fails with a reason' ((-not $badRes.DiscoveryOk) -and $badRes.Reason)
+# A ref typed into the range is named in git's stderr ("bad revision '<ref>'"):
+# the reason names the class, never the ref.
+$badRes = Invoke-ScrubHistory -Repo $hRepo -Range 'refs/heads/zzbeta-nosuch ^HEAD'
+Assert-Coord 'SG6 a range with a ref git cannot resolve: the reason says a revision cannot be resolved and does not name the ref' ((-not $badRes.DiscoveryOk) -and ([string]$badRes.Reason -match 'a revision git cannot resolve') -and ([string]$badRes.Reason -notmatch 'zzbeta|fatal')) (Format-ScrubReasonChecks ([string]$badRes.Reason) 'a revision git cannot resolve' @('zzbeta', 'fatal'))
 $emptyRes = Invoke-ScrubHistory -Repo $hRepo -Range 'HEAD..HEAD'
 Assert-Coord 'SG6 an empty range is not a pass either: discovery fails' ((-not $emptyRes.DiscoveryOk) -and $emptyRes.Reason)
 # a merge: the commits of a merged branch are in the range
@@ -1730,7 +1865,7 @@ $bigLast = $bigEx[-1]
 $bigTip = Get-CoordGitOut $bigRepo @('commit-tree', ($bigLast + '^{tree}'), '-p', $bigLast, '-m', 'on top')
 $bigRange = $bigTip + ' ' + (($bigEx | ForEach-Object { '^' + $_ }) -join ' ')
 $bigShort = @(Get-CoordGitOut $bigRepo @('rev-list', $bigTip, ('^' + $bigEx[-2])))
-Assert-Coord 'SG6 control: the big range has 1100 excluded commits in chain order, is longer than a Windows command line (32767 characters), and without its last exclusion holds 2 commits' ($bigEx.Count -eq 1100 -and $bigRange.Length -gt 32767 -and (($bigShort -join "`n") -split "`r?`n" | Where-Object { $_ }).Count -eq 2) "excluded=$($bigEx.Count) length=$($bigRange.Length) fast-import=$fiOut"
+Assert-Coord 'SG6 control: the big range has 1100 excluded commits in chain order, is longer than a Windows command line (32767 characters), and without its last exclusion holds 2 commits' ($bigEx.Count -eq 1100 -and $bigRange.Length -gt 32767 -and (($bigShort -join "`n") -split "`r?`n" | Where-Object { $_ }).Count -eq 2) "excluded=$($bigEx.Count) length=$($bigRange.Length) fast-import=$(Format-ScrubFixtureOutput $fiOut)"
 $r = Invoke-ScrubHistory -Repo $bigRepo -Range $bigRange
 Assert-Coord 'SG6 a range of 1101 revisions (longer than a command line) is read: 1 commit, discovery ok' ($r.DiscoveryOk -and $r.Commits -eq 1) "ok=$($r.DiscoveryOk) commits=$($r.Commits) reason=$(([string]$r.Reason).Substring(0, [Math]::Min(300, ([string]$r.Reason).Length)))"
 
@@ -1786,7 +1921,7 @@ $nuFile = Join-Path $tmp 'nonutf8-path.fi'
 $nuOut = (& cmd.exe /d /c "git -C `"$dhRepo`" fast-import --quiet < `"$nuFile`" 2>&1" | Out-String).Trim()
 $r = Invoke-ScrubHistory -Repo $dhRepo -Range ('refs/heads/nu ^' + $nuHead) -Denylist @('zzbeta')
 $nuText = (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
-Assert-Coord 'SG6 a history path in bytes that are not valid UTF-8 is named by its blob alone' ($r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -match '^blob [0-9a-f]{7}$' -and $_.Rule -ceq $pathRule }).Count -eq 1 -and @($r.Hits | Where-Object { $_.File.Contains([string][char]0xFFFD) }).Count -eq 0) "ok=$($r.DiscoveryOk) reason=$($r.Reason) fast-import=$nuOut hits=$($nuText.Replace([string][char]0xFFFD, '<U+FFFD>'))"
+Assert-Coord 'SG6 a history path in bytes that are not valid UTF-8 is named by its blob alone' ($r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -match '^blob [0-9a-f]{7}$' -and $_.Rule -ceq $pathRule }).Count -eq 1 -and @($r.Hits | Where-Object { $_.File.Contains([string][char]0xFFFD) }).Count -eq 0) "ok=$($r.DiscoveryOk) reason=$($r.Reason) fast-import=$(Format-ScrubFixtureOutput $nuOut) hits=$($nuText.Replace([string][char]0xFFFD, '<U+FFFD>'))"
 # Under a console input encoding with a preamble (a BOM), git still reads the
 # revisions on stdin (Invoke-ScrubGit swaps in one without a preamble while git
 # starts).

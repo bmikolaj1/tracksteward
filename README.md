@@ -259,7 +259,8 @@ files, not the worktree's). The hook hands the suite its range on stdin, so a re
 commits does not pass the Windows command-line limit. The gate's own lines name a ref by its position in the push,
 and the suite's lines name a file by its path only when the denylist and pattern rules find nothing in the path
 (otherwise by its position or its blob); of a failed run only the FAIL lines and their details are shown, never an
-error record (a detail that quotes git's stderr can still name a path). git's own push output still
+error record; a failed git call in a reason is named by its exit code and the kind of message git printed, and no
+detail quotes git's own text (which can name a path, a ref or a URL). git's own push output still
 names the refs. `git push --no-verify` skips it. A clone without
 the denylist (and CI) reads the scrub suite's denylist rows as UNCHECKED, not passed.
 
