@@ -30,6 +30,10 @@
     text (reasoned, not measured);
   - `-PushRefs` is still an argument (as in 0.2.6).
 
+- **CI: the test job's timeout is 60 minutes, up from 45.** The suite outgrew 45 minutes on the hosted runner: #32's
+  run was cancelled at 45:00 inside `tests\run.ps1`, after green runs of 27 to 39 minutes on the last releases. The
+  timeout only gives it room; the suite's growth is a follow-up.
+
 - **An annotated tag named inside `a..b` or `a...b` is read as a tag** (F6, found by the panel of the F3 work).
   The tag walk skipped every revision that held `..`, so `-History origin/main..<annotated tag>` read none of that
   tag's headers, tagger or message (seen: 0 tags read). It now reads the positive ends: the right side of `a..b`

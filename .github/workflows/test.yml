@@ -27,7 +27,7 @@ jobs:
   run-ps1:
     name: tests\run.ps1 (Windows PowerShell 5.1)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
