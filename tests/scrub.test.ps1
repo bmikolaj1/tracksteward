@@ -827,6 +827,7 @@ function Invoke-ScrubRepoRule {
 # through, see Add-ScrubIdent) and every other header, a signature included, but
 # for the sha a tree, parent or object line starts with (Add-ScrubShaHeader);
 # hits that share a place merged; every annotated tag a positive revision names
+# (a plain one, the right side of a..b, either side of a...b)
 # (its headers, tagger and message, along a tag chain by each tag's first
 # object header, as git follows it), and the $RefNames given. A blob seen under the same path twice is
 # scanned once. A merge commit is read too: its message, and the blobs it differs
@@ -887,12 +888,23 @@ function Invoke-ScrubHistory {
     # Each positive revision: an annotated tag (a chain of them) is read, its
     # name, message and tagger; what it ends on must be a commit.
     $seenTag = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    # The positive ends: a plain revision, the right side of a..b, both sides of
+    # a...b (an empty side is HEAD, which names no tag: skipped). A ref name
+    # never holds '..', so the first '...' or '..' is the range operator.
+    $walk = New-Object System.Collections.Generic.List[object]
     $rvPos = 0
     foreach ($rv in $revs) {
         # Named by its position in the range ("revision <n>"), never by its text.
         $rvPos++
-        if ($rv.StartsWith('^') -or $rv.Contains('..')) { continue }
-        $o = Invoke-ScrubGit $Repo @('rev-parse', '--verify', '-q', '--end-of-options', $rv)
+        if ($rv.StartsWith('^')) { continue }
+        $i3 = $rv.IndexOf('...', [System.StringComparison]::Ordinal)
+        $i2 = $rv.IndexOf('..', [System.StringComparison]::Ordinal)
+        $ends = if ($i3 -ge 0) { @($rv.Substring(0, $i3), $rv.Substring($i3 + 3)) } elseif ($i2 -ge 0) { @($rv.Substring($i2 + 2)) } else { @($rv) }
+        foreach ($e in $ends) { if ($e) { $walk.Add([pscustomobject]@{ Pos = $rvPos; Rev = $e }) } }
+    }
+    foreach ($w in $walk) {
+        $rvPos = $w.Pos
+        $o = Invoke-ScrubGit $Repo @('rev-parse', '--verify', '-q', '--end-of-options', $w.Rev)
         if (-not $o.Ok -or $o.Code -ne 0) { $res.Reason = "git rev-parse could not resolve revision $rvPos of the range ($(Get-ScrubGitFailure $o))"; return $res }
         $cur = $coordUtf8.GetString($o.Bytes).Trim()
         $type = ''
@@ -1966,6 +1978,16 @@ $okTag = $r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'tag * hea
 $r = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n gpgsig FU" + "-92`n" + $mtTail))
 $okMt = $r.DiscoveryOk -and @($r.Hits | Where-Object { $_.File -like 'commit headers of *' -and $_.Rule -ceq 'internal follow-up number' -and $_.Text -match '-92' }).Count -eq 1
 Assert-Coord 'SG6 a pattern hit in a tag header that is not the name (gpgsig) keeps its text, in a tag and in a mergetag' ($okTag -and $okMt) "tag=$okTag mergetag=$okMt"
+# A tag named inside a range written a..b (its positive end) or a...b (either
+# side) is read as a tag too: its message hits.
+Invoke-HookTestGit $dhRepo @('tag', '-a', 'rel-dots', '-m', ('release ' + $hitLine), 'HEAD')
+$dotRes = @(
+    (Invoke-ScrubHistory -Repo $dhRepo -Range 'HEAD~1..refs/tags/rel-dots'),
+    (Invoke-ScrubHistory -Repo $dhRepo -Range 'refs/tags/rel-dots...HEAD~1'),
+    (Invoke-ScrubHistory -Repo $dhRepo -Range 'HEAD~1...refs/tags/rel-dots')
+)
+$dotOk = @($dotRes | ForEach-Object { $_.DiscoveryOk -and $_.Tags -eq 1 -and @($_.Hits | Where-Object { $_.File -like 'tag *' -and $_.Rule -ceq $pathRule }).Count -eq 1 })
+Assert-Coord 'SG6 an annotated tag at the positive end of a..b, or on either side of a...b, is read: its message hits' (-not ($dotOk -contains $false)) "a..b=$($dotOk[0]) left of a...b=$($dotOk[1]) right of a...b=$($dotOk[2]) tags=$(($dotRes | ForEach-Object { $_.Tags }) -join ',')"
 # A range is never quoted in a label or a reason (a ref name in it can hold a
 # private word): only how many revisions it holds, and a revision by position.
 Assert-Coord 'SG6 a range label names only how many revisions it holds, never the revisions' ((Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD') -notmatch 'zzbeta' -and (Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD') -match '2 revisions') (Get-ScrubRangeText 'refs/heads/zzbeta-x ^HEAD').Replace('zzbeta', '<entry>')

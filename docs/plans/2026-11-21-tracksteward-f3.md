@@ -38,3 +38,10 @@ Version 0.2.8: CHANGELOG and plugin.json. Out of this slice: `-PushRefs` is stil
 
 `tests\scrub.test.ps1` alone while iterating; the full `tests\run.ps1` once, on the coordinator's HOST GO. Panel
 (reviewer + adversary) on the diff, then on any fix diff. Codex only on the maintainer's pick.
+
+## Added in this PR: F6, a tag inside a..b (the maintainer's call, relayed by the coordinator and confirmed)
+
+The panel found that the tag walk in `Invoke-ScrubHistory` skipped every revision holding `..`, so a range written
+`a..b` never read the annotated tag at `b`. Fix: walk the positive ends (the right side of `a..b`, both sides of
+`a...b`). An SG6 row is seen red first. F5 (names quoted in messages) and F7 (identity hits, a partial denylist
+entry) are listed as not covered and go to a later slice.
