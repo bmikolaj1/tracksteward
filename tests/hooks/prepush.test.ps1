@@ -58,6 +58,11 @@
 # P25 a suite that stops on an error record (its indented CategoryInfo line names
 #     a path), alone and after a FAIL line with its detail: refused; the FAIL
 #     line and detail are shown, no line of the error record is
+# P26 a commit whose message holds a home path, and one whose author line does
+#     (a pattern hit, whose text a file hit would print): each push refused, the
+#     branch not on the remote, the hit's detail line exactly its label (that
+#     commit's sha7), line 1 and the rule, and the path's word nowhere in the
+#     output
 # S1  the copy's scrub suite run without -History, TRACKSTEWARD_SCRUB_DENYLIST
 #     unset: exit 0 with a loud NOT CHECKED line (a clone without the private file)
 # S2  the same, the variable set to a missing file: exit 1
@@ -408,6 +413,28 @@ try {
     Assert-Coord 'P25 a suite that stops on an error record (no FAIL line) refuses the push, and no line of the record is shown' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p25') -and ($r.Out -match 'printed no FAIL line') -and ($r.Out -notmatch 'CategoryInfo') -and -not $r.Out.Contains($work) -and -not $r.Out.Contains($workFwd)) (Format-Push $r)
     $r = $r25[1]
     Assert-Coord 'P25 after a FAIL line and its detail, the FAIL line and the detail are shown, the error record is not' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p25') -and ($r.Out -match 'FAIL: a stub row') -and ($r.Out -match 'the stub detail') -and ($r.Out -notmatch 'CategoryInfo') -and -not $r.Out.Contains($work) -and -not $r.Out.Contains($workFwd)) (Format-Push $r)
+    Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
+
+    Write-Host '(P26) a message hit and an identity hit print no matched text'
+    # A pattern hit (a home path), not a denylist entry: in a file its matched
+    # text would print; in a commit message and in an author line it must not.
+    # The words are built at run time and are on no denylist.
+    $hp26 = '/ho' + 'me/'
+    # The whole rule name, so a line with any text after it does not match.
+    $rule26 = 'user home path (/Users/<word>, ' + $hp26 + '<word>)'
+    # The hook's detail line for the hit, exactly: label, line 1, the rule, nothing after it.
+    $line26 = { param([string]$Label) '(?m)^\s*' + [regex]::Escape($Label + ':1: ' + $rule26) + '\s*$' }
+    $msgWord = 'zz' + 'q50msg'
+    $idWord = 'zz' + 'q50id'
+    New-TestCommit 'p26m' $base ('see ' + $hp26 + $msgWord + '/x') @{ 'c26.md' = "nothing private`n" }
+    $sha26 = (Get-LocalRef 'p26m').Substring(0, 7)
+    $r = Invoke-TestPush @('origin', 'p26m')
+    Assert-Coord 'P26 a push refused for a home path in a commit message names the hit by that commit and line 1 with no text after the rule, prints no matched text, and the branch is not on the remote' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p26m') -and ($r.Out -match (& $line26 ('commit message ' + $sha26))) -and ("$($r.Out)`n$($r.Err)").IndexOf($msgWord, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) (Format-Push $r).Replace($msgWord, '<word>')
+    Invoke-HookTestGit $work @('checkout', '--quiet', '-B', 'p26a', $base)
+    Invoke-HookTestGit $work @('commit', '--quiet', '--allow-empty', '--author', ('Q ' + $hp26 + $idWord + ' <q@example.invalid>'), '-m', 'clean message')
+    $sha26 = (Get-LocalRef 'p26a').Substring(0, 7)
+    $r = Invoke-TestPush @('origin', 'p26a')
+    Assert-Coord 'P26 a push refused for a home path in an author line names the hit by its role, that commit and line 1 with no text after the rule, prints no matched text, and the branch is not on the remote' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p26a') -and ($r.Out -match (& $line26 ('author of commit ' + $sha26))) -and ("$($r.Out)`n$($r.Err)").IndexOf($idWord, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) (Format-Push $r).Replace($idWord, '<word>')
     Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
 
     Write-Host '(S1-S3) the copy''s scrub suite with no -History'
