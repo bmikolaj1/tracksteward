@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.2.10 - 2026-11-22
+
+- **A pattern hit's printed text never ends where a name may go on** (F2, the 0.2.9 line on a match that stops
+  inside a private name). Measured first, in the suite, on 9aec33e: a home path stopped at the accented last letter
+  of a denylist entry printed all of the entry but that letter, one stopped at an accented letter of a name not on
+  the denylist printed the name's start, one stopped at a zero-width space, U+180E or a variation selector inside an
+  entry printed the part before it, and an 80-character cut that landed inside a name printed its start. Now a
+  printed text that was cut, or that the line goes on after with anything but a space, a tab, `/` or `\`, is cut
+  back to its last space, tab, `/` or `\`: such a home-path hit prints only `/home/` (or `/Users/`), whatever the
+  name holds (dots, hyphens, an apostrophe, a percent-encoded letter), and a rule with no `/` in its text (a
+  follow-up number, a session id) prints no text then. The check needs no denylist, so no path segment of a name
+  that is on none prints in part either. A hit that ends at a space, a tab, a slash or the end of its line prints
+  whole, as before. The denylist check also runs on the text that would print, not only on the whole match and the
+  cut text (it adds a hit only for an entry that ends in `/` or `\`). The key of the matched text is taken before
+  the trim, so the dedupe and the placeholder exemption are unchanged (a whole-history run passes). The row that
+  checked the cut now checks that the key is of the first 80 characters and that the text prints only up to the
+  slash.
+
+- **The pre-push hook has a row for a push refused for a message or an identity hit** (F1, Q50). P26 pushes a
+  commit whose message holds a home path and one whose author line does (pattern hits, whose text a file hit would
+  print): each push is refused, the branch is not on the remote, the hook's detail line is exactly the hit's label
+  (that commit's sha7), line 1 and the rule, and the path's word is in neither output stream. It is green on
+  9aec33e, where 0.2.9 fixed the redaction. In a scratch copy with the redaction removed from the commit message
+  and identity scans, both P26 rows went red (the first form of the rows, before the review panel tightened them).
+
+- **Review panel** (reviewer, adversary and Codex, three rounds). Round 1: the first trim dropped only the last run
+  of letters, digits and `_`, so a dotted or hyphenated name, one with an apostrophe or a percent-encoded letter,
+  and a text followed by ASCII punctuation or a no-break space still printed their first part (measured by the
+  reviewer and the adversary), and the trimmed text was not checked against the denylist (Codex); each got a row
+  seen red before the fix and green after. The row helper now checks the whole printed line, and P26 the exact
+  commit, nothing after the rule, and both output streams. Round 2: the row meant for the check of the printed text
+  went red for the trim, not for that check; a row with a synthetic entry that ends in a slash, which only the
+  trimmed text holds, now tests it, and went red with the check removed in a scratch copy. Round 3 found nothing
+  more in F2 or P26.
+
+- **F6 (an entry with U+180E or a variation selector) is not in this release.** Each of the three panel rounds
+  found a new defect in its folded reading, the last one a hit 9aec33e found and the change lost (a fullwidth name
+  before U+FE0F). The maintainer chose to ship F2 and Q50 and to take F6 up as a slice of its own; its code is
+  9aec33e's, and its 0.2.9 line below still holds. The rounds' measured cases are in the Q51 plan.
+
+  Rows (SG1, SG2): 15 seen red on 9aec33e or on the first trim (the SG1 cut row among them, which replaces the old
+  one), and 1 seen red only by removing its check, all green after. Kept green throughout as guards: a hit at the
+  end of a line, before a slash and before a space prints whole. The scrub suite: 252 rows on 9aec33e, 270 after
+  (270 passed); with `-History HEAD` 279 passed. The pre-push suite: 44 passed. The full `tests\run.ps1`: 14
+  suites passed, 0 failed.
+
+  Still not covered:
+  - a name joined to a digit or `_` (`/home/<name>2`) is not a whole word, is not found, and prints whole, as the
+    0.2.9 line on joined words says (measured by the adversary);
+  - a cut, or a match the line goes on after, now prints less: such a hit is found by its file, line and rule (by
+    design).
+
 ## 0.2.9 - 2026-11-22
 
 - **A pattern hit in a message or an identity prints no matched text** (F5 and F7, the lines 0.2.8 listed as not
@@ -92,14 +144,7 @@
     a hit, and such a path would ship anyway; reasoned);
   - a word of an entry joined to other letters, digits or `_` is not a whole word and is not found, as for the
     denylist itself (reasoned);
-  - the pre-push hook has no row of its own that a push refused for a message or identity hit forwards no matched
-    text: read from the code (it forwards the suite's detail lines, which the rows above check), not measured
-    through the hook;
   - `-PushRefs` is still an argument, and the 0.2.8 range sides are still refused, as in 0.2.8;
-  - a pattern match that stops inside a private name prints the part before it: the home-path class stops at a
-    non-ASCII letter or an invisible character, so an entry whose last letter is accented prints all but that
-    letter (measured in a scratch probe, on c30654b and after; the invisible case likewise), and an 80-character
-    cut that lands inside a name that is not a whole word prints its start (reasoned);
   - a denylist entry that holds U+180E or a variation selector (U+FE00-FE0F) between or after its words is read as
     one word in both readings, so the name written with an ordinary space does not match the whole entry and is
     not found (measured in a scratch probe; pre-existing, as on 0.2.8);

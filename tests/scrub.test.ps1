@@ -46,11 +46,14 @@
 # This file is scanned too, but for the denylist and the commit-sha rule only:
 # the pattern rules are skipped for it, because it holds their patterns.
 # Each hit prints file:line and the rule; for a pattern rule also the matched
-# text cut to 80 characters (not in a file name, a pushed ref name or a tag's
+# text cut to 80 characters, never ending where a name may go on (a text that
+# was cut, or that the line goes on after with anything but a space, a tab, /
+# or \, is cut back to its last space, tab, / or \: such a home path prints
+# only /home/), (not in a file name, a pushed ref name or a tag's
 # name, where that text is part of the name; not in a message, commit, re-encoded,
 # tag or mergetag, nor in an author, committer or tagger line, where any name can
 # be quoted: those are located by their label and line; and not when the matched
-# text, whole or cut, holds a denylist entry or one word of a multi-word entry),
+# text, whole, cut or as printed, holds a denylist entry or one word of a multi-word entry),
 # for a denylist entry only its number (the word itself is never printed), for a
 # commit sha only the rule. A file is named by
 # its path only when the path itself has no hit; otherwise by its position in
@@ -305,12 +308,14 @@ function Get-ScrubMatchers([string[]]$Denylist) {
 
 # Hits in $Lines of the file named $Path (its extension picks the .md rule).
 # Returns objects { Line; Rule; Text; MatchKey; HoldsEntry }. For a pattern hit,
-# Text is the matched text cut to 80 characters, MatchKey is Get-ScrubMatchKey
-# of that cut text (taken before any blanking), and HoldsEntry is $true when a
-# whole denylist entry matches the full match or the cut text. Text is '' when
-# HoldsEntry is $true, and also when the full match or the cut text holds, as a
-# whole word, one word of an entry that has two or more words in that reading
-# (HoldsEntry stays $false then).
+# Text is the matched text cut to 80 characters and, when it was cut or the
+# line goes on after it with anything but a space, a tab, / or \, cut back to
+# its last space, tab, / or \; MatchKey is Get-ScrubMatchKey of the
+# 80-character text (taken before any trim or blanking), and HoldsEntry is
+# $true when a whole denylist entry matches the full match, the cut text or
+# the text that would print. Text is '' when HoldsEntry is $true, and also when
+# one of them holds, as a whole word, one word of an entry that has two or more
+# words in that reading (HoldsEntry stays $false then).
 # A denylist hit has Text '', MatchKey '' and HoldsEntry $false. -SkipPatterns
 # leaves the pattern rules out (the denylist still applies). The pattern rules
 # run line by line; the denylist runs over the whole text (Get-ScrubDenyText),
@@ -342,20 +347,35 @@ function Find-ScrubHits {
                     $txt = $m.Value
                     if ($txt.Length -gt 80) { $txt = $txt.Substring(0, 80) }
                     $key = Get-ScrubMatchKey $txt
+                    $cutText = $txt
+                    # The printed text never ends where a name may go on, so it never
+                    # prints the start of one: when it was cut, or the character after it
+                    # in the line is anything but a space, a tab, / or \ (a class that
+                    # stopped at an accented letter, a mark, an invisible character, a
+                    # no-break space or ASCII punctuation such as ' or %), it is cut back
+                    # to its last space, tab, / or \ (for a home path, /home/; for a
+                    # rule with no / in it, nothing). MatchKey is of the cut text before.
+                    $end = $m.Index + $txt.Length
+                    if ($txt.Length -lt $m.Value.Length -or ($end -lt $line.Length -and ' ', "`t", '/', '\' -notcontains [string]$line[$end])) {
+                        $txt = [regex]::Replace($txt, '[^ \t/\\]+$', '')
+                    }
                     $holds = $false
                     $partial = $false
                     # A matched text that holds a denylist entry (a /home/<name> path), or
                     # one word of an entry of two or more words, is not printed: the hit is reported
-                    # without its text. Both the full match and the cut text that would
-                    # print are checked (a cut can end a longer word on a private one),
-                    # each in its plain and its folded reading. Only a whole entry sets
-                    # HoldsEntry.
+                    # without its text. The full match, the cut text and the text that would
+                    # print are checked (a cut can end a longer word on a private one; the
+                    # trimmed text, which ends at a space, tab, / or \, adds a hit only for an
+                    # entry that ends in / or \), each in its plain and its folded reading.
+                    # Only a whole entry sets HoldsEntry.
                     if ($deny.Count -gt 0) {
                         $plains = @($m.Value.Normalize([System.Text.NormalizationForm]::FormC))
                         $folds = @(Get-ScrubDenyText $m.Value)
-                        if ($txt.Length -lt $m.Value.Length) {
-                            $plains += $txt.Normalize([System.Text.NormalizationForm]::FormC)
-                            $folds += Get-ScrubDenyText $txt
+                        foreach ($t in @($cutText, $txt)) {
+                            if ($t -and $t.Length -lt $m.Value.Length) {
+                                $plains += $t.Normalize([System.Text.NormalizationForm]::FormC)
+                                $folds += Get-ScrubDenyText $t
+                            }
                         }
                         for ($d = 0; $d -lt $deny.Count -and -not $holds; $d++) {
                             foreach ($p in $plains) { if ($denyPlain[$d].IsMatch($p)) { $holds = $true; break } }
@@ -1252,8 +1272,9 @@ foreach ($r in $rows) {
 }
 $h = @(Find-ScrubHits -Path 'a.md' -Lines @('ok', ('x C:\' + $pj + '\y'), '', ('z FU' + '-3')))
 Assert-Coord 'SG1 a hit names its line number and rule' ($h.Count -eq 2 -and $h[0].Line -eq 2 -and $h[0].Rule -ceq $pathRule -and $h[1].Line -eq 4 -and $h[1].Rule -ceq 'internal follow-up number') (($h | ForEach-Object { "$($_.Line) $($_.Rule)" }) -join '; ')
-$h = @(Find-ScrubHits -Path 'a.md' -Lines @('at /home/' + ('a' * 100)))
-Assert-Coord 'SG1 the matched text of a hit is cut to 80 characters' ($h.Count -eq 1 -and $h[0].Text.Length -eq 80) "hits=$($h.Count) length=$(if ($h.Count) { $h[0].Text.Length })"
+$q51Cut = '/home/' + ('a-' * 50)
+$h = @(Find-ScrubHits -Path 'a.md' -Lines @('at ' + $q51Cut))
+Assert-Coord 'SG1 a matched text over 80 characters is cut (its key is of the first 80), and the cut, inside the name, prints only up to the slash before it' ($h.Count -eq 1 -and $h[0].MatchKey -ceq (Get-ScrubMatchKey $q51Cut.Substring(0, 80)) -and $h[0].Text -ceq '/home/') "hits=$($h.Count) length=$(if ($h.Count) { $h[0].Text.Length })"
 $h = @(Find-ScrubHits -Path 'a.md' -Lines @(('see C:\' + $pj + '\y zzalpha')) -Denylist @('zzalpha') -SkipPatterns)
 Assert-Coord 'SG1 -SkipPatterns leaves the pattern rules out and keeps the denylist' ($h.Count -eq 1 -and $h[0].Rule -ceq 'denylist entry 1') (($h | ForEach-Object { $_.Rule }) -join ';')
 $ht = @(Get-ScrubHexTokens @('ref 0123abc; abc123; x0123abd; 0123abe_ ; ABCDEF12 .', '', ('long ' + ('a' * 41))))
@@ -2478,6 +2499,68 @@ foreach ($q47Bl in @(@('a CRLF line', " `r", '85'), @('two spaces', '  ', '86'))
     $q47R = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n tag rel-q47g`n tagger R Q <r@example.invalid> 1700000000 +0000`n" + $q47Bl[1] + "`n notes " + $q47fu + $q47Bl[2] + "`n`nmerge it`n"))
     Assert-ScrubNoMatchedText ('SG6 a follow-up number in the message of a mergetag whose blank line is ' + $q47Bl[0] + ' is named message of mergetag in commit <sha7> and prints no matched text') ($q47R.Hits.ToArray()) '^message of mergetag in commit [0-9a-f]{7}$' $q47Rule @(($q47fu + $q47Bl[2])) -Count 1 -ControlOk $q47R.DiscoveryOk -ControlDetail $q47R.Reason
 }
+
+# ---- Q51: no part of a name in a printed hit (F2)
+Write-Host "(SG2) Q51: printed text never ends where a name may go on"
+$q51Hp = '/ho' + 'me/'
+$q51E = [string][char]0x00E9
+$q51Mvs = [string][char]0x180E
+$q51Vs = [string][char]0xFE0F
+$q51Zw = [string][char]0x200B
+$q51HomeRule = 'user home path*'
+# The one home-path hit of $Line (with $Denylist), or $null.
+function Get-ScrubQ51HomeHit([string]$Line, [string[]]$Denylist = $null) {
+    $f = @(Find-ScrubHits -Path 'n.txt' -Lines @($Line) -Denylist $Denylist | Where-Object { $_.Rule -like $q51HomeRule })
+    if ($f.Count -ne 1) { return $null }
+    return $f[0]
+}
+# Asserts that $Line has one home-path hit that prints exactly
+# "n.txt:1: <rule>: $Want" (or "n.txt:1: <rule>" when $Want is empty) through
+# Format-ScrubHit, and that no $Secrets text is in what prints. The detail
+# masks the secrets.
+function Assert-ScrubQ51Print([string]$Label, [string]$Line, [string]$Want, [string[]]$Secrets = @(), [string[]]$Denylist = $null) {
+    $h = Get-ScrubQ51HomeHit $Line $Denylist
+    $shown = ''
+    if ($null -ne $h) {
+        $c = $h | Select-Object *
+        $c | Add-Member -NotePropertyName File -NotePropertyValue 'n.txt' -Force
+        $shown = Format-ScrubHit $c
+    }
+    $wantShown = "n.txt:1: $($scrubRules[1].Name)"
+    if ($Want) { $wantShown += ": $Want" }
+    $leaked = @($Secrets | Where-Object { $shown.IndexOf($_, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 })
+    $detail = $shown
+    foreach ($s in $Secrets) { $detail = [regex]::Replace($detail, [regex]::Escape($s), '<secret>', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) }
+    Assert-Coord $Label ($null -ne $h -and $shown -ceq $wantShown -and $leaked.Count -eq 0) ("hit found: $($null -ne $h); printed length $($shown.Length), wanted $($wantShown.Length); secrets printed: $($leaked.Count)`n$detail")
+}
+# F2 (a): the home-path class stops at a non-ASCII letter or an invisible character.
+Assert-ScrubQ51Print 'SG2 a home-path hit that stops at the accented last letter of a denylist entry prints only /home/ (not the rest of the entry)' ('see ' + $q51Hp + 'zzabc' + $q51E + '/x') $q51Hp @('zzab') @(('zzabc' + $q51E))
+Assert-ScrubQ51Print 'SG2 a home-path hit that stops at an accented letter of a name not on the denylist prints only /home/' ('see ' + $q51Hp + 'zzjos' + $q51E + '/x') $q51Hp @('zzjos')
+foreach ($q51Iv in @(@('a zero-width space', $q51Zw), @('U+180E', $q51Mvs), @('a variation selector (U+FE0F)', $q51Vs))) {
+    Assert-ScrubQ51Print ('SG2 a home-path hit that stops at ' + $q51Iv[0] + ' inside a denylist entry prints only /home/') ('see ' + $q51Hp + 'zzab' + $q51Iv[1] + 'c/x') $q51Hp @('zzab') @('zzabc')
+}
+# The name segment is dropped whole: a name joined by a dot or a hyphen, or one
+# the class stops in at ASCII punctuation (an apostrophe, a percent-encoded
+# letter), prints no part of it (panel round 1).
+Assert-ScrubQ51Print 'SG2 a home-path hit with a dotted name that stops at an accented letter prints only /home/' ('see ' + $q51Hp + 'zzjohn.zzm' + [string][char]0x00FC + 'ller/x') $q51Hp @('zzjohn') @(('zzjohn.zzm' + [string][char]0x00FC + 'ller'))
+Assert-ScrubQ51Print 'SG2 a home-path hit with a hyphenated name that stops at an accented letter prints only /home/' ('see ' + $q51Hp + 'zzanne-zzmari' + $q51E + '/x') $q51Hp @('zzanne')
+Assert-ScrubQ51Print 'SG2 a home-path hit whose name holds an apostrophe prints only /home/' ('see ' + $q51Hp + 'zzo' + [string][char]0x27 + 'zzbrien/x') $q51Hp @('zzo')
+Assert-ScrubQ51Print 'SG2 a home-path hit in a URL whose name is percent-encoded prints only /home/' ('see file://' + $q51Hp + 'zzjos%C3%A9/x') $q51Hp @('zzjos')
+Assert-ScrubQ51Print 'SG2 a home-path hit followed by ASCII punctuation prints only /home/ (the name may go on)' ('see ' + $q51Hp + 'zzpub: x') $q51Hp @('zzpub')
+Assert-ScrubQ51Print 'SG2 a home-path hit followed by a no-break space prints only /home/' ('see ' + $q51Hp + 'zzpub' + [string][char]0x00A0 + 'x') $q51Hp @('zzpub')
+Assert-ScrubQ51Print 'SG2 a home-path hit whose name starts with a denylist entry ending in a hyphen prints only /home/' ('see ' + $q51Hp + 'zzpriv-publ' + $q51E + '/x') $q51Hp @('zzpriv') @('zzpriv-')
+# F2 (b): the 80-character cut drops the name segment too.
+$q51Long = 'see ' + $q51Hp + ('a' * 66) + '-zzgivenx'
+Assert-ScrubQ51Print 'SG2 a home-path hit whose 80-character cut lands inside a word prints only /home/' $q51Long $q51Hp @('zzgiv', 'aaaa')
+Assert-ScrubQ51Print 'SG2 a home-path hit whose 80-character cut lands before a hyphen prints only /home/' ('see ' + $q51Hp + ('a' * 74) + '-zzrest') $q51Hp @('zzrest', 'aaaa')
+# Guards: a hit that ends at white space, a slash or the end of the line prints whole.
+Assert-ScrubQ51Print 'SG2 guard: a home-path hit at the end of the line prints whole' ('see ' + $q51Hp + 'zzpub') ($q51Hp + 'zzpub')
+Assert-ScrubQ51Print 'SG2 guard: a home-path hit followed by a slash prints whole' ('see ' + $q51Hp + 'zzpub/x') ($q51Hp + 'zzpub')
+Assert-ScrubQ51Print 'SG2 guard: a home-path hit followed by a space prints whole' ('see ' + $q51Hp + 'zzpub x') ($q51Hp + 'zzpub')
+# The denylist check on the text that would print: only an entry that ends in
+# a slash can match the trimmed text and not the whole match (panel round 2).
+$q51H = Get-ScrubQ51HomeHit ('see ' + $q51Hp + 'zzx' + [string][char]0x27 + 'y') @('home/')
+Assert-Coord 'SG2 a home-path hit whose trimmed text, and only that, holds an entry ending in a slash prints no text and holds the entry (panel round 2)' ($null -ne $q51H -and -not $q51H.Text -and $q51H.HoldsEntry) "hit found: $($null -ne $q51H); text length: $(if ($null -ne $q51H) { ([string]$q51H.Text).Length }); holds entry: $(if ($null -ne $q51H) { $q51H.HoldsEntry })"
 # the real range, when the run names one
 if ($History) {
     # Allowed identities: exact "Name <email>" author, committer and tagger
