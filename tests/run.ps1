@@ -11,6 +11,12 @@
 #             Windows PowerShell 5.1 (powershell.exe), under either -Shell.
 # -Filter     a wildcard matched against each suite's file name (for example
 #             coord-log*) or its path relative to tests\ (for example scripts\*).
+# -Group      only the suites of one CI group (the table below); the groups
+#             together cover every suite exactly once, and a suite in no named group
+#             falls in 'rest', so a new suite is never left out. test.yml runs one
+#             CI job per group. Combined with -Filter, a suite must match both.
+# -List       prints the suites that would run (their paths relative to tests\), one
+#             per line, then 'LIST: <n> suites', and runs none.
 # -TimeoutMinutes  a suite still running after this long is stopped (its own
 #             process and the processes it started, by process id) and counts as failed.
 # -Strict     a suite that reports any UNCHECKED row counts as failed, so a run
@@ -32,6 +38,8 @@
 param(
     [ValidateSet('powershell', 'pwsh')][string]$Shell = 'powershell',
     [string]$Filter = '',
+    [string]$Group = '',
+    [switch]$List,
     [int]$TimeoutMinutes = 30,
     [switch]$Strict
 )
@@ -55,6 +63,33 @@ if ($Filter) {
             $rel = $_.FullName.Substring($testsDir.Length).TrimStart('\', '/')
             ($_.Name -like $Filter) -or ($rel -like $Filter)
         })
+}
+# CI groups: suite paths (relative to tests\) per named group, balanced by their
+# wall time on a hosted runner (2026-11-21: prepush about 15 min, prune-scan 12,
+# scope-guard 7, merge-verify 6, everything else together about 9). 'rest' is not
+# listed: it is every suite that no other group names.
+$ciGroups = [ordered]@{
+    'prepush'     = @('hooks\prepush.test.ps1')
+    'prune'       = @('scripts\prune-scan.test.ps1', 'run.test.ps1')
+    'guard-merge' = @('hooks\coord-scope-guard.test.ps1', 'scripts\merge-verify.test.ps1', 'scrub.test.ps1')
+}
+if ($Group) {
+    if ($Group -ne 'rest' -and -not $ciGroups.Contains($Group)) {
+        Write-Host "run.ps1: unknown group '$Group' (known: $(@($ciGroups.Keys) -join ', '), rest)"
+        Write-Host 'RUN: 0 suites, 0 passed, 0 failed, 0 unchecked'
+        exit 1
+    }
+    $named = @($ciGroups.Values | ForEach-Object { $_ })
+    $suites = @($suites | Where-Object {
+            $rel = $_.FullName.Substring($testsDir.Length).TrimStart('\', '/')
+            $inNamed = $named -contains $rel
+            if ($Group -eq 'rest') { -not $inNamed } else { $ciGroups[$Group] -contains $rel }
+        })
+}
+if ($List) {
+    foreach ($s in $suites) { Write-Host $s.FullName.Substring($testsDir.Length).TrimStart('\', '/') }
+    Write-Host "LIST: $($suites.Count) suites"
+    exit 0
 }
 if ($suites.Count -eq 0) {
     Write-Host "run.ps1: no suite matches under $testsDir"

@@ -1,8 +1,13 @@
 # Runs the test suites (tests\run.ps1) on Windows PowerShell 5.1, the one host
 # the scripts are verified on.
 #
-# Triggers: pull requests and a manual run only. No push and no schedule: the
-# account's Actions minutes have a hard monthly cap.
+# Triggers: pull requests and a manual run only (no push, no schedule). The
+# repository is public; this file claims no Actions billing or minutes rule.
+#
+# The suites run as one parallel job per group (tests\run.ps1 -Group; the group
+# table lives in run.ps1, and every suite is in exactly one group, a new one in
+# 'rest'). A group name listed here that run.ps1 does not know fails its job, and
+# tests\run.test.ps1 checks that this matrix names every group run.ps1 has.
 #
 # The scrub suite's private denylist is not in this repo and not on the runner.
 # With TRACKSTEWARD_SCRUB_DENYLIST unset and no -History range the suite skips
@@ -25,9 +30,13 @@ concurrency:
 
 jobs:
   run-ps1:
-    name: tests\run.ps1 (Windows PowerShell 5.1)
+    name: tests\run.ps1 ${{ matrix.group }} (Windows PowerShell 5.1)
     runs-on: windows-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [prepush, prune, guard-merge, rest]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,12 +48,12 @@ jobs:
           "PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
           git --version
 
-      - name: tests\run.ps1
+      - name: tests\run.ps1 (group ${{ matrix.group }})
         shell: powershell
         env:
           # The guard suite's G9 timing rows have fixed budgets that a hosted
           # runner misses; they print a SKIP line each and do not count as passed.
           TRACKSTEWARD_SKIP_TIMING: '1'
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File tests\run.ps1 -Shell powershell
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\run.ps1 -Shell powershell -Group ${{ matrix.group }}
           exit $LASTEXITCODE

@@ -9,6 +9,9 @@
 #      forwarded, and counted in the total line
 #   R3 -Strict: a suite with an unchecked row fails; without it, the run is green
 #   R4 the total line, and the exit code for a filter that matches nothing
+#   R5 -Group / -List: the groups test.yml runs together cover every real suite
+#      exactly once (none dropped, none twice), 'rest' is among them, and an
+#      unknown group exits 1
 #
 # Run:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\run.test.ps1
 # Exit: 0 = all passed, 1 = a case failed.
@@ -65,6 +68,34 @@ $un = Invoke-FakeRun '-Filter "f-unchecked*"'
 Assert-Coord 'R3 without -Strict a suite with an unchecked row passes: exit 0, 1 unchecked in the total' ($un.Code -eq 0 -and ([string]$un.Out) -cmatch '(?m)^RUN: 1 suites, 1 passed, 0 failed, 1 unchecked\s*$') "code=$($un.Code) out=$($un.Out)"
 $st = Invoke-FakeRun '-Filter "f-unchecked*" -Strict'
 Assert-Coord 'R3 with -Strict that suite fails, naming the unchecked rows: exit 1' ($st.Code -eq 1 -and ([string]$st.Out) -cmatch 'FAILED SUITE f-unchecked\.test\.ps1: [^\r\n]*-Strict: 1 unchecked' -and ([string]$st.Out) -cmatch '(?m)^RUN: 1 suites, 0 passed, 1 failed, 1 unchecked\s*$') "code=$($st.Code) out=$($st.Out)"
+
+Write-Host "(R5) -Group: the CI groups cover every real suite exactly once, and test.yml runs each group"
+$realRun = Join-Path $testsDir 'run.ps1'
+function Get-ListedSuite([string]$ListArgs) {
+    $r = Invoke-HookTestPowerShell -Script $realRun -StartDir $testsDir -ScriptArgs ('-List ' + $ListArgs) -Seconds 120
+    $names = @(([string]$r.Out -split "`r?`n") | Where-Object { $_.Trim() -and $_ -cnotmatch '^LIST: ' } | ForEach-Object { $_.Trim() })
+    return [pscustomobject]@{ Code = $r.Code; Names = $names; Out = [string]$r.Out }
+}
+$everySuite = Get-ListedSuite ''
+$yml = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $testsDir) '.github\workflows\test.yml'))
+$matrixLine = [regex]::Match($yml, '(?m)^\s*group:\s*\[([^\]]*)\]\s*$')
+$ymlGroups = if ($matrixLine.Success) { @($matrixLine.Groups[1].Value -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { @() }
+Assert-Coord 'R5 test.yml has a matrix group list' ($ymlGroups.Count -gt 0 -and $everySuite.Code -eq 0 -and $everySuite.Names.Count -gt 0) "groups=$($ymlGroups -join ',') out=$($everySuite.Out)"
+$seen = New-Object System.Collections.Generic.List[string]
+foreach ($g in $ymlGroups) {
+    $l = Get-ListedSuite "-Group $g"
+    Assert-Coord "R5 group '$g' lists at least one suite" ($l.Code -eq 0 -and $l.Names.Count -gt 0) $l.Out
+    foreach ($n in $l.Names) { $seen.Add($n) }
+}
+$dups = @($seen | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+$missing = @($everySuite.Names | Where-Object { $seen -notcontains $_ })
+$extra = @($seen | Where-Object { $everySuite.Names -notcontains $_ })
+Assert-Coord 'R5 the groups in test.yml together run every suite exactly once' ($dups.Count -eq 0 -and $missing.Count -eq 0 -and $extra.Count -eq 0) "duplicated=$($dups -join ',') missing=$($missing -join ',') extra=$($extra -join ',')"
+Assert-Coord 'R5 test.yml names the rest group (a new suite is never left out)' ($ymlGroups -contains 'rest') ($ymlGroups -join ',')
+$bogus = Get-ListedSuite '-Group no-such-group'
+Assert-Coord 'R5 an unknown group exits 1 and names the known groups' ($bogus.Code -eq 1 -and $bogus.Out -cmatch 'unknown group') $bogus.Out
+$grpFake = Invoke-FakeRun '-Group rest'
+Assert-Coord 'R5 -Group rest on a folder with no named-group suite runs all of them' ((([string]$grpFake.Out) -cmatch '(?m)^RUN: 7 suites,')) $grpFake.Out
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 Write-CoordUncheckedSummary
