@@ -28,7 +28,9 @@
 # the UNCHECKED lines, and on a failure the FAIL lines and the indented detail
 # lines right after each, whose file labels name a file by its path only when
 # the path itself has no hit (with the denylist set; without it a history run
-# fails, and only the pattern rules judge a path). A failed git call in a
+# fails, and only the pattern rules judge a path). A hit in a message or in an
+# author, committer or tagger line shows no matched text, only its commit or
+# tag, its line and its rule. A failed git call in a
 # reason is named by its exit code and the kind of message git printed; no
 # detail quotes git's own text, which can name a path. No other line is shown: an error record
 # (its indented "+ CategoryInfo" line can name a path) never is, and a failure

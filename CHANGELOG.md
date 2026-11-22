@@ -1,5 +1,121 @@
 # Changelog
 
+## 0.2.9 - 2026-11-22
+
+- **A pattern hit in a message or an identity prints no matched text** (F5 and F7, the lines 0.2.8 listed as not
+  covered). Measured first, in the suite, on c30654b: a follow-up number in a commit message that git wrote for a
+  merge of a tag (`Merge tag '<name>'`), of a branch (`Merge branch '<name>'`) and for a `git pull` from a clone
+  path (`Merge branch '<name>' of <path>`), in a message that quotes a file name, in an annotated tag's message, in
+  a mergetag's embedded message and in git's re-encoded reading of a message (%B) each printed its text in the
+  hit; so did one in an author, committer, tagger and mergetag tagger line, and in a Windows-1252 author line. Any
+  message can quote any name, so every message hit now keeps no text, not only git's own quoting forms; a message
+  or identity hit is found by its commit or tag, its line and its rule (`git show <sha7>`); a mergetag's message
+  has its own label, `message of mergetag in commit <sha7>`, so its line 1 is not the line 1 of that commit's
+  headers. A mergetag's message starts after its first line that is empty or white space only (a CRLF line or two
+  spaces split it too). The other headers (a signature, a tag's type, an unknown key) and file contents keep their
+  text, as before.
+
+- **A pattern hit whose matched text holds one word of a multi-word denylist entry prints no matched text** (F7).
+  Until now only a hit holding the whole entry kept no text, so a home path holding the first word of a two-word
+  entry printed that word (measured on c30654b, in the plain reading, the folded one, and one only the plain
+  reading has: a follow-up number whose last digit is a fullwidth digit, which NFKC folds into the number). The
+  check now runs on the 80-character text that prints as well as on the whole match: a long match whose whole
+  text holds no word could print one once cut (measured, for a word of a two-word entry and for a single-word
+  entry). This is in the shared scanner, so a work-tree and an index version are covered too (both measured).
+  An entry's words are taken from each reading on its own and counted as split, so an entry that is one word plain
+  and two once folded (a spacing diaeresis or acute accent folds to a space and a combining mark) has word matchers
+  in the folded reading, a folded word losing the combining marks it starts with; a plain word made only of an
+  invisible character counts toward the two words.
+
+- **The placeholder exemption no longer reads a hit's text.** The real-history run lets one desktop session id
+  through, in the coord-handoff script's blobs and one commit message that explains it. It matched on the hit's
+  text, which a message hit no longer has, so each hit now carries a key of its matched text (a SHA-256 hash,
+  never printed) and a flag for a whole denylist entry in it; the exemption needs the key, the label and no
+  whole entry, as the text match did. A word-only match blanks the text but leaves the exemption as it was. The
+  hits that share a place are now merged on that key and the text together: the key keeps two blanked hits of
+  different texts apart, and the text still keeps a blanked hit and a printed one of the same text apart (a
+  mergetag's name and its signature), as it did before. A whole-history run (`-History HEAD`) passes as
+  on c30654b.
+
+  New rows (SG2, SG4, SG6): 19 seen red on c30654b and green after: the six F5 message forms, the %B reading, the
+  five identity forms (the Windows-1252 one also exactly one hit), five F7 word forms, a work-tree and an index
+  version. Kept green throughout as controls and guards: a blob's hit still prints its text; an entry made of an
+  invisible character and a word blanks nothing else; two follow-up numbers on one message line are two hits; the
+  exemption holds for its id under its labels, not for another id or another commit, not when a whole entry built
+  from the id's two halves matches, and still when the id is one word of an entry; a mergetag's name and signature
+  hits both stay. Each fix was also seen red by reverting it alone (16 mutations, each turning its rows red).
+  The %B row uses Shift_JIS: this host's git cannot re-encode UTF-7.
+  The review panel added three rows, each seen red before its fix and green after: two entries with a spacing
+  diaeresis (one word plain, two folded) whose home-path hit printed the first folded word, and a mergetag whose
+  tag name and first message line hold the same follow-up number, which merged into one hit; the mergetag-message
+  row now asserts the new label. Every no-text row also checks that each of its hits prints as exactly
+  `<label>:<line>: <rule>` (seen red by making `Format-ScrubHit` print nothing for a blanked hit). Reverting each
+  panel fix alone turned its rows red.
+  The second panel round added five rows, each seen red before its fix and green after: a follow-up number with a
+  fullwidth last digit printed the first word of an entry whose second plain word is only a zero-width space (the
+  first-round fix had dropped that word before counting); two entries with a spacing diaeresis or acute
+  accent whose home-path hit printed the second folded word, which starts with a combining mark; and two mergetags
+  whose blank line is a CRLF line or two spaces, whose message printed under `commit headers of`. A guard row, an
+  entry ending in a spacing diaeresis, stays green and went red when the marks were stripped before counting.
+  Reverting each fix alone turned its rows red. The folded word matchers are now built from the folded word as it
+  is, not normalised to NFC again: a folded word need not be NFC (measured in a scratch probe), but no row shows
+  it, as no pattern rule's matched text holds a combining mark (reasoned); since the third round's fix below the
+  folded reading is NFKC again, so that case no longer arises.
+  The third panel round:
+  - **Fixed, a fail-open that predates 0.2.9**: a denylist entry with an accented letter (`zzjos` + U+00E9) was not
+    found in a text that writes it as the base letter, a soft hyphen or a zero-width space, and a combining mark:
+    the folded reading removed the invisible character after NFKC, so the pair never composed. The folded reading
+    now applies NFKC again after the removal. Two rows, one per invisible character, were seen red before the fix
+    (no denylist hit) and green after; reverting the fix alone turns both red. The function is unchanged from
+    c30654b, where the review measured the same miss.
+  - A FAIL detail of the no-text rows gives counts and the `<label>:<line>: <rule>` of the row's own hits only,
+    never another hit's text (the pull fixture's message holds the clone's absolute path); no row checks the
+    detail's format. A new guard row checks that no message hit of that pull, of any rule, has text (red when
+    message hits keep their text, also for the absolute-path rule alone).
+  - A guard row checks a message hit's place: a follow-up number on the third line of a commit message is one hit
+    labelled `commit message <sha7>`, the commit's first 7 sha characters, on line 3 (lines counted from the
+    message's first line; red with the line off by one and with an 8-character label).
+  - The matchers of a denylist are built once per list and reused: 200 clean single-line scans with 20 two-word
+    entries took 4.41 s before and 0.43 s after (the first call excluded, scratch timing on this host); no row
+    checks the reuse.
+  - The Q47 tag fixtures pass `-c tag.gpgSign=false`, and the merge, pull and `Add-ScrubTestCommit` commits
+    `-c commit.gpgSign=false`, so a maintainer's signing config cannot fail these new fixtures (untested: this
+    host sets no signing config). The suite's older fixtures, and the hook suite's, still pass no signing
+    setting, so `commit.gpgSign=true` without a key can still fail the suite as before.
+  - Folding again after removing invisible characters also means an entry without an accent no longer matches a
+    text that writes the accent with an invisible character before it (`zzjose` against `zzjose` + a soft hyphen
+    + a combining acute): that text now folds to the accented word, and matching is accent-sensitive, as it was
+    for the same text without the invisible character (measured in a scratch probe).
+
+  Still not covered:
+  - a file label prints when its path holds one word of a multi-word entry and no pattern hit (a lone word is not
+    a hit, and such a path would ship anyway; reasoned);
+  - a word of an entry joined to other letters, digits or `_` is not a whole word and is not found, as for the
+    denylist itself (reasoned);
+  - the pre-push hook has no row of its own that a push refused for a message or identity hit forwards no matched
+    text: read from the code (it forwards the suite's detail lines, which the rows above check), not measured
+    through the hook;
+  - `-PushRefs` is still an argument, and the 0.2.8 range sides are still refused, as in 0.2.8;
+  - a pattern match that stops inside a private name prints the part before it: the home-path class stops at a
+    non-ASCII letter or an invisible character, so an entry whose last letter is accented prints all but that
+    letter (measured in a scratch probe, on c30654b and after; the invisible case likewise), and an 80-character
+    cut that lands inside a name that is not a whole word prints its start (reasoned);
+  - a denylist entry that holds U+180E or a variation selector (U+FE00-FE0F) between or after its words is read as
+    one word in both readings, so the name written with an ordinary space does not match the whole entry and is
+    not found (measured in a scratch probe; pre-existing, as on 0.2.8);
+  - a hand-made mergetag with no line that is empty or white space only has no message: every line of it is read
+    as a header, so a line after its tagger keeps its text, as an unknown header does (read from the code; no row);
+  - a line that is white space only ends a mergetag's headers wherever it is, inside an embedded signature header
+    too (that only blanks more), and a tagger after such a line is read as message text, not as an identity, so
+    the allowed identities do not apply to it: that can refuse a push, never pass one (read from the code; no
+    row);
+  - the placeholder exemption's label test also matches a history path that starts like a coord-handoff blob
+    label (a file named `scripts/coord-handoff.ps1 (blob x).txt`), so the placeholder id is let through there
+    too; it can only let that one non-private id through (reasoned, as on 0.2.8).
+
+- **CI: the test suites run as four parallel jobs** (`tests\run.ps1 -Group`), about 16 min instead of about 50; the
+  workflow header no longer claims an Actions minutes cap.
+
 ## 0.2.8 - 2026-11-21
 
 - **A pattern hit in an annotated tag's own name prints no matched text** (F3, the line 0.2.6 and 0.2.7 listed as

@@ -3,7 +3,7 @@
 **One thin coordinator session over many parallel Claude Code sessions.** It gives you a daily
 ledger, scoped briefs, a findings protocol, and one verified merge at a time.
 
-> **Status:** v0.2.6, 2026-11-21. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
+> **Status:** v0.2.9, 2026-11-22. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
 > for 10 coordination days: 57 merges verified, 127 findings with recorded outcomes, up to 16 tracks in
 > a day. The scripts and the scope guard came to this plugin in 0.2.0, after those days.
 >
@@ -247,7 +247,7 @@ Windows-only as shipped, and its stated limits are in the header of `hooks/coord
 
 **The pre-push gate (maintainers).** `.githooks/pre-push` runs `tests\scrub.test.ps1 -HistoryStdin` once per
 push, over the commits it sends that the remote does not already have, and over the ref names it writes. A private
-name in a commit message or header (its signature included), an author or committer line, a file name, a file version, an annotated tag or
+name in a commit message or header (its signature included), an author, committer or tagger line, a file name, a file version, an annotated tag or
 a ref name
 refuses the push, and so does a missing private denylist (`TRACKSTEWARD_SCRUB_DENYLIST`). A deletion is not scanned.
 The public identities your own commits carry go, one exact `Name <email>` per line, in a second private file named by
@@ -258,7 +258,8 @@ covered (its pushes run the main checkout's hook and scrub suite, whose work-tre
 files, not the worktree's). The hook hands the suite its range on stdin, so a remote that advertises thousands of
 commits does not pass the Windows command-line limit. The gate's own lines name a ref by its position in the push,
 and the suite's lines name a file by its path only when the denylist and pattern rules find nothing in the path
-(otherwise by its position or its blob); of a failed run only the FAIL lines and their details are shown, never an
+(otherwise by its position or its blob); a hit in a message or in an author, committer or tagger line is named by
+its commit or tag and line, without its matched text; of a failed run only the FAIL lines and their details are shown, never an
 error record; a failed git call in a reason is named by its exit code and the kind of message git printed, and no
 detail quotes git's own text (which can name a path, a ref or a URL). git's own push output still
 names the refs. `git push --no-verify` skips it. A clone without

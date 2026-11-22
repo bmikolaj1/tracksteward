@@ -20,8 +20,8 @@
 #     $env:TRACKSTEWARD_SCRUB_DENYLIST (one entry per line, # comments and blank
 #     lines ignored), matched over two readings of the whole text, their hits
 #     joined: NFC, and NFKC with U+200B-U+200D, U+2060, U+FEFF and the soft
-#     hyphen U+00AD removed (folding alone could glue an entry to the next
-#     word, so it only adds hits): the words of a
+#     hyphen U+00AD removed, then NFKC again (folding alone could glue an entry
+#     to the next word, so it only adds hits): the words of a
 #     multi-word entry may be parted by any run of white space (a line break
 #     too), comment markers (# > * / ;) and the joiners - . _ , (not by nothing:
 #     CamelCase is not matched). The denylist is private and lives outside this
@@ -46,9 +46,13 @@
 # This file is scanned too, but for the denylist and the commit-sha rule only:
 # the pattern rules are skipped for it, because it holds their patterns.
 # Each hit prints file:line and the rule; for a pattern rule also the matched
-# text cut to 80 characters (not in a file name or a pushed ref name, where that
-# text is part of the name), for a denylist entry only its number (the word
-# itself is never printed), for a commit sha only the rule. A file is named by
+# text cut to 80 characters (not in a file name, a pushed ref name or a tag's
+# name, where that text is part of the name; not in a message, commit, re-encoded,
+# tag or mergetag, nor in an author, committer or tagger line, where any name can
+# be quoted: those are located by their label and line; and not when the matched
+# text, whole or cut, holds a denylist entry or one word of a multi-word entry),
+# for a denylist entry only its number (the word itself is never printed), for a
+# commit sha only the rule. A file is named by
 # its path only when the path itself has no hit; otherwise by its position in
 # the listing ("listed entry <n>") or, in the history, by its blob ("blob
 # <sha7>"). That holds in every hit label and in every list of files a
@@ -111,6 +115,8 @@
 #      encoding than UTF-8 (asked for in UTF-8); every header is read, a
 #      signature (gpgsig) and a tag's type included, but for the sha a tree,
 #      parent or object line starts with; a mergetag's tagger is an identity.
+#      A hit in a message or an identity prints no matched text (git's own
+#      merge messages quote a tag's or branch's name, and a pull's source).
 #      Not read: notes, grafts
 #      (.git/info/grafts), a lightweight tag's name unless it is pushed
 #      (-PushRefs), and file names in bytes that are not valid UTF-8
@@ -206,11 +212,14 @@ function Write-ScrubDenylistAbsent([string]$Label) {
 # Text as the denylist sees it: NFKC (fullwidth letters fold to ASCII, a
 # letter with a combining mark to its one-code-point form), with the invisible
 # characters that can sit inside a word removed (zero-width space, joiner and
-# non-joiner, word joiner, BOM, soft hyphen). Line breaks are kept where they
-# are. The characters are built from their code points here.
+# non-joiner, word joiner, BOM, soft hyphen), then NFKC again, so a letter and
+# a combining mark that an invisible character parted compose too (rows: "...as
+# the base letter, a soft hyphen and a combining mark" and "...a zero-width
+# space and a combining mark"). Line breaks are kept where they are. The
+# characters are built from their code points here.
 $scrubInvisible = [regex]::new('[' + [string][char]0x200B + '-' + [string][char]0x200D + [string][char]0x2060 + [string][char]0xFEFF + [string][char]0x00AD + ']')
 function Get-ScrubDenyText([string]$Text) {
-    return $scrubInvisible.Replace($Text.Normalize([System.Text.NormalizationForm]::FormKC), '')
+    return $scrubInvisible.Replace($Text.Normalize([System.Text.NormalizationForm]::FormKC), '').Normalize([System.Text.NormalizationForm]::FormKC)
 }
 # The matcher of one entry: whole word, case-insensitive, on the text of
 # Get-ScrubDenyText. The words of a multi-word entry may be parted by any run
@@ -220,10 +229,16 @@ function Get-ScrubDenyText([string]$Text) {
 # together (CamelCase).
 # -Plain: the matcher for the plain reading (NFC only, nothing removed), which
 # Find-ScrubHits runs as well, so the folded reading only ever adds hits.
+# Get-ScrubWordsRegex: the same matcher, of text already in one reading's
+# form, which it does not normalise again. Find-ScrubHits builds its word
+# matchers with it, each from the word as its reading has it.
+function Get-ScrubWordsRegex([string]$Form) {
+    $words = @($Form -split '\s+' | Where-Object { $_ } | ForEach-Object { [regex]::Escape($_) })
+    return [regex]::new('(?i)(?<![A-Za-z0-9_])' + ($words -join '[\s#>*/;,._-]+') + '(?![A-Za-z0-9_])')
+}
 function Get-ScrubDenyRegex([string]$Entry, [switch]$Plain) {
     $form = if ($Plain) { $Entry.Normalize([System.Text.NormalizationForm]::FormC) } else { Get-ScrubDenyText $Entry }
-    $words = @($form -split '\s+' | Where-Object { $_ } | ForEach-Object { [regex]::Escape($_) })
-    return [regex]::new('(?i)(?<![A-Za-z0-9_])' + ($words -join '[\s#>*/;,._-]+') + '(?![A-Za-z0-9_])')
+    return Get-ScrubWordsRegex $form
 }
 # The allowed identities of a file (one "Name <email>" per line, # comments
 # and blank lines ignored), or $null when there is none (path empty, file
@@ -235,22 +250,85 @@ function Read-ScrubIdentAllow([string]$Path) {
     return , ([string[]]$entries)
 }
 
+# The key of a matched text: the SHA-256 of its UTF-8 bytes in lower-case hex,
+# or '' for ''. A hit keeps it when its Text is blanked, so the dedupe and the
+# placeholder exemption still tell two matched texts apart; Format-ScrubHit
+# does not print it.
+function Get-ScrubMatchKey([string]$S) {
+    if (-not $S) { return '' }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $b = $sha.ComputeHash($coordUtf8.GetBytes($S)) } finally { $sha.Dispose() }
+    return ([System.BitConverter]::ToString($b).Replace('-', '').ToLowerInvariant())
+}
+
+# The denylist matchers of Find-ScrubHits for $Denylist: { Deny, DenyPlain
+# (the whole-entry matchers, folded and plain); Words, WordsPlain (the word
+# matchers) }. Built on the first call for a list and kept in
+# $script:scrubMatcherCache, keyed by each entry's length and text, so no two
+# different lists share a key (an entry may hold any character, a line break
+# included); later calls with the same entries get the same objects. No row
+# checks the reuse.
+$script:scrubMatcherCache = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([System.StringComparer]::Ordinal)
+function Get-ScrubMatchers([string[]]$Denylist) {
+    $key = (@($Denylist) | ForEach-Object { [string]$_.Length + ':' + $_ }) -join "`n"
+    $cached = $null
+    if ($script:scrubMatcherCache.TryGetValue($key, [ref]$cached)) { return $cached }
+    $words = New-Object System.Collections.Generic.List[System.Text.RegularExpressions.Regex]
+    $wordsPlain = New-Object System.Collections.Generic.List[System.Text.RegularExpressions.Regex]
+    $deny = @($Denylist | ForEach-Object { Get-ScrubDenyRegex $_ })
+    $denyPlain = @($Denylist | ForEach-Object { Get-ScrubDenyRegex $_ -Plain })
+    # One matcher per word, whole word as in Get-ScrubDenyRegex, for each
+    # reading in which the entry has two or more words: the plain reading
+    # (NFC) and the folded one (Get-ScrubDenyText) are split apart, as
+    # Get-ScrubDenyRegex splits them. The words are counted as split: a
+    # plain word made only of an invisible character counts (row: "...whose
+    # second word is only a zero-width space..."). A folded word then loses
+    # the combining marks it starts with (a spacing diaeresis or acute accent
+    # folds to a space and a mark; rows: "...the folded second word starts
+    # with a combining mark..."); a word left empty gets no matcher (guard
+    # row: "...an entry ending in a spacing diaeresis..."). Each matcher is
+    # built from the word as it is in its reading (Get-ScrubWordsRegex).
+    foreach ($e in $Denylist) {
+        foreach ($rd in @(@($e.Normalize([System.Text.NormalizationForm]::FormC), $wordsPlain, $true), @((Get-ScrubDenyText $e), $words, $false))) {
+            $ws = @($rd[0] -split '\s+' | Where-Object { $_ })
+            if ($ws.Count -lt 2) { continue }
+            foreach ($w in $ws) {
+                if (-not $rd[2]) { $w = [regex]::Replace($w, '^\p{Mn}+', '') }
+                if ($w) { $rd[1].Add((Get-ScrubWordsRegex $w)) }
+            }
+        }
+    }
+    $built = [pscustomobject]@{ Deny = $deny; DenyPlain = $denyPlain; Words = $words; WordsPlain = $wordsPlain }
+    $script:scrubMatcherCache[$key] = $built
+    return $built
+}
+
 # Hits in $Lines of the file named $Path (its extension picks the .md rule).
-# Returns objects { Line; Rule; Text } where Text is the matched text cut to 80
-# characters, or '' for a denylist hit and for a pattern hit whose matched text
-# holds a denylist entry. -SkipPatterns leaves the pattern rules
-# out (the denylist still applies). The pattern rules run line by line; the
-# denylist runs over the whole text (Get-ScrubDenyText), so a multi-word entry
-# wrapped across lines hits (on the line it starts on), at most once per line
-# and entry.
+# Returns objects { Line; Rule; Text; MatchKey; HoldsEntry }. For a pattern hit,
+# Text is the matched text cut to 80 characters, MatchKey is Get-ScrubMatchKey
+# of that cut text (taken before any blanking), and HoldsEntry is $true when a
+# whole denylist entry matches the full match or the cut text. Text is '' when
+# HoldsEntry is $true, and also when the full match or the cut text holds, as a
+# whole word, one word of an entry that has two or more words in that reading
+# (HoldsEntry stays $false then).
+# A denylist hit has Text '', MatchKey '' and HoldsEntry $false. -SkipPatterns
+# leaves the pattern rules out (the denylist still applies). The pattern rules
+# run line by line; the denylist runs over the whole text (Get-ScrubDenyText),
+# so a multi-word entry wrapped across lines hits (on the line it starts on), at
+# most once per line and entry.
 function Find-ScrubHits {
     param([string]$Path, [string[]]$Lines, [string[]]$Denylist = $null, [switch]$SkipPatterns)
     $isMd = $Path.EndsWith('.md', [System.StringComparison]::OrdinalIgnoreCase)
     $deny = @()
     $denyPlain = @()
+    $words = @()
+    $wordsPlain = @()
     if ($Denylist) {
-        $deny = @($Denylist | ForEach-Object { Get-ScrubDenyRegex $_ })
-        $denyPlain = @($Denylist | ForEach-Object { Get-ScrubDenyRegex $_ -Plain })
+        $mx = Get-ScrubMatchers $Denylist
+        $deny = $mx.Deny
+        $denyPlain = $mx.DenyPlain
+        $words = $mx.Words
+        $wordsPlain = $mx.WordsPlain
     }
     $hits = New-Object System.Collections.Generic.List[object]
     for ($i = 0; $i -lt $Lines.Count; $i++) {
@@ -263,12 +341,33 @@ function Find-ScrubHits {
                     if ($rule.Name -like 'user home path*' -and $m.Groups[1].Value -ceq 'home' -and $m.Groups[2].Value -ceq 'me') { continue }
                     $txt = $m.Value
                     if ($txt.Length -gt 80) { $txt = $txt.Substring(0, 80) }
-                    # A matched text that holds a denylist entry (a /home/<name> path) is
-                    # never printed: the hit is reported without its text.
-                    for ($d = 0; $d -lt $deny.Count; $d++) {
-                        if ($denyPlain[$d].IsMatch($m.Value.Normalize([System.Text.NormalizationForm]::FormC)) -or $deny[$d].IsMatch((Get-ScrubDenyText $m.Value))) { $txt = ''; break }
+                    $key = Get-ScrubMatchKey $txt
+                    $holds = $false
+                    $partial = $false
+                    # A matched text that holds a denylist entry (a /home/<name> path), or
+                    # one word of an entry of two or more words, is not printed: the hit is reported
+                    # without its text. Both the full match and the cut text that would
+                    # print are checked (a cut can end a longer word on a private one),
+                    # each in its plain and its folded reading. Only a whole entry sets
+                    # HoldsEntry.
+                    if ($deny.Count -gt 0) {
+                        $plains = @($m.Value.Normalize([System.Text.NormalizationForm]::FormC))
+                        $folds = @(Get-ScrubDenyText $m.Value)
+                        if ($txt.Length -lt $m.Value.Length) {
+                            $plains += $txt.Normalize([System.Text.NormalizationForm]::FormC)
+                            $folds += Get-ScrubDenyText $txt
+                        }
+                        for ($d = 0; $d -lt $deny.Count -and -not $holds; $d++) {
+                            foreach ($p in $plains) { if ($denyPlain[$d].IsMatch($p)) { $holds = $true; break } }
+                            if (-not $holds) { foreach ($f in $folds) { if ($deny[$d].IsMatch($f)) { $holds = $true; break } } }
+                        }
+                        if (-not $holds) {
+                            foreach ($wr in $wordsPlain) { foreach ($p in $plains) { if ($wr.IsMatch($p)) { $partial = $true; break } }; if ($partial) { break } }
+                            if (-not $partial) { foreach ($wr in $words) { foreach ($f in $folds) { if ($wr.IsMatch($f)) { $partial = $true; break } }; if ($partial) { break } } }
+                        }
                     }
-                    $hits.Add([pscustomobject]@{ Line = $i + 1; Rule = $rule.Name; Text = $txt })
+                    if ($holds -or $partial) { $txt = '' }
+                    $hits.Add([pscustomobject]@{ Line = $i + 1; Rule = $rule.Name; Text = $txt; MatchKey = $key; HoldsEntry = $holds })
                 }
             }
         }
@@ -288,7 +387,7 @@ function Find-ScrubHits {
                     [void]$lineSet.Add(1 + ([regex]::Matches($pair[0].Substring(0, $m.Index), "`n")).Count)
                 }
             }
-            foreach ($ln in $lineSet) { $hits.Add([pscustomobject]@{ Line = $ln; Rule = "denylist entry $($d + 1)"; Text = '' }) }
+            foreach ($ln in $lineSet) { $hits.Add([pscustomobject]@{ Line = $ln; Rule = "denylist entry $($d + 1)"; Text = ''; MatchKey = ''; HoldsEntry = $false }) }
         }
     }
     return $hits.ToArray()
@@ -540,9 +639,13 @@ function Get-ScrubUnstagedNames([string]$Repo) {
 
 # ---- the scanner ---------------------------------------------------------------
 # Decodes and scans $Bytes. Returns 'nul' when the bytes cannot be scanned (NUL
-# bytes and no BOM), else 'scanned'.
+# bytes and no BOM), else 'scanned'. Each hit added keeps the MatchKey and
+# HoldsEntry of Find-ScrubHits; two hits of one line and rule are one hit only
+# when their MatchKey and Text are the same too.
+# -NoText: the hits keep no matched text (a commit or tag message), but keep
+# their MatchKey and HoldsEntry.
 function Add-ScrubContent {
-    param($Res, [string]$Rel, [string]$Label, [byte[]]$Bytes, [bool]$SkipPatterns, [string[]]$Denylist)
+    param($Res, [string]$Rel, [string]$Label, [byte[]]$Bytes, [bool]$SkipPatterns, [string[]]$Denylist, [switch]$NoText)
     $text = $null
     $alt = $null
     # The UTF-32 BOMs come before the UTF-16 ones: FF FE 00 00 starts with the
@@ -591,8 +694,9 @@ function Add-ScrubContent {
     if ($null -ne $alt) { $found += @(Find-ScrubHits -Path $Rel -Lines ($alt -split "`r?`n") -Denylist $Denylist -SkipPatterns:$SkipPatterns) }
     $seenHit = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     foreach ($h in $found) {
-        if (-not $seenHit.Add("$($h.Line)`t$($h.Rule)`t$($h.Text)")) { continue }
-        $Res.Hits.Add([pscustomobject]@{ File = $Label; Line = $h.Line; Rule = $h.Rule; Text = $h.Text })
+        if (-not $seenHit.Add("$($h.Line)`t$($h.Rule)`t$($h.MatchKey)`t$($h.Text)")) { continue }
+        $t = if ($NoText) { '' } else { $h.Text }
+        $Res.Hits.Add([pscustomobject]@{ File = $Label; Line = $h.Line; Rule = $h.Rule; Text = $t; MatchKey = $h.MatchKey; HoldsEntry = $h.HoldsEntry })
     }
     foreach ($t in @(Get-ScrubHexTokens $lines)) {
         if (-not $Res.HexTokens.ContainsKey($t.Token)) { $Res.HexTokens[$t.Token] = New-Object System.Collections.Generic.List[object] }
@@ -603,22 +707,24 @@ function Add-ScrubContent {
 
 # Hits in a short text that is not a file version (a file name, a ref name, an
 # identity), added under $Label. Not counted as a scanned version, and no hex
-# tokens taken from it.
-# -NoText: the hit keeps no matched text (a file name, a ref name, or the tag
-# header of a tag or a mergetag, which holds the tag's name: the matched text is
-# part of the name, which is never printed).
+# tokens taken from it. Each hit keeps the MatchKey and HoldsEntry of
+# Find-ScrubHits.
+# -NoText: the hit keeps no matched text (a file name, a ref name, an identity,
+# a mergetag's message, or the tag header of a tag or a mergetag, which holds
+# the tag's name), but keeps its MatchKey and HoldsEntry.
 function Add-ScrubTextHits {
     param($Res, [string]$Label, [string]$Text, [string[]]$Denylist, [switch]$NoText)
     foreach ($h in @(Find-ScrubHits -Path '' -Lines @($Text -split "`r?`n") -Denylist $Denylist)) {
         $t = if ($NoText) { '' } else { $h.Text }
-        $Res.Hits.Add([pscustomobject]@{ File = $Label; Line = $h.Line; Rule = $h.Rule; Text = $t })
+        $Res.Hits.Add([pscustomobject]@{ File = $Label; Line = $h.Line; Rule = $h.Rule; Text = $t; MatchKey = $h.MatchKey; HoldsEntry = $h.HoldsEntry })
     }
 }
 # An author, committer or tagger header value ("Name <email> <time> <zone>"):
 # its identity, everything before the trailing time and zone ("Name <email>",
 # or the whole value when it does not end in a time and zone), is let through
 # when it is exactly one of $AllowIdent (ordinal), and is scanned as text
-# otherwise. -NoCount: a second reading of the same line, not counted again.
+# otherwise, its hits keeping no matched text (Add-ScrubTextHits -NoText).
+# -NoCount: a second reading of the same line, not counted again.
 function Add-ScrubIdent {
     param($Res, [string]$Label, [string]$Value, [string[]]$Denylist, [string[]]$AllowIdent, [switch]$NoCount)
     $ident = $Value.TrimEnd()
@@ -628,7 +734,7 @@ function Add-ScrubIdent {
     # Ordinal: -ccontains is culture-aware in Windows PowerShell 5.1 and lets a
     # soft hyphen or another ignorable character through as equal.
     if ($AllowIdent -and [System.Linq.Enumerable]::Contains([string[]]$AllowIdent, $ident, [System.StringComparer]::Ordinal)) { if (-not $NoCount) { $Res.IdentAllowed++ }; return }
-    Add-ScrubTextHits $Res $Label $ident $Denylist
+    Add-ScrubTextHits $Res $Label $ident $Denylist -NoText
 }
 # The readings of raw object bytes: UTF-8, and Windows-1252 as well when the
 # bytes are not valid UTF-8 (as Add-ScrubContent reads a file).
@@ -700,7 +806,7 @@ function Get-ScrubAccounted($Res) {
 # suite read); Skipped (names of listed entries that are not a leaf file);
 # IndexFailed (names whose index version git cat-file could not read);
 # RepoUnchecked (positions, see Add-ScrubRepoShaHits); Hits (File; Line; Rule;
-# Text); HexTokens }. A name in those lists, and a hit's File, is the path when
+# Text; MatchKey; HoldsEntry, see Find-ScrubHits); HexTokens }. A name in those lists, and a hit's File, is the path when
 # the path has no hit, else "listed entry <n>" (Test-ScrubPathPrintable).
 function Invoke-ScrubScan {
     param([string]$Repo, [string]$SelfRel = '', [string[]]$Denylist = $null)
@@ -796,7 +902,7 @@ function Add-ScrubRepoShaHits {
         }
         if (-not $found) { continue }
         foreach ($loc in $Res.HexTokens[$tok]) {
-            $Res.Hits.Add([pscustomobject]@{ File = $loc.File; Line = $loc.Line; Rule = $hexRuleName; Text = '' })
+            $Res.Hits.Add([pscustomobject]@{ File = $loc.File; Line = $loc.Line; Rule = $hexRuleName; Text = ''; MatchKey = ''; HoldsEntry = $false })
         }
     }
     return $usable.Count
@@ -842,7 +948,9 @@ function Invoke-ScrubRepoRule {
 # IdentAllowed; the same lists as Invoke-ScrubScan (Scanned, PatternSkipped,
 # Utf16, Utf32, NonUtf8, NulFiles, Unreadable, RepoUnchecked, Hits, HexTokens);
 # Blobs }. A blob is named "<path> (blob <sha7>)" when its path has no hit,
-# else "blob <sha7>" (Test-ScrubPathPrintable). The revisions go to git
+# else "blob <sha7>" (Test-ScrubPathPrintable). A hit in a message (commit,
+# %B, tag, mergetag) or an identity keeps no Text: it is found by its label
+# and line. The revisions go to git
 # rev-list on stdin (a revision that starts with '-' is refused first), so the
 # range may be longer than a command line. Not DiscoveryOk when git cannot resolve the range, a positive
 # revision does not end on a commit (a tag on a blob), or the range holds no
@@ -960,9 +1068,10 @@ function Invoke-ScrubHistory {
                     }
                 }
                 # The message, as stored (Add-ScrubContent reads it as UTF-8 and,
-                # when it is not valid UTF-8, as Windows-1252 too).
+                # when it is not valid UTF-8, as Windows-1252 too); its hits keep no
+                # matched text.
                 $label = 'tag ' + $short
-                [void](Add-ScrubContent $res $label $label $parts.Body $false $Denylist)
+                [void](Add-ScrubContent $res $label $label $parts.Body $false $Denylist -NoText)
             }
             else {
                 foreach ($h in (Get-ScrubHeaders $coordUtf8.GetString($parts.Head))) { if ($h.Key -ceq 'object' -and -not $next) { $next = Get-ScrubShaStart $h.Value } }
@@ -983,7 +1092,8 @@ function Invoke-ScrubHistory {
         $short = $sha.Substring(0, 7)
         # The commit object as stored (git cat-file commit, not git show: show
         # stops a message at a NUL byte and re-encodes it by its encoding
-        # header). The message is read as a file is; every header is read too:
+        # header). The message is read as a file is, its hits keeping no matched
+        # text; every header is read too:
         # author and committer as identities, tree and parent but for the sha
         # they start with, any other (encoding, gpgsig, mergetag, an unknown
         # one) as text.
@@ -991,14 +1101,14 @@ function Invoke-ScrubHistory {
         if ($co.Ok -and $co.Code -eq 0) {
             $parts = Split-ScrubObject $co.Bytes
             $label = 'commit message ' + $short
-            [void](Add-ScrubContent $res $label $label $parts.Body $false $Denylist)
+            [void](Add-ScrubContent $res $label $label $parts.Body $false $Denylist -NoText)
             # A true encoding header (ISO-8859-2, Shift_JIS ...): git's own
             # re-encoded reading (%B) is read as well, under the same label,
             # asked for in UTF-8 (i18n.logOutputEncoding would change it).
             $encLine = [regex]::Match($coordUtf8.GetString($parts.Head), '(?m)^encoding (.+)$')
             if ($encLine.Success -and $encLine.Groups[1].Value.Trim() -notmatch '^(?i)utf-?8$') {
                 $mb = Invoke-ScrubGit $Repo @('show', '-s', '--encoding=UTF-8', '--format=%B', $sha)
-                if ($mb.Ok -and $mb.Code -eq 0) { [void](Add-ScrubContent $res $label $label $mb.Bytes $false $Denylist) }
+                if ($mb.Ok -and $mb.Code -eq 0) { [void](Add-ScrubContent $res $label $label $mb.Bytes $false $Denylist -NoText) }
                 else { $res.Unreadable.Add('re-encoded message of commit ' + $short) }
             }
             $readings = Get-ScrubReadings $parts.Head
@@ -1010,18 +1120,28 @@ function Invoke-ScrubHistory {
                     elseif ($h.Key -ceq 'mergetag') {
                         # A merged signed tag, embedded: its tagger is an identity, its
                         # object but for the sha it starts with, every other header
-                        # (type, gpgsig, an unknown one) and its message are text.
+                        # (type, gpgsig, an unknown one) and its message are text; the
+                        # message's hits are named by their own label and keep no
+                        # matched text. Its head ends at its first line that is empty or
+                        # white space only (rows: "...whose blank line is a CRLF line..."
+                        # and "...is two spaces..."), where git ends it or earlier. Such a
+                        # line inside an embedded signature header ends the head too, which
+                        # only blanks more; a tagger after such a line is read as message
+                        # text, not as an identity, so the allow list does not apply to it
+                        # (that can refuse a push, never pass one); no row tests either.
+                        # With no such line it is all head, every line of it read as a
+                        # header; no row tests that.
                         $mv = $h.Value
-                        $mcut = $mv.IndexOf("`n`n", [System.StringComparison]::Ordinal)
-                        $mhead = if ($mcut -ge 0) { $mv.Substring(0, $mcut) } else { $mv }
-                        $mbody = if ($mcut -ge 0) { $mv.Substring($mcut + 2) } else { '' }
+                        $mcut = [regex]::Match($mv, '\n[^\S\n]*(?:\n|\z)')
+                        $mhead = if ($mcut.Success) { $mv.Substring(0, $mcut.Index) } else { $mv }
+                        $mbody = if ($mcut.Success) { $mv.Substring($mcut.Index + $mcut.Length) } else { '' }
                         foreach ($mh in (Get-ScrubHeaders $mhead)) {
                             if ($mh.Key -ceq 'tagger') { Add-ScrubIdent $res ('tagger of mergetag in commit ' + $short) $mh.Value $Denylist $AllowIdent -NoCount:($rd -gt 0) }
                             elseif ($mh.Key -ceq 'object') { Add-ScrubShaHeader $res ('commit headers of ' + $short) 'object' $mh.Value $Denylist }
                             # The embedded tag's name keeps no matched text, as a tag's own name.
                             else { Add-ScrubTextHits $res ('commit headers of ' + $short) ($mh.Key + ' ' + $mh.Value) $Denylist -NoText:($mh.Key -ceq 'tag') }
                         }
-                        if ($mbody) { Add-ScrubTextHits $res ('commit headers of ' + $short) $mbody $Denylist }
+                        if ($mbody) { Add-ScrubTextHits $res ('message of mergetag in commit ' + $short) $mbody $Denylist -NoText }
                     }
                     else { Add-ScrubTextHits $res ('commit headers of ' + $short) ($h.Key + ' ' + $h.Value) $Denylist }
                 }
@@ -1056,11 +1176,13 @@ function Invoke-ScrubHistory {
             [void](Add-ScrubContent $res $path $label $g.Bytes $skip $Denylist)
         }
     }
-    # One hit per place: two readings of one text (raw and re-encoded, UTF-8 and
-    # Windows-1252) can find the same hit.
+    # One hit per place, rule and matched text: two readings of one text (raw and
+    # re-encoded, UTF-8 and Windows-1252) can find the same hit. The MatchKey
+    # tells apart two hits whose Text is blanked; the Text keeps a blanked hit
+    # and a printable one of the same matched text apart.
     $uniq = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $kept = New-Object System.Collections.Generic.List[object]
-    foreach ($x in $res.Hits) { if ($uniq.Add("$($x.File)`t$($x.Line)`t$($x.Rule)`t$($x.Text)")) { $kept.Add($x) } }
+    foreach ($x in $res.Hits) { if ($uniq.Add("$($x.File)`t$($x.Line)`t$($x.Rule)`t$($x.MatchKey)`t$($x.Text)")) { $kept.Add($x) } }
     $res.Hits.Clear()
     foreach ($x in $kept) { $res.Hits.Add($x) }
     return $res
@@ -1070,6 +1192,19 @@ function Format-ScrubHit($H) {
     $s = "$($H.File):$($H.Line): $($H.Rule)"
     if ($H.Text) { $s += ": $($H.Text)" }
     return $s
+}
+
+# The one id that earlier versions of coord-handoff.ps1 wrote in a comment as an example of an
+# id followed by a note: 1234abcd is not a session id, and the tip no longer holds it.
+$placeholderIds = @($idPrefix + '1234abcd')
+$placeholderKeys = @($placeholderIds | ForEach-Object { Get-ScrubMatchKey $_ })
+# Whether a history hit is that id, let through by the -History rows: a
+# desktop-session-id hit whose matched text is exactly the id (its MatchKey, as
+# its Text can be blank), with no whole denylist entry in it (HoldsEntry
+# $false), in a blob of that script or in the message of the commit that
+# explains it.
+function Test-ScrubPlaceholderHit($Hit) {
+    return [bool](($Hit.Rule -ceq 'desktop session id') -and -not $Hit.HoldsEntry -and ($placeholderKeys -ccontains [string]$Hit.MatchKey) -and (([string]$Hit.File -clike 'scripts/coord-handoff.ps1 (blob *') -or ([string]$Hit.File -ceq 'commit message 2c3b5fc')))
 }
 
 # ---- SG1: each rule against synthetic lines -----------------------------------
@@ -1614,7 +1749,7 @@ function Add-ScrubTestCommit([string]$Repo, [string]$Message) {
     # no line-ending warning from git: the fixture helper reads stderr as an error
     Invoke-HookTestGit $Repo @('config', 'core.autocrlf', 'false')
     Invoke-HookTestGit $Repo @('add', '-A')
-    Invoke-HookTestGit $Repo @('commit', '--quiet', '--allow-empty', '-m', $Message)
+    Invoke-HookTestGit $Repo @('-c', 'commit.gpgSign=false', 'commit', '--quiet', '--allow-empty', '-m', $Message)
 }
 $hRepo = New-ScrubTestRepo 'hist' @{ 'base.txt' = $hitLine + "`n" }
 Add-ScrubTestCommit $hRepo 'base'
@@ -1868,9 +2003,10 @@ Invoke-HookTestGit $hRepo @('config', 'i18n.logOutputEncoding', 'ISO-8859-2')
 try { $r = Invoke-ScrubHistory -Repo $hRepo -Range ((New-ScrubRawObject $hRepo 'commit' ([byte[]]((Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + "encoding ISO-8859-2`n`nmsg zzq")) + @(0xE8) + (Get-ScrubAscii " log`n")))) + " ^$rawParent") -Denylist @($czech) }
 finally { Invoke-HookTestGit $hRepo @('config', '--unset', 'i18n.logOutputEncoding') }
 Assert-Coord 'SG6 a legacy-encoded message hits through %B under i18n.logOutputEncoding=ISO-8859-2' (@($r.Hits | Where-Object { $_.File -like 'commit message *' -and $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) (($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')
-# The mergetag head ends at its first truly empty line: a line that holds only
-# a zero-width space does not end it (a guard row: the culture-sensitive split
-# of 3c961e6 passed it too; the split is ordinal now all the same).
+# The mergetag head ends at its first line that is empty or white space only:
+# a line that holds only a zero-width space, which is not white space, does
+# not end it (a guard row: the culture-sensitive split of 3c961e6 passed it
+# too).
 $zw = [string][char]0x200B
 $r = Invoke-ScrubRaw ([byte[]]((Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n tag rel-zw`n ")) + $coordUtf8.GetBytes($zw) + (Get-ScrubAscii "`n tagger $mtIdent 1700000000 +0000`n `n notes`n`nmerge it`n"))) @($mtIdent)
 Assert-Coord 'SG6 a zero-width line inside a mergetag head does not end it: the allowed tagger after it is still an identity' ($r.Hits.Count -eq 0 -and $r.IdentAllowed -ge 1) "allowed=$($r.IdentAllowed) $(($r.Hits | ForEach-Object { Format-ScrubHit $_ }) -join ';')"
@@ -2051,6 +2187,297 @@ if ($icBuilt) {
 }
 else { Write-CoordUnchecked 'SG4 an index version git cannot read, at a path that holds the entry, is named by its position' 'could not build a merge conflict in the fixture repo' }
 
+# Q47: a message, an identity or a partly matched denylist entry prints no matched
+# text. Every follow-up number below is built from pieces; the words are synthetic.
+Write-Host "(SG6) Q47: no matched text from messages, identities or partial denylist words"
+$q47fu = 'FU' + '-'
+# Asserts that the hits of $Hits whose File matches the regex $Where (any File when
+# $Where is empty) and whose Rule is -like $Rule: exist (exactly $Count when given),
+# hold no Text, each still print its own "<File>:<Line>: <Rule>" through
+# Format-ScrubHit (this does not check that the Line is the right one), and that no
+# $Secrets text is in the joined Format-ScrubHit output of all $Hits. A
+# failed control FAILs the row. A FAIL detail gives the counts and the
+# "<File>:<Line>: <Rule>" of the row's own hits only (built here, not through
+# Format-ScrubHit, with any $Secrets text masked), never another hit's text.
+function Assert-ScrubNoMatchedText {
+    param([string]$Label, [object[]]$Hits, [string]$Where, [string]$Rule, [string[]]$Secrets, [int]$Count = -1, [bool]$ControlOk = $true, [string]$ControlDetail = '')
+    if (-not $ControlOk) { Assert-Coord $Label $false ('control failed: ' + $ControlDetail); return }
+    $mine = @($Hits | Where-Object { ((-not $Where) -or ([string]$_.File -match $Where)) -and ([string]$_.Rule -like $Rule) })
+    $printed = (@($Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+    $leaked = @($Secrets | Where-Object { $printed.IndexOf($_, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 })
+    $withText = @($mine | Where-Object { $_.Text })
+    $misprinted = @($mine | Where-Object { (Format-ScrubHit $_) -cne "$($_.File):$($_.Line): $($_.Rule)" })
+    $countOk = if ($Count -ge 0) { $mine.Count -eq $Count } else { $mine.Count -ge 1 }
+    $shown = (@($mine | ForEach-Object { "$($_.File):$($_.Line): $($_.Rule)" }) -join "`n")
+    foreach ($s in $Secrets) { $shown = [regex]::Replace($shown, [regex]::Escape($s), '<secret>', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) }
+    $want = if ($Count -ge 0) { [string]$Count } else { 'at least 1' }
+    Assert-Coord $Label ($countOk -and $withText.Count -eq 0 -and $misprinted.Count -eq 0 -and $leaked.Count -eq 0) ("hits under that label and rule: $($mine.Count) (expected $want); of them with text: $($withText.Count); of them not printed as File:Line: Rule: $($misprinted.Count); secrets printed: $($leaked.Count)`n$shown")
+}
+$q47Repo = New-ScrubTestRepo 'q47-hist' @{ 'base.txt' = "base`n" }
+Add-ScrubTestCommit $q47Repo 'base'
+$q47Main = Get-CoordGitOut $q47Repo @('symbolic-ref', '--short', 'HEAD')
+$q47Rule = 'internal follow-up number'
+$q47MsgLabel = '^commit message [0-9a-f]{7}$'
+
+# F5, git-written messages (each with a control that git wrote the expected subject).
+# (a) a merge of an annotated tag
+$q47Prev = Get-CoordGitOut $q47Repo @('rev-parse', 'HEAD')
+Invoke-HookTestGit $q47Repo @('checkout', '--quiet', '-b', 'q47-side-a')
+Set-CoordFile $q47Repo 'a.txt' "a`n"
+Add-ScrubTestCommit $q47Repo 'side a work'
+Invoke-HookTestGit $q47Repo @('-c', 'tag.gpgSign=false', 'tag', '-a', ('rel-' + $q47fu + '61'), '-m', 'a clean tag message', 'HEAD')
+Invoke-HookTestGit $q47Repo @('checkout', '--quiet', $q47Main)
+$q47M = Invoke-ScrubGit $q47Repo @('-c', 'merge.verifySignatures=false', '-c', 'commit.gpgSign=false', 'merge', '--no-ff', '--no-edit', ('rel-' + $q47fu + '61'))
+$q47Subj = Get-CoordGitOut $q47Repo @('log', '-1', '--format=%s')
+$q47SubjOk = [bool]($q47Subj -clike "Merge tag '*")
+$q47Ctl = [bool]($q47M.Ok -and $q47M.Code -eq 0 -and $q47SubjOk)
+$q47R = Invoke-ScrubHistory -Repo $q47Repo -Range "HEAD ^$q47Prev"
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in the message of a merge of an annotated tag (Merge tag ...) prints no matched text' ($q47R.Hits.ToArray()) $q47MsgLabel $q47Rule @(($q47fu + '61')) -ControlOk $q47Ctl -ControlDetail "git merge of the tag: exit $($q47M.Code), stderr $(Format-ScrubFixtureOutput $q47M.Stderr); the subject is a Merge tag subject: $q47SubjOk"
+# (b) a merge of a branch
+$q47Prev = Get-CoordGitOut $q47Repo @('rev-parse', 'HEAD')
+Invoke-HookTestGit $q47Repo @('checkout', '--quiet', '-b', ('x-' + $q47fu + '62'))
+Set-CoordFile $q47Repo 'b.txt' "b`n"
+Add-ScrubTestCommit $q47Repo 'side b work'
+Invoke-HookTestGit $q47Repo @('checkout', '--quiet', $q47Main)
+$q47M = Invoke-ScrubGit $q47Repo @('-c', 'merge.verifySignatures=false', '-c', 'commit.gpgSign=false', 'merge', '--no-ff', '--no-edit', ('x-' + $q47fu + '62'))
+$q47Subj = Get-CoordGitOut $q47Repo @('log', '-1', '--format=%s')
+$q47SubjOk = [bool]($q47Subj -clike "Merge branch '*")
+$q47Ctl = [bool]($q47M.Ok -and $q47M.Code -eq 0 -and $q47SubjOk)
+$q47R = Invoke-ScrubHistory -Repo $q47Repo -Range "HEAD ^$q47Prev"
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in the message of a merge of a branch (Merge branch ...) prints no matched text' ($q47R.Hits.ToArray()) $q47MsgLabel $q47Rule @(($q47fu + '62')) -ControlOk $q47Ctl -ControlDetail "git merge of the branch: exit $($q47M.Code), stderr $(Format-ScrubFixtureOutput $q47M.Stderr); the subject is a Merge branch subject: $q47SubjOk"
+# (c) a pull from a clone path (git pull writes progress to stderr: through Invoke-ScrubGit)
+$q47Prev = Get-CoordGitOut $q47Repo @('rev-parse', 'HEAD')
+Invoke-HookTestGit $q47Repo @('checkout', '--quiet', '-b', ('x-' + $q47fu + '63'))
+Set-CoordFile $q47Repo 'c.txt' "c`n"
+Add-ScrubTestCommit $q47Repo 'side c work'
+$q47Clone = Join-Path $tmp 'q47-clone'
+$q47Cl = Invoke-ScrubGit $tmp @('clone', '--quiet', '--bare', $q47Repo, $q47Clone)
+Invoke-HookTestGit $q47Repo @('checkout', '--quiet', $q47Main)
+Invoke-HookTestGit $q47Repo @('branch', '--quiet', '-D', ('x-' + $q47fu + '63'))
+$q47M = Invoke-ScrubGit $q47Repo @('-c', 'pull.rebase=false', '-c', 'merge.verifySignatures=false', '-c', 'commit.gpgSign=false', 'pull', '--no-ff', '--no-edit', $q47Clone, ('x-' + $q47fu + '63'))
+$q47Subj = Get-CoordGitOut $q47Repo @('log', '-1', '--format=%s')
+$q47SubjOk = [bool]($q47Subj -clike "Merge branch '*' of *")
+$q47Ctl = [bool]($q47Cl.Ok -and $q47Cl.Code -eq 0 -and $q47M.Ok -and $q47M.Code -eq 0 -and $q47SubjOk)
+$q47R = Invoke-ScrubHistory -Repo $q47Repo -Range "HEAD ^$q47Prev"
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in the message of a pull from a clone path (Merge branch ... of <path>) prints no matched text' ($q47R.Hits.ToArray()) $q47MsgLabel $q47Rule @(($q47fu + '63')) -ControlOk $q47Ctl -ControlDetail "git clone exit $($q47Cl.Code), git pull exit $($q47M.Code), stderr $(Format-ScrubFixtureOutput $q47M.Stderr); the subject is a Merge branch ... of subject: $q47SubjOk"
+# The pull's message holds the clone's absolute path (which can hold the user
+# name): no hit under the message label, of any rule, has text. The detail
+# gives counts only.
+$q47PullText = @($q47R.Hits | Where-Object { $_.File -match $q47MsgLabel -and $_.Text }).Count
+$q47PullAll = @($q47R.Hits | Where-Object { $_.File -match $q47MsgLabel }).Count
+Assert-Coord 'SG6 no message hit of the pull from a clone path, of any rule, has text' ($q47Ctl -and $q47PullText -eq 0) "control ok: $q47Ctl; message hits: $q47PullAll, of them with text: $q47PullText"
+# (d) a message quoting a file name
+$q47Prev = Get-CoordGitOut $q47Repo @('rev-parse', 'HEAD')
+$q47Msg = "adds 'notes-" + $q47fu + "64.md'"
+Add-ScrubTestCommit $q47Repo $q47Msg
+$q47Subj = Get-CoordGitOut $q47Repo @('log', '-1', '--format=%s')
+$q47R = Invoke-ScrubHistory -Repo $q47Repo -Range "HEAD ^$q47Prev"
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in a message that quotes a file name prints no matched text' ($q47R.Hits.ToArray()) $q47MsgLabel $q47Rule @(($q47fu + '64')) -ControlOk ($q47Subj -ceq $q47Msg) -ControlDetail 'git did not store the subject as written'
+# (e) an annotated tag message
+$q47Prev = Get-CoordGitOut $q47Repo @('rev-parse', 'HEAD')
+Invoke-HookTestGit $q47Repo @('-c', 'tag.gpgSign=false', 'tag', '-a', 'rel-q47e', '-m', ('see ' + $q47fu + '65'), 'HEAD')
+$q47TagSubj = Get-CoordGitOut $q47Repo @('for-each-ref', '--format=%(contents:subject)', 'refs/tags/rel-q47e')
+$q47R = Invoke-ScrubHistory -Repo $q47Repo -Range 'refs/tags/rel-q47e ^HEAD' -AllowEmpty
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in an annotated tag message prints no matched text' ($q47R.Hits.ToArray()) '^tag [0-9a-f]{7}$' $q47Rule @(($q47fu + '65')) -ControlOk ($q47R.DiscoveryOk -and $q47R.Tags -eq 1 -and $q47TagSubj -ceq ('see ' + $q47fu + '65')) -ControlDetail "ok=$($q47R.DiscoveryOk) reason=$($q47R.Reason) tags=$($q47R.Tags)"
+# (f) a mergetag body (the embedded tag's message)
+$q47R = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n tag rel-q47f`n tagger R Q <r@example.invalid> 1700000000 +0000`n `n notes " + $q47fu + "66`n`nmerge it`n"))
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in a mergetag body prints no matched text (named message of mergetag in commit <sha7>)' ($q47R.Hits.ToArray()) '^message of mergetag in commit [0-9a-f]{7}$' $q47Rule @(($q47fu + '66')) -ControlOk $q47R.DiscoveryOk -ControlDetail $q47R.Reason
+
+# F5, %B: a message that holds a follow-up number only once git has re-encoded it.
+# The stored bytes are read as stored and hold none (control); the re-encoded reading
+# holds one (control: git's own %B output is scanned the same way). UTF-7 first, then
+# Shift_JIS with fullwidth digits after the follow-up prefix.
+$q47Cands = @(
+    [pscustomobject]@{ Enc = 'UTF-7'; Msg = (Get-ScrubAscii 'see +AEY-U-67'); Secret = ($q47fu + '67') },
+    [pscustomobject]@{ Enc = 'Shift_JIS'; Msg = [byte[]]((Get-ScrubAscii ('see ' + $q47fu)) + @(0x82, 0x55, 0x82, 0x56)); Secret = ($q47fu + [string][char]0xFF16 + [string][char]0xFF17) }
+)
+$q47Pick = $null
+$q47Tried = @()
+foreach ($q47C in $q47Cands) {
+    if ($q47Pick) { break }
+    $q47Bytes = [byte[]]((Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer ' + $rawIdent + 'encoding ' + $q47C.Enc + "`n`n")) + $q47C.Msg + (Get-ScrubAscii "`n"))
+    $q47Sha = New-ScrubRawObject $hRepo 'commit' $q47Bytes
+    $q47Show = Invoke-ScrubGit $hRepo @('show', '-s', '--encoding=UTF-8', '--format=%B', $q47Sha)
+    $q47Reenc = ''
+    if ($q47Show.Ok -and $q47Show.Code -eq 0) { $q47Reenc = $coordUtf8.GetString($q47Show.Bytes) }
+    $q47Stored = @(Find-ScrubHits -Path '' -Lines @($coordUtf8.GetString($q47C.Msg)) | Where-Object { $_.Rule -ceq $q47Rule }).Count + @(Find-ScrubHits -Path '' -Lines @([System.Text.Encoding]::GetEncoding(1252).GetString($q47C.Msg)) | Where-Object { $_.Rule -ceq $q47Rule }).Count
+    $q47ReencHits = @(Find-ScrubHits -Path '' -Lines @($q47Reenc -split "`r?`n") | Where-Object { $_.Rule -ceq $q47Rule }).Count
+    $q47Tried += "$($q47C.Enc): follow-up hits in the stored message $q47Stored, in the re-encoded one $q47ReencHits"
+    if ($q47Stored -eq 0 -and $q47ReencHits -ge 1) { $q47Pick = [pscustomobject]@{ Cand = $q47C; Bytes = $q47Bytes } }
+}
+if ($q47Pick) {
+    $q47R = Invoke-ScrubRaw $q47Pick.Bytes
+    Assert-ScrubNoMatchedText "SG6 a follow-up number that only git's re-encoded message reading (%B, $($q47Pick.Cand.Enc)) holds prints no matched text" ($q47R.Hits.ToArray()) $q47MsgLabel $q47Rule @($q47Pick.Cand.Secret)
+}
+else { Assert-Coord "SG6 a follow-up number that only git's re-encoded message reading (%B) holds prints no matched text" $false ("control failed: neither UTF-7 nor Shift_JIS gave a message with no follow-up hit as stored and one re-encoded on this host: " + ($q47Tried -join '; ')) }
+
+# F7a, identities: author, committer, tagger, mergetag tagger, and a Windows-1252 author.
+$q47R = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author Zzbeta ' + $q47fu + '71 <q@example.invalid> 1700000000 +0000' + "`n" + 'committer ' + $rawIdent + "`nclean message`n"))
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in an author line prints no matched text (the author line is named by its role)' ($q47R.Hits.ToArray()) '^author of commit [0-9a-f]{7}$' $q47Rule @(($q47fu + '71'), 'zzbeta') -Count 1
+$q47R = Invoke-ScrubRaw (Get-ScrubAscii ($rawHead + 'author ' + $rawIdent + 'committer Zzbeta ' + $q47fu + '72 <c@example.invalid> 1700000000 +0000' + "`n`nclean message`n"))
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in a committer line prints no matched text (the committer line is named by its role)' ($q47R.Hits.ToArray()) '^committer of commit [0-9a-f]{7}$' $q47Rule @(($q47fu + '72'), 'zzbeta') -Count 1
+$q47Tag = New-ScrubRawObject $hRepo 'tag' (Get-ScrubAscii ("object $rawParent`ntype commit`ntag rel-q47t`ntagger Zzbeta " + $q47fu + "73 <t@example.invalid> 1700000000 +0000`n`nclean notes`n"))
+$q47R = Invoke-ScrubHistory -Repo $hRepo -Range "$q47Tag ^$rawParent" -Denylist @('zzbeta') -AllowEmpty
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in a tagger line prints no matched text (the tagger line is named by its role)' ($q47R.Hits.ToArray()) '^tagger of tag [0-9a-f]{7}$' $q47Rule @(($q47fu + '73'), 'zzbeta') -Count 1 -ControlOk $q47R.DiscoveryOk -ControlDetail $q47R.Reason
+$q47R = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n tag rel-q47m`n tagger Zzbeta " + $q47fu + "74 <m@example.invalid> 1700000000 +0000`n `n notes`n`nmerge it`n"))
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in the tagger line of a mergetag prints no matched text (named by its role)' ($q47R.Hits.ToArray()) '^tagger of mergetag in commit [0-9a-f]{7}$' $q47Rule @(($q47fu + '74'), 'zzbeta') -Count 1
+$q47R = Invoke-ScrubRaw ([byte[]]((Get-ScrubAscii ($rawHead + 'author Zzcaf')) + @(0xE9) + (Get-ScrubAscii (' ' + $q47fu + '75 <l@example.invalid> 1700000000 +0000' + "`n" + 'committer ' + $rawIdent + "`nclean message`n"))))
+Assert-ScrubNoMatchedText 'SG6 a follow-up number in a Windows-1252 author line, read twice, is one hit and prints no matched text' ($q47R.Hits.ToArray()) '^author of commit [0-9a-f]{7}$' $q47Rule @(($q47fu + '75'), 'zzbeta') -Count 1
+
+# F7b, a pattern hit that holds one word of a multi-word entry (Find-ScrubHits).
+$q47Hp = '/ho' + 'me/'
+$q47Line = 'see ' + $q47Hp + 'zzgiven/work'
+$q47HomeRule = 'user home path*'
+$q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q47Line) -Denylist @('zzgiven zzsur'))
+Assert-ScrubNoMatchedText 'SG2 a home-path hit that holds one word of a two-word entry prints no matched text' $q47H '' $q47HomeRule @('zzgiven') -Count 1
+$q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q47Line) -Denylist @(('zz' + [string][char]0x200B + 'given zzsur')))
+Assert-ScrubNoMatchedText 'SG2 a home-path hit that holds one word of an entry written with a zero-width space inside it (folded reading) prints no matched text' $q47H '' $q47HomeRule @('zzgiven') -Count 1
+$q47Fw = [string][char]0xFF16
+$q47Num = $q47fu + '1' + $q47Fw
+$q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @('see ' + $q47Num) -Denylist @('1 zzsur'))
+$q47Ctl = [bool]((Get-ScrubDenyRegex '1' -Plain).IsMatch($q47Num.Normalize([System.Text.NormalizationForm]::FormC)) -and -not (Get-ScrubDenyRegex '1').IsMatch((Get-ScrubDenyText $q47Num)))
+Assert-ScrubNoMatchedText 'SG2 a follow-up number with a fullwidth last digit that holds one word of an entry only in the plain reading prints no matched text' $q47H '' $q47Rule @(($q47fu + '1')) -Count 1 -ControlOk $q47Ctl -ControlDetail 'the word 1 is not a whole word of the plain reading of the number, or still is one of the folded reading'
+$q47Long = 'see ' + $q47Hp + ('a' * 66) + '-zzgivenx'
+$q47Mm = [regex]::Match($q47Long, $scrubRules[1].Pattern)
+$q47Ctl = [bool]($q47Mm.Success -and $q47Mm.Value.Length -gt 80 -and $q47Mm.Value.Substring(0, 80).EndsWith('zzgiven', [System.StringComparison]::Ordinal) -and -not (Get-ScrubDenyRegex 'zzgiven' -Plain).IsMatch($q47Mm.Value))
+$q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q47Long) -Denylist @('zzgiven zzsur'))
+Assert-ScrubNoMatchedText 'SG2 a home-path hit whose cut 80-character text ends in one word of a two-word entry (the full match holds none) prints no matched text' $q47H '' $q47HomeRule @('zzgiven') -Count 1 -ControlOk $q47Ctl -ControlDetail 'the long match is not over 80 characters, its cut text does not end in the word, or the full match holds the word whole'
+$q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q47Long) -Denylist @('zzgiven'))
+Assert-ScrubNoMatchedText 'SG2 a home-path hit whose cut 80-character text ends in a single-word entry (the full match holds none) prints no matched text' $q47H '' $q47HomeRule @('zzgiven') -Count 1 -ControlOk $q47Ctl -ControlDetail 'the long match is not over 80 characters, its cut text does not end in the word, or the full match holds the word whole'
+# An entry whose folded reading gains a space: a spacing diaeresis (U+00A8) folds to
+# a space and a combining diaeresis, so the entry is one word plain and two folded.
+$q47Dia = [string][char]0x00A8
+$q47WordCount = { param([string]$S) @($S -split '\s+' | Where-Object { $_ }).Count }
+$q47E = 'zzgiven' + $q47Dia + 'zzsur'
+$q47Ctl = [bool]((& $q47WordCount $q47E.Normalize([System.Text.NormalizationForm]::FormC)) -eq 1 -and (& $q47WordCount (Get-ScrubDenyText $q47E)) -eq 2)
+$q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q47Hp + 'zzgiven/x') -Denylist @($q47E))
+Assert-ScrubNoMatchedText 'SG2 a home-path hit that holds the first word of an entry that is one word plain and two folded (a spacing diaeresis between them) prints no matched text' $q47H '' $q47HomeRule @('zzgiven') -Count 1 -ControlOk $q47Ctl -ControlDetail 'the entry is not one word plain and two words folded'
+$q47E = 'zzgi' + $q47Dia + 'ven'
+$q47Ctl = [bool]((& $q47WordCount $q47E.Normalize([System.Text.NormalizationForm]::FormC)) -eq 1 -and (& $q47WordCount (Get-ScrubDenyText $q47E)) -eq 2)
+$q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q47Hp + 'zzgi/x') -Denylist @($q47E))
+Assert-ScrubNoMatchedText 'SG2 a home-path hit that holds the first folded word of a single-word entry with a spacing diaeresis inside it prints no matched text' $q47H '' $q47HomeRule @('zzgi') -Count 1 -ControlOk $q47Ctl -ControlDetail 'the entry is not one word plain and two words folded'
+
+# An entry whose second word is only a zero-width space: two words plain, so its
+# first word has a plain matcher; one word folded (the zero-width space removed), and folding
+# turns the hit's fullwidth last digit into a digit of the number.
+$q47E = '1 ' + [string][char]0x200B
+$q47Ctl = [bool]((& $q47WordCount $q47E.Normalize([System.Text.NormalizationForm]::FormC)) -eq 2 -and (& $q47WordCount (Get-ScrubDenyText $q47E)) -eq 1 -and (Get-ScrubDenyRegex '1' -Plain).IsMatch($q47Num.Normalize([System.Text.NormalizationForm]::FormC)) -and -not (Get-ScrubDenyRegex '1').IsMatch((Get-ScrubDenyText $q47Num)))
+$q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @('see ' + $q47Num) -Denylist @($q47E))
+Assert-ScrubNoMatchedText 'SG2 a follow-up number with a fullwidth last digit that holds the first word of an entry whose second word is only a zero-width space prints no matched text' $q47H '' $q47Rule @(($q47fu + '1')) -Count 1 -ControlOk $q47Ctl -ControlDetail 'the entry is not two words plain and one folded, or the word 1 is not a whole word of the plain reading of the number only'
+# An entry whose second folded word starts with a combining mark: a spacing
+# diaeresis (U+00A8) or acute accent (U+00B4) folds to a space and that mark.
+foreach ($q47Sp in @([string][char]0x00A8, [string][char]0x00B4)) {
+    $q47E = 'zzgiven' + $q47Sp + 'zzsur'
+    $q47Fw2 = @((Get-ScrubDenyText $q47E) -split '\s+' | Where-Object { $_ })
+    $q47Ctl = [bool]((& $q47WordCount $q47E.Normalize([System.Text.NormalizationForm]::FormC)) -eq 1 -and $q47Fw2.Count -eq 2 -and $q47Fw2[1] -match '^\p{Mn}')
+    $q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q47Hp + 'zzsur/x') -Denylist @($q47E))
+    Assert-ScrubNoMatchedText ('SG2 a home-path hit that holds the second word of an entry that is one word plain and two folded (U+{0:X4} between them: the folded second word starts with a combining mark) prints no matched text' -f [int][char]$q47Sp) $q47H '' $q47HomeRule @('zzsur') -Count 1 -ControlOk $q47Ctl -ControlDetail 'the entry is not one word plain and two folded, or its second folded word does not start with a combining mark'
+}
+# A guard row: an entry that ends in a spacing diaeresis is two words folded, the
+# second only a combining mark; its first word keeps its matcher.
+$q47E = 'zzgiven' + [string][char]0x00A8
+$q47Ctl = [bool]((& $q47WordCount (Get-ScrubDenyText $q47E)) -eq 2)
+$q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q47Hp + 'zzgiven/x') -Denylist @($q47E))
+Assert-ScrubNoMatchedText 'SG2 a home-path hit that holds the first word of an entry ending in a spacing diaeresis (two words folded, the second only a combining mark) prints no matched text' $q47H '' $q47HomeRule @('zzgiven') -Count 1 -ControlOk $q47Ctl -ControlDetail 'the entry is not two words folded'
+# Controls (1.5).
+$q47Prev = Get-CoordGitOut $q47Repo @('rev-parse', 'HEAD')
+Set-CoordFile $q47Repo 'c68.txt' ('see ' + $q47fu + "68`n")
+Add-ScrubTestCommit $q47Repo 'adds a file'
+$q47R = Invoke-ScrubHistory -Repo $q47Repo -Range "HEAD ^$q47Prev"
+$q47B = @($q47R.Hits | Where-Object { $_.File -like 'c68.txt*' -and $_.Rule -ceq $q47Rule })
+$q47Printed = (@($q47R.Hits | ForEach-Object { Format-ScrubHit $_ }) -join "`n")
+Assert-Coord 'SG6 control: a follow-up number in a blob still prints its matched text (nothing is blanked inside Format-ScrubHit)' ($q47R.DiscoveryOk -and $q47B.Count -eq 1 -and $q47B[0].Text -ceq ($q47fu + '68') -and $q47Printed.Contains($q47fu + '68')) "ok=$($q47R.DiscoveryOk) hits=$($q47B.Count) $q47Printed"
+$q47Wt = New-ScrubTestRepo 'q47-wt' @{ 'home.txt' = ($q47Line + "`n") }
+$q47R = Invoke-ScrubScan -Repo $q47Wt -Denylist @('zzgiven zzsur')
+Assert-ScrubNoMatchedText 'SG4 a work-tree file with a home-path line that holds one word of a two-word entry prints no matched text' ($q47R.Hits.ToArray()) '' $q47HomeRule @('zzgiven') -Count 1 -ControlOk $q47R.DiscoveryOk -ControlDetail $q47R.Reason
+$q47Ix = New-ScrubTestRepo 'q47-idx' @{ 'idx.txt' = ($q47Line + "`n") }
+Invoke-HookTestGit $q47Ix @('-c', 'core.autocrlf=false', 'add', '--', 'idx.txt')
+Set-CoordFile $q47Ix 'idx.txt' "clean`n"
+$q47R = Invoke-ScrubScan -Repo $q47Ix -Denylist @('zzgiven zzsur')
+Assert-ScrubNoMatchedText 'SG4 the staged version of a file (work-tree version clean) with a home-path line that holds one word of a two-word entry keeps its hit and prints no matched text' ($q47R.Hits.ToArray()) '^idx\.txt \(index\)$' $q47HomeRule @('zzgiven') -Count 1 -ControlOk ($q47R.DiscoveryOk -and $q47R.IndexScanned.Contains('idx.txt') -and @($q47R.Hits | Where-Object { $_.File -ceq 'idx.txt' }).Count -eq 0) -ControlDetail "ok=$($q47R.DiscoveryOk) reason=$($q47R.Reason) index versions=$($q47R.IndexScanned.Count)"
+$q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q47Line) -Denylist @(([string][char]0x200B + ' zzother')))
+Assert-Coord 'SG2 an entry made of an invisible character and a word that is not in the hit blanks nothing (the hit keeps its text)' ($q47H.Count -eq 1 -and $q47H[0].Text -ceq ($q47Hp + 'zzgiven')) ((@($q47H | ForEach-Object { Format-ScrubHit $_ }) -join ';').Replace('zzgiven', '<word>'))
+# A letter and a combining mark parted by an invisible character: the entry is
+# written with the one-code-point letter (U+00E9), the text with e, a soft hyphen
+# or a zero-width space, and a combining acute (U+0301). Removing the invisible
+# character leaves a pair that composes, so the folded reading hits.
+foreach ($q47Iv in @(@('a soft hyphen', [string][char]0x00AD), @('a zero-width space', [string][char]0x200B))) {
+    $q47H = @(Find-ScrubHits -Path 'n.txt' -Lines @(('see zzjose' + $q47Iv[1] + [string][char]0x0301 + ' here')) -Denylist @(('zzjos' + [string][char]0x00E9)))
+    Assert-Coord ('SG2 a denylist entry with an accented letter hits a text that writes it as the base letter, ' + $q47Iv[0] + ' and a combining mark') (@($q47H | Where-Object { $_.Rule -ceq 'denylist entry 1' }).Count -eq 1) "denylist hits: $(@($q47H | Where-Object { $_.Rule -like 'denylist entry*' }).Count)"
+}
+
+# Guards for the exemption and the dedupe (2.4). The exemption rows call
+# Test-ScrubPlaceholderHit, the predicate the -History block lets the
+# placeholder id through with.
+# The one desktop-session-id hit of $Line, with its File set to $File.
+function Get-ScrubQ47IdHit([string]$Line, [string]$File, [string[]]$Denylist = $null) {
+    $f = @(Find-ScrubHits -Path 'x.txt' -Lines @($Line) -Denylist $Denylist | Where-Object { $_.Rule -ceq 'desktop session id' })
+    if ($f.Count -ne 1) { return $null }
+    $c = $f[0] | Select-Object *
+    $c | Add-Member -NotePropertyName File -NotePropertyValue $File -Force
+    return $c
+}
+$q47Prev = Get-CoordGitOut $q47Repo @('rev-parse', 'HEAD')
+Add-ScrubTestCommit $q47Repo ('two numbers ' + $q47fu + '81 and ' + $q47fu + '82')
+$q47R = Invoke-ScrubHistory -Repo $q47Repo -Range "HEAD ^$q47Prev"
+$q47B = @($q47R.Hits | Where-Object { $_.File -match $q47MsgLabel -and $_.Rule -ceq $q47Rule })
+Assert-Coord 'SG6 a message line with two different follow-up numbers keeps two hits (one place, two numbers)' ($q47R.DiscoveryOk -and $q47B.Count -eq 2) "ok=$($q47R.DiscoveryOk) hits=$($q47B.Count)"
+# A message hit is located by its label and line: the label is commit message
+# and the first 7 characters of the commit's sha, the line counts the message's
+# lines (the body after the header block, Split-ScrubObject), its subject line 1.
+$q47Prev = Get-CoordGitOut $q47Repo @('rev-parse', 'HEAD')
+Add-ScrubTestCommit $q47Repo ("a subject`n`nsee " + $q47fu + '87')
+$q47Sha = Get-CoordGitOut $q47Repo @('rev-parse', 'HEAD')
+$q47Body = @((Get-CoordGitOut $q47Repo @('log', '-1', '--format=%B')) -split "`r?`n")
+$q47R = Invoke-ScrubHistory -Repo $q47Repo -Range "HEAD ^$q47Prev"
+$q47B = @($q47R.Hits | Where-Object { $_.Rule -ceq $q47Rule })
+Assert-Coord 'SG6 a follow-up number on the third line of a commit message is one hit under commit message <sha7> of that commit, line 3' ($q47R.DiscoveryOk -and $q47Body.Count -ge 3 -and $q47Body[2] -ceq ('see ' + $q47fu + '87') -and $q47B.Count -eq 1 -and $q47B[0].File -ceq ('commit message ' + $q47Sha.Substring(0, 7)) -and $q47B[0].Line -eq 3) "ok=$($q47R.DiscoveryOk) message lines=$($q47Body.Count) hits=$($q47B.Count) label is the sha7 label: $(@($q47B | Where-Object { $_.File -ceq ('commit message ' + $q47Sha.Substring(0, 7)) }).Count) lines=$(@($q47B | ForEach-Object { $_.Line }) -join ',')"
+$q47Id1 = Get-ScrubQ47IdHit ('see ' + $idPrefix + '1234abcd') 'commit message 2c3b5fc'
+# The same id in a real commit message, its hit relabelled: exempt, and printed
+# without the id (a message hit keeps no matched text).
+$q47Prev = Get-CoordGitOut $q47Repo @('rev-parse', 'HEAD')
+Add-ScrubTestCommit $q47Repo ('see ' + $idPrefix + '1234abcd')
+$q47R = Invoke-ScrubHistory -Repo $q47Repo -Range "HEAD ^$q47Prev"
+$q47B = @($q47R.Hits | Where-Object { $_.File -match $q47MsgLabel -and $_.Rule -ceq 'desktop session id' })
+$q47Id1m = $null
+if ($q47B.Count -eq 1) {
+    $q47Id1m = $q47B[0] | Select-Object *
+    $q47Id1m | Add-Member -NotePropertyName File -NotePropertyValue 'commit message 2c3b5fc' -Force
+}
+$q47Id1mShown = if ($null -ne $q47Id1m) { Format-ScrubHit $q47Id1m } else { '' }
+Assert-Coord 'SG6 a placeholder-id hit under the label commit message 2c3b5fc is exempt (the id of the commit that explains it), and a real message hit of it, relabelled so, is exempt and prints no id' ($null -ne $q47Id1 -and (Test-ScrubPlaceholderHit $q47Id1) -and $null -ne $q47Id1m -and (Test-ScrubPlaceholderHit $q47Id1m) -and -not $q47Id1m.Text -and $q47Id1mShown.IndexOf('1234abcd', [System.StringComparison]::OrdinalIgnoreCase) -lt 0) "synthetic hit found: $($null -ne $q47Id1); message hits: $($q47B.Count); message hit with text: $([bool]($null -ne $q47Id1m -and $q47Id1m.Text)); id printed: $($q47Id1mShown.IndexOf('1234abcd', [System.StringComparison]::OrdinalIgnoreCase) -ge 0)"
+$q47Id2 = Get-ScrubQ47IdHit ('see ' + $idPrefix + '5678cdef') 'commit message 2c3b5fc'
+Assert-Coord 'SG6 a different desktop session id under the label commit message 2c3b5fc is not exempt' ($null -ne $q47Id2 -and -not (Test-ScrubPlaceholderHit $q47Id2)) "hit found: $($null -ne $q47Id2)"
+$q47Id3 = Get-ScrubQ47IdHit ('see ' + $idPrefix + '1234abcd') 'commit message 1111111'
+Assert-Coord 'SG6 the placeholder id under the label of another commit message is not exempt' ($null -ne $q47Id3 -and -not (Test-ScrubPlaceholderHit $q47Id3)) "hit found: $($null -ne $q47Id3)"
+$q47Blob = 'scripts/coord-handoff.ps1 (blob abc1234)'
+$q47Wrapped = 'X' + $idPrefix + '1234abcd' + 'g'
+$q47Plain = Get-ScrubQ47IdHit $q47Wrapped $q47Blob
+$q47Entry = Get-ScrubQ47IdHit $q47Wrapped $q47Blob @('local 1234abcd')
+Assert-Coord 'SG6 a placeholder id under a coord-handoff blob label is exempt, but not when a denylist entry made of the id''s two halves matches it' ($null -ne $q47Plain -and $null -ne $q47Entry -and (Test-ScrubPlaceholderHit $q47Plain) -and -not (Test-ScrubPlaceholderHit $q47Entry)) "found: without entry $($null -ne $q47Plain), with entry $($null -ne $q47Entry)"
+# A two-word entry whose first word is the exact id: the word blanks the hit's
+# text, but only a whole entry cancels the exemption.
+$q47Word = Get-ScrubQ47IdHit ('see ' + $idPrefix + '1234abcd') $q47Blob @(($idPrefix + '1234abcd zzsur'))
+Assert-Coord 'SG6 a placeholder id under a coord-handoff blob label stays exempt when only one word of a two-word entry (the id) matches it, and its text is blanked' ($null -ne $q47Word -and -not $q47Word.Text -and (Test-ScrubPlaceholderHit $q47Word)) "hit found: $($null -ne $q47Word); text blanked: $([bool]($null -ne $q47Word -and -not $q47Word.Text)); exempt: $([bool]($null -ne $q47Word -and (Test-ScrubPlaceholderHit $q47Word)))"
+$q47R = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n tag rel-" + $q47fu + "83`n tagger R Q <r@example.invalid> 1700000000 +0000`n gpgsig " + $q47fu + "83`n `n notes`n`nmerge it`n"))
+$q47B = @($q47R.Hits | Where-Object { $_.File -match '^commit headers of [0-9a-f]{7}$' -and $_.Rule -ceq $q47Rule })
+Assert-Coord 'SG6 a mergetag whose tag name and gpgsig header hold the same follow-up number keeps both hits, the gpgsig one with its text' ($q47R.DiscoveryOk -and $q47B.Count -eq 2 -and @($q47B | Where-Object { -not $_.Text }).Count -eq 1 -and @($q47B | Where-Object { $_.Text -ceq ($q47fu + '83') }).Count -eq 1) "ok=$($q47R.DiscoveryOk) hits=$($q47B.Count) without text=$(@($q47B | Where-Object { -not $_.Text }).Count)"
+$q47R = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n tag rel-" + $q47fu + "84`n tagger R Q <r@example.invalid> 1700000000 +0000`n `n notes " + $q47fu + "84`n`nmerge it`n"))
+$q47B = @($q47R.Hits | Where-Object { $_.Rule -ceq $q47Rule })
+$q47BH = @($q47B | Where-Object { $_.File -match '^commit headers of [0-9a-f]{7}$' -and -not $_.Text })
+$q47BM = @($q47B | Where-Object { $_.File -match '^message of mergetag in commit [0-9a-f]{7}$' -and -not $_.Text })
+Assert-Coord 'SG6 a mergetag whose tag name and first message line hold the same follow-up number keeps two hits, one under commit headers and one under message of mergetag, both without text' ($q47R.DiscoveryOk -and $q47B.Count -eq 2 -and $q47BH.Count -eq 1 -and $q47BM.Count -eq 1) "ok=$($q47R.DiscoveryOk) hits=$($q47B.Count) under commit headers without text=$($q47BH.Count) under message of mergetag without text=$($q47BM.Count)"
+
+# A mergetag with a line that is not exactly one space but white space only (git
+# hash-object takes it): a CRLF line, or two spaces. Git does not end the
+# embedded tag's headers there; the scrub ends them at the first line that is
+# empty or white space only, where git does or earlier, so it may read more of
+# the mergetag as message, which only blanks more. The text after that line is
+# under message of mergetag and keeps no matched text.
+foreach ($q47Bl in @(@('a CRLF line', " `r", '85'), @('two spaces', '  ', '86'))) {
+    $q47R = Invoke-ScrubRaw (Get-ScrubAscii ($mtPre + "mergetag object $rawParent`n type commit`n tag rel-q47g`n tagger R Q <r@example.invalid> 1700000000 +0000`n" + $q47Bl[1] + "`n notes " + $q47fu + $q47Bl[2] + "`n`nmerge it`n"))
+    Assert-ScrubNoMatchedText ('SG6 a follow-up number in the message of a mergetag whose blank line is ' + $q47Bl[0] + ' is named message of mergetag in commit <sha7> and prints no matched text') ($q47R.Hits.ToArray()) '^message of mergetag in commit [0-9a-f]{7}$' $q47Rule @(($q47fu + $q47Bl[2])) -Count 1 -ControlOk $q47R.DiscoveryOk -ControlDetail $q47R.Reason
+}
 # the real range, when the run names one
 if ($History) {
     # Allowed identities: exact "Name <email>" author, committer and tagger
@@ -2067,12 +2494,12 @@ if ($History) {
         Write-Host "(SG6) no private content in $($real.Commits) commits, $($real.Tags) annotated tags, $($real.Idents) identity lines ($($real.IdentAllowed) allowed), $($pushRefList.Count) pushed ref names and $($real.Blobs) blob versions of the range $(Get-ScrubRangeText $History)"
         if (-not $identVar) { Write-Host '(SG6) TRACKSTEWARD_SCRUB_ALLOW_IDENT is unset: every author, committer and tagger line is scanned, none is let through' }
         if ($real.NonUtf8.Count -gt 0) { Write-Host "(SG6) read as Windows-1252 too (not valid UTF-8): $($real.NonUtf8.Count) version(s)" }
-        # The one id that earlier versions of coord-handoff.ps1 wrote in a comment as an example of an
-        # id followed by a note: 1234abcd is not a session id, and the tip no longer holds it. Only this exact text,
-        # in a blob of that script or in the message of the commit that explains it, is let through.
-        $placeholderIds = @($idPrefix + '1234abcd')
+        # The placeholder id of coord-handoff.ps1 is let through only where
+        # Test-ScrubPlaceholderHit says so (that exact matched text, holding no
+        # whole denylist entry, in a blob of that script or in the message of the
+        # commit that explains it).
         foreach ($rule in $scrubRules) {
-            $hs = @($real.Hits | Where-Object { $_.Rule -ceq $rule.Name -and -not (($rule.Name -ceq 'desktop session id') -and ($placeholderIds -ccontains $_.Text) -and (($_.File -clike 'scripts/coord-handoff.ps1 (blob *') -or ($_.File -ceq 'commit message 2c3b5fc'))) } | ForEach-Object { Format-ScrubHit $_ })
+            $hs = @($real.Hits | Where-Object { $_.Rule -ceq $rule.Name -and -not (Test-ScrubPlaceholderHit $_) } | ForEach-Object { Format-ScrubHit $_ })
             Assert-Coord "SG6 no '$($rule.Name)' in the history" ($hs.Count -eq 0) ($hs -join "`n")
         }
         if ($denylist) {
