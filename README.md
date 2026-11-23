@@ -3,7 +3,7 @@
 **One thin coordinator session over many parallel Claude Code sessions.** It gives you a daily
 ledger, scoped briefs, a findings protocol, and one verified merge at a time.
 
-> **Status:** v0.2.10, 2026-11-22. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
+> **Status:** v0.2.11, 2026-11-23. The numbers are a snapshot as of 0.1.1 (2026-10-14) of a pattern run
 > for 10 coordination days: 57 merges verified, 127 findings with recorded outcomes, up to 16 tracks in
 > a day. The scripts and the scope guard came to this plugin in 0.2.0, after those days.
 >
@@ -17,13 +17,14 @@ ledger, scoped briefs, a findings protocol, and one verified merge at a time.
 ## The problem
 
 Running several agent sessions on one repo at once is easy. Merging what they produce is the hard
-part. A study of 33,596 agent-authored pull requests in 2,807 GitHub repositories found that most
-agent PRs are open at the same time as another one. It replayed the merges of 747 such co-active
-pairs, one per repository:
+part. A study of 33,596 agent-authored pull requests in 2,807 GitHub repositories found agent PRs
+open at the same time as another one in 40.2% of the repositories (53.4% within a one-week window).
+It replayed the merges of 747 such co-active pairs, one per repository:
 
-- Pairs from **two different agent products** hit a textual merge conflict **41.7%** of the time.
-- Pairs from **the same product** still conflicted **19.8%** of the time, about one in five.
-  Several Claude Code sessions on one repo are this case.
+- Pairs from **the same agent** hit a textual merge conflict **19.8%** of the time, about one in
+  five. Several Claude Code sessions on one repo are this case.
+- Pairs from **two different agents** conflicted **41.7%** of the time, but they were rare: 0.5% of
+  the co-active pairs, in 122 of the 2,807 repositories.
 - These are textual conflicts only, a lower bound. Build breaks and semantic clashes come on top.
 
 Source: Xu, Subramanian and Karthik, *AI Agent Pull Requests on GitHub: Frequency, Structure, and
@@ -171,6 +172,10 @@ clean one is removed without asking). Keep it while anything in it is unmerged o
 The full procedure, including the stop protocol and the mid-day handoff between coordinators, is
 in [the skill](skills/coordinate/SKILL.md).
 
+To see the scripts at work before you install anything, read [the demo](docs/demo/README.md): a made-up
+repo with three made-up tracks, a brief, an ACK, a finding, the status board, and two slot checks (one
+HOLD for a file outside its scope, one READY), each the real output of the scripts.
+
 ## What is in the box
 
 | File | What it is |
@@ -183,6 +188,7 @@ in [the skill](skills/coordinate/SKILL.md).
 | [scripts/](scripts/) | The verdict scripts, the ledger appender, the brief renderer, the handoff, and their shared library |
 | [hooks/](hooks/) | The edit-time scope guard (`hooks.json` and `coord-scope-guard.ps1`) |
 | [tests/](tests/) | The suites for the scripts and the guard, and `run.ps1` to run them all |
+| [docs/demo/](docs/demo/README.md) | A made-up coordinator day, rendered by `make-demo.ps1` from the scripts' real output |
 | [.claude-plugin/](.claude-plugin/) | The plugin and marketplace manifests |
 | [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
 

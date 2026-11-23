@@ -63,6 +63,9 @@
 #     branch not on the remote, the hit's detail line exactly its label (that
 #     commit's sha7), line 1 and the rule, and the path's word nowhere in the
 #     output
+# P27 a commit message holding an entry whose words U+180E parts (written with a
+#     space), and a file holding an entry with U+FE0F inside its word (Q53 F6):
+#     each push refused, the branch not on the remote, no word printed
 # S1  the copy's scrub suite run without -History, TRACKSTEWARD_SCRUB_DENYLIST
 #     unset: exit 0 with a loud NOT CHECKED line (a clone without the private file)
 # S2  the same, the variable set to a missing file: exit 1
@@ -88,7 +91,11 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('prepush-test-' + [Guid]::Ne
 $entry = 'zz' + 'q30' + 'leak'
 $deny = Join-Path $tmp 'denylist.txt'
 $entry2 = 'zz' + 'r19a zz' + 'r19b'
-[System.IO.File]::WriteAllText($deny, "# test denylist`n$entry`n$entry2`n", $coordUtf8)
+# P27 (Q53 F6): entry 3 holds U+180E between its words, entry 4 is plain and is
+# written in the pushed text with U+FE0F inside it. Built from code points.
+$entry3 = 'zz' + 'q55a' + [string][char]0x180E + 'zz' + 'q55b'
+$entry4 = 'zz' + 'q55c'
+[System.IO.File]::WriteAllText($deny, "# test denylist`n$entry`n$entry2`n$entry3`n$entry4`n", $coordUtf8)
 $origin = Join-Path $tmp 'origin.git'
 $work = Join-Path $tmp 'work'
 $scrubEnv = @('TRACKSTEWARD_SCRUB_STRICT', 'TRACKSTEWARD_SCRUB_HISTORY', 'TRACKSTEWARD_SCRUB_REPOS')
@@ -435,6 +442,24 @@ try {
     $sha26 = (Get-LocalRef 'p26a').Substring(0, 7)
     $r = Invoke-TestPush @('origin', 'p26a')
     Assert-Coord 'P26 a push refused for a home path in an author line names the hit by its role, that commit and line 1 with no text after the rule, prints no matched text, and the branch is not on the remote' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p26a') -and ($r.Out -match (& $line26 ('author of commit ' + $sha26))) -and ("$($r.Out)`n$($r.Err)").IndexOf($idWord, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) (Format-Push $r).Replace($idWord, '<word>')
+    Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
+
+    Write-Host '(P27) U+180E or a variation selector inside a denylist entry or a pushed text'
+    # Q53 F6 through the gate. Entry 3 holds U+180E between its words; the commit
+    # message writes them with a plain space. Entry 4 is plain; the pushed file
+    # writes it with U+FE0F inside its word. Both were not found on 0.2.10.
+    $words27 = @(('zz' + 'q55a'), ('zz' + 'q55b'), ('zz' + 'q55c'))
+    # Every word starts with this fragment, and so does the pushed U+FE0F
+    # spelling, whatever the console makes of the selector (round 1: searching
+    # for the plain word could not see a printed U+FE0F spelling).
+    $frag27 = 'zz' + 'q5'
+    $notPrinted27 = { param($R) ("$($R.Out)`n$($R.Err)").IndexOf($frag27, [System.StringComparison]::OrdinalIgnoreCase) -lt 0 }
+    New-TestCommit 'p27m' $base ('see ' + $words27[0] + ' ' + $words27[1] + ' here') @{ 'c27.md' = "nothing private`n" }
+    $r = Invoke-TestPush @('origin', 'p27m')
+    Assert-Coord 'P27 a commit message holding an entry whose words U+180E parts, written with a space, is refused, the branch is not on the remote, and no word of it is printed' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p27m') -and ($r.Out -match '(?m)^\s*commit message [0-9a-f]{7}:1: denylist entry 3\s*$') -and (& $notPrinted27 $r)) (Format-Push $r).Replace($frag27, '<word>')
+    New-TestCommit 'p27f' $base 'a clean message' @{ 'c27v.md' = ('see zz' + 'q5' + [string][char]0xFE0F + '5c here' + "`n") }
+    $r = Invoke-TestPush @('origin', 'p27f')
+    Assert-Coord 'P27 a file holding an entry with U+FE0F inside its word is refused, the branch is not on the remote, and the word is not printed' (($r.Code -ne 0) -and -not (Get-RemoteRef 'refs/heads/p27f') -and ($r.Out -match '(?m)^\s*c27v\.md \(blob [0-9a-f]{7}\):1: denylist entry 4\s*$') -and (& $notPrinted27 $r)) (Format-Push $r).Replace($frag27, '<word>')
     Invoke-HookTestGit $work @('checkout', '--quiet', 'main')
 
     Write-Host '(S1-S3) the copy''s scrub suite with no -History'

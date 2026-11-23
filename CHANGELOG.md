@@ -1,6 +1,73 @@
 # Changelog
 
-## Unreleased (Q53; the version number is set at release)
+## 0.2.11 - 2026-11-23
+
+The release review before the public announcement (Q55), and the Q53 scrub fixes below it.
+
+- **A pre-push row for F6** (P27 in `tests/hooks/prepush.test.ps1`; the Q53 line "no pre-push row drives a Q53
+  case through `.githooks/pre-push`"). Two pushes through the real hook: a commit message holding a denylist
+  entry whose words U+180E parts, written with a space, and a file holding an entry written with U+FE0F inside
+  its word. Each is refused, the branch is not on the remote, the hit's detail line is exactly its label, line 1
+  and the entry number, and no word of the entry is printed (the check looks for the start that every word and the
+  pushed U+FE0F spelling share; panel round 1, reviewer and Codex: it first looked only for the plain word, which
+  a printed U+FE0F spelling does not hold). Both rows were seen red with the 0.2.10 scrub suite in place (the push
+  went through, exit 0), and are green on this one. The test denylist gains two entries for them, built from
+  code points at run time.
+
+- **Known history hits** (`$scrubKnownHistoryHits` in `tests/scrub.test.ps1`). The release scrub of the whole
+  history (`-History HEAD`) with the private denylist and repo list found one commit sha of a private repo in an
+  old version of a plan doc; the tip lost it in 0.2.3, but the version is in the public history. The maintainer
+  accepted it rather than rewrite the history again. The SG6 history check now lets through a hit only when its
+  blob version, its line and the SHA-256 of its token all match an entry; the token itself is not written in
+  the repo. The SG5 check of the shipped files never uses the list. The file label and the hash are compared
+  ordinal (panel round 1, Codex, measured: `-ceq` compares by culture, so a label with a soft hyphen inside it
+  matched). Seven rows: exactly that line and token pass, and the same commit spelled with 10 and 40 digits on
+  lines 1 and 2 is still a hit; another token at the same place is a hit; the token on another line or in
+  another file label is a hit; a label that differs only by a soft hyphen is a hit (seen red with `-ceq`); another rule's hit or one
+  with no token never passes; the token hash ignores letter case; every entry names a blob, a line and a 64-digit
+  hash. Mutations in a scratch copy, before round 1: without the hash check two rows go red (another token, and
+  the other-line row, whose line-2 hit then passes), without the line check one does.
+
+- **A demo** (`docs/demo/`): a made-up repo with three made-up tracks, and the real output of `coord-brief`,
+  `coord-set`, `coord-log`, `coord-status` and `slot-check` (one HOLD for a file out of scope, one READY) against
+  it, as a transcript and one SVG per step. `make-demo.ps1` renders it again from the test fixtures and the gh
+  stub (nothing talks to GitHub); it refuses to write when a step's output holds a local path or a full sha
+  (shown as `<sha40 of #n>`), or a step exits with another code than the script expects for it (1 for the HOLD, 0 otherwise), and the temp folder is
+  shown as `<demo>`. Linked from the README. Panel round 1 (Fable, reviewer, adversary, Codex) made the day
+  consistent: the ACK's owed check is ticked, #41 opens after the brief, the finding names a file outside its
+  track's scope, the brief's FILE SCOPE sentence is shown whole, and the page says what `launch` is and who fills
+  a brief's slots. Round 2 (reviewer, adversary): each edit the script makes to the made-up ledger
+  fails the run when the template no longer holds what it replaces, #41 gets its PR cell, the script runs only
+  between 02:00 and 23:00 (its made-up times count back from the clock), and the SVGs wrap at a space.
+
+- **README, the study figures** (the Fable second read; the maintainer's pick). The same-agent figure (19.8%),
+  the case of several Claude Code sessions, now comes first, and the cross-agent one (41.7%) says those pairs
+  were 0.5% of the co-active pairs, in 122 of the 2,807 repositories. "Most agent PRs are open at the same time
+  as another one" was not what the paper says; it now gives its figure: co-active PRs in 40.2% of the
+  repositories (53.4% within a week). All read from the paper's abstract (arXiv:2607.04697 v2).
+
+- **Issue templates:** a `config.yml` with a link for reporting a security problem privately (GitHub's private
+  vulnerability reporting, which the maintainer turns on in the repo's settings), and the version placeholder
+  of the bug report is the current version.
+
+- **Release review, nothing to change:** the denylist-absent verdict (UNCHECKED when the variable is unset and
+  the run is not `-History`, FAIL when it is set to a missing or empty file, or in a `-History` run) shipped in
+  0.2.5 and is unchanged. The rule that a live-exposure finding never goes into a PR body is in the skill and
+  the templates.
+
+  Not covered:
+  - the known-history list trusts its own entries: an entry added for a hit that should have been fixed would
+    hide it (each entry is a maintainer's decision, made in review);
+  - a token of 7 hex digits is short, so its SHA-256 can be reversed by trying every 7-digit token; that tells
+    the reader the token, which is already in the public history, and not which repo it belongs to;
+  - no synthetic -History row drives the SG6 call site of the known-hit check; the rows test the check itself,
+    and the maintainer's private -History run is the only run of that call site with a real known hit;
+  - the security link in `config.yml` works only once private vulnerability reporting is on in the repo's
+    settings (it was off at this review);
+  - `make-demo.ps1` writes the SVGs before the transcript, so a write that fails partway can leave them out of
+    step with each other.
+
+### Q53 (merged before the release)
 
 `<home>/` and `<Users>/` below stand for the two home prefixes: the 0.2.10 gate refuses even a dot segment after them.
 
@@ -107,7 +174,8 @@
     once per list, never on scanned text;
   - when dropping a word made only of separators leaves a bare token (`zz .`), the loose matcher is that token, so
     every standalone `zz` hits, which can only refuse more (the adversary, round 4; reasoned);
-  - no pre-push row drives a Q53 case through `.githooks/pre-push` (Codex, round 3): pre-push row for F6: Q55;
+  - no pre-push row drives a Q53 case through `.githooks/pre-push` (Codex, round 3); 0.2.11 adds one for F6
+    (P27), none for F8;
   - Hangul jamo that U+180E or a selector parts (U+1100, U+180E, U+1161) do not compose: the jamo are letters, not
     combining marks (the adversary, measured);
   - the extra texts without a run before a combining mark are read only by the denylist pass, not by the check of

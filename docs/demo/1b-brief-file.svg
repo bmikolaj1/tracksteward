@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="848" height="242" viewBox="0 0 848 242">
+<rect width="100%" height="100%" rx="8" fill="#1e1f24"/>
+<text x="12" y="20" fill="#8b8f99" font-family="Consolas, Menlo, monospace" font-size="12">What the brief says</text>
+<text x="12" y="44" fill="#7fd1b9" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">&gt; (the brief file)</text>
+<text x="12" y="62" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">TRACK: search, in &lt;demo&gt;\acme-notes\launch, branch claude/search, session search.</text>
+<text x="12" y="80" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">BASELINE, verified 11:17: &lt;demo&gt;\acme-notes\launch origin/main = 5262f73; open PRs: #42; branch from</text>
+<text x="12" y="98" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  5262f73.</text>
+<text x="12" y="116" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">(True as of that time. Every later message from me carries the current sha.)</text>
+<text x="12" y="134" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">LIVE TRACKS: (1) YOU, claude/search; (2) "export", branch claude/export, owns src/export*, docs/**; (3)</text>
+<text x="12" y="152" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  "tidy", branch claude/tidy, owns docs/**.</text>
+<text x="12" y="170" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">FILE SCOPE, yours: src/search*. NOT yours: src/export*, docs/** (export); docs/** (tidy). If you need a</text>
+<text x="12" y="188" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  file outside your scope, do not</text>
+<text x="12" y="206" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">edit it: send me a FINDING with "widen scope" (or a BLOCKER if it stops you). You may talk to the</text>
+<text x="12" y="224" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">owning track, but only a widen-scope outcome I confirm puts the file in your scope.</text>
+</svg>

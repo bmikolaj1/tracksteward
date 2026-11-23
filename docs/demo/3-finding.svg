@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="848" height="116" viewBox="0 0 848 116">
+<rect width="100%" height="100%" rx="8" fill="#1e1f24"/>
+<text x="12" y="20" fill="#8b8f99" font-family="Consolas, Menlo, monospace" font-size="12">Log a finding</text>
+<text x="12" y="44" fill="#7fd1b9" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">&gt; coord-log.ps1 -Section Findings -Text "F1 from export: ..."</text>
+<text x="12" y="62" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">COORD-LOG &lt;demo&gt;\acme-notes\launch\.claude\coordination\2026-11-23.md [Findings]: 12:52 F1 from export:</text>
+<text x="12" y="80" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  src/search.txt does not trim the query, so an exported search can differ | read | latent | outcome:</text>
+<text x="12" y="98" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  PENDING</text>
+</svg>

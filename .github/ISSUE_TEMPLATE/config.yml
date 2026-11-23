@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/bmikolaj1/tracksteward/security/advisories/new
+    about: A hole in the scope guard, the pre-push gate or the scrub, or anything that leaks data. Please do not open a public issue for it.
