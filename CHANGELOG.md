@@ -1,5 +1,121 @@
 # Changelog
 
+## Unreleased (Q53; the version number is set at release)
+
+`<home>/` and `<Users>/` below stand for the two home prefixes: the 0.2.10 gate refuses even a dot segment after them.
+
+- **A denylist entry holding U+180E or a variation selector is found, and so is a text holding them** (F6, the
+  0.2.9 Still-not-covered line that 0.2.10 kept). Measured first, in the suite, on bab8737: an entry with U+180E
+  between its words, with U+FE0F after a word, a one-word entry ending in U+FE0F, and one with U+180E inside a word
+  were not found written with a space or without the character; a text with U+180E between or inside the words of
+  an entry, with U+FE0F or U+FE00 inside one, with fullwidth words parted by U+180E, with U+FE0F before U+180E or
+  after the space between the words, did not hit; a home path holding such an entry, or one word of it, printed it.
+  Now each entry also gets a loose matcher per reading, run on the same texts, its hits joined to the old ones: of
+  the entry, the selectors are removed and a U+180E inside a word may stand for nothing or a separator run; in the
+  text, U+180E and selectors may sit between the characters of a word, and U+180E parts two words as a separator
+  does (a selector alone still parts nothing). Every 0.2.10 denylist matcher and reading is unchanged, so no old
+  denylist hit can be lost (F8 below changes the home-path rule, on purpose): the Q51 round-3 cases (a fullwidth name then U+FE0F and a letter or a digit, then U+FE00 and a letter, a
+  letter and U+FE0F before a fullwidth name) are guard rows, green before and after. Loose word matchers (of the
+  entry with U+180E kept inside a word, and with U+180E read as a space) also blank a pattern hit's text, and a
+  whole loose entry sets HoldsEntry.
+
+- **A U+180E or a selector between a letter and its combining mark** (panel round 1: the adversary and Codex,
+  measured). Both are starters, so normalising does not compose a letter and its mark across them: an entry
+  `zzjose` + U+FE0F (or U+180E) + U+0301 was not found as `zzjos` + U+00E9, nor the reverse in the text. Now such a
+  run is removed from the entry before its loose matchers are built (then the entry is normalised again in its
+  reading), and when the text holds one, two extra texts without it are read as well, each matcher run on them too
+  (no line break is removed, so they only add hits). In the folded reading the removal runs again after folding
+  (panel round 2, all three lenses, measured): a run and a mark that a zero-width space or a soft hyphen parted, or a
+  halfwidth voiced sound mark that NFKC makes combining, compose too.
+
+- **`<home>/.` in prose is no home-path hit** (F8, from Q51). Measured first: `<home>/.` at the end of a sentence,
+  before a space, `<home>/..` before `)`, `<Users>/.` before a comma and `<home>/..).` at the end of a sentence were
+  hits. Now a name made only of dots, then any run of `) ] } > " ' `` ` `` , ; : ! ? *` and dots, then the end of the
+  line or white space, is not a hit. Guards, green before and after: a dot segment followed by a slash or a
+  backslash and a name, a name that starts or ends with a dot, a dot followed by an accented letter, and a name
+  right after the punctuation (`<home>/.,` or `<home>/.)` and a name: the first form of the rule let that through,
+  Codex, measured) are still hits.
+
+- **Review panel round 1** (reviewer, adversary, Codex on the balanced tier). Besides the two items above: the
+  first form of the loose matcher backtracked without bound on a run of U+180E (a line of 25 after a word of an
+  entry took 78 seconds, measured before the panel): no two neighbouring quantifiers share a character now, and a
+  row scans two lines of 2000 U+180E and one of 700 U+180E, U+FE0F and space triples in under 5 seconds (they take
+  about a tenth of a second), with a fourth line that must hit as a positive control (Codex). For an entry whose first word held
+  U+180E, a home path holding that word without it printed the word (Codex, measured): the word matchers now take
+  both splits. The redaction rows also check HoldsEntry (Codex), and a row needs the folded loose matcher (the
+  adversary). The first count of red rows here was wrong (reviewer and adversary).
+
+- **Review panel round 2** (the fix diff; reviewer, adversary, Codex on the balanced tier, REVISE). Three of the
+  round-1 fixes were slow or short, all measured: the scan for a run before a mark tried every position inside a
+  run (a line of 20000 U+180E took 14 seconds, on every file once a denylist is set), and the F8 lookahead let two
+  quantifiers share the dots (`/home/` and 20000 dots took 8 seconds, with no denylist); both now take a run whole
+  from its start (milliseconds). The removal before a mark ran only before folding (above). And a gap from the
+  first form: an entry with several U+180E beside dots inside a word could share a run of dots out between its gaps
+  without bound (30 dots against ten: 9.5 seconds, growing exponentially; Codex); the separator characters next to
+  a U+180E inside an entry's word (a run of them with a character that is neither on both sides, panel round 3)
+  are now part of its gap, so no literal beside such a gap is one it can take. Each has
+  a row with a positive control; a row checks that a hit wrapped across lines is on the line it starts on (Codex).
+
+- **Review panel round 3** (the fix diff; reviewer, adversary, Codex on the balanced tier, REVISE), and the
+  maintainer's call at the round-three trajectory report: fix the clear-cut findings, list the rest, freeze F6.
+  Fixed, each with a row seen red on the round-2 fix: the gap collapse also ran at a word's edge, where it trimmed
+  the separator with the U+180E, so `zzname` + U+180E + `_` was not found as `zzname_` (the reviewer, measured); it
+  runs only inside a word now (round 4 below says what happens at the edge). A word made only of separator characters (a standalone dot) shared the separator
+  runs on both sides of it, and a near miss tried every way to share them out (twelve standalone dots against 24
+  dots each followed by U+180E: 8.6 seconds, 0 ms on bab8737; Codex, measured); the loose matchers leave such words
+  out (the old matchers keep them), which only widens the loose ones. With that, an entry like `zz - zztwo` costs
+  what it cost on 0.2.10 again (the round-2 form took three times as long; the adversary, measured).
+
+- **Review panel round 4** (the fix diff; reviewer and adversary, no Codex, at the maintainer's freeze), the third
+  round in a row to find a defect inside the previous round's fix; at that trajectory report the maintainer chose
+  one last fix, a check of it, then commit (and F8 alone if the check finds a defect inside it). Kept as written at
+  a word's edge, each U+180E beside separators became a gap with literal separators between the gaps, and a near
+  miss shared a run of dots out among them without bound (ten against 30 dots: 14.5 seconds, 64 ms on bab8737; both
+  lenses, measured). Now the U+180E in a separator run at a word's start or end are removed and its separators kept
+  as written, so no gap sits at a word's edge (the lenses' repros take 5 to 20 ms, measured); a row seen red on the
+  round-3 fix guards it.
+
+  Rows (SG2), 62 new: 44 seen red on bab8737 (measured: the Q53 block run against bab8737's code), green after; 18
+  guards green on both. Of the 44, 8 were added in panel round 1 and seen red on the first fix, 9 in round 2, seen
+  red on the round-1 fix (the wrapped-line row was green there), 3 in round 3, seen red on the round-2 fix, and 1
+  in round 4, seen red on the round-3 fix.
+  Mutations in a scratch copy, after round 1: without the folded loose HoldsEntry check, its row goes red; without
+  the extra texts, the three text-side mark rows go red. No lens found a hit bab8737 finds and this change loses,
+  in any round (the adversary's differential fuzz against bab8737: 5,500 cases in rounds 2 and 3, 4,500 in round
+  4). The scrub suite: 270 rows on bab8737, 332 after (332 passed); with `-History HEAD` 341 passed.
+
+  Still not covered:
+  - other format characters (U+180B-180D and U+180F, the Mongolian free variation selectors; U+2061-2064, U+034F;
+    the bidi controls U+061C, U+200E, U+200F, U+202A-202E, U+2066-2069; the tag characters U+E0000-E007F; the
+    selector supplement U+E0100-E01EF) are not read loosely; this slice adds only the two the 0.2.9 line named
+    (the adversary);
+  - an entry that is a short token and a selector (`a` + U+FE0F, a symbol + U+FE0F) now also matches the token
+    alone, which can only refuse more (the adversary; reasoned);
+  - an entry with a word made only of a separator character (`zz - zztwo`, `a . . . b`) makes a long run of that
+    character in a text cost quadratic time or worse, as on 0.2.10 and no more (8000 dashes: 1.7 s on both;
+    `a . . . b` against 120 dots: 0.45 s on both, measured);
+  - a U+180E right before a combining mark in an entry is read as nothing there, never also as a separator: the
+    entry `zzjose` + U+180E + U+0301 + ` zztwo` is not found written with a space at the U+180E, and a home path
+    holding `zzjose` prints it, as on bab8737 (Codex, round 3; listed at the freeze);
+  - `<home>/...` or `<home>/.!` at the end of a line or before white space is no home-path hit: a segment made only of
+    dots and prose punctuation is read as prose, whatever directory it could name (Codex, round 3; accepted: no
+    name follows it);
+  - a separator character in the separator run at an entry word's edge that holds a U+180E is required as written
+    (`o,` + U+180E + ` o` is not found as `o o`), as on bab8737 (the adversary, round 4);
+  - finding that run at a word's end costs quadratic time in the length of a separator run inside a long entry
+    word (`a`, 20000 dots, `b`: 5 s, measured by the reviewer at the last check); it runs on denylist entries only,
+    once per list, never on scanned text;
+  - when dropping a word made only of separators leaves a bare token (`zz .`), the loose matcher is that token, so
+    every standalone `zz` hits, which can only refuse more (the adversary, round 4; reasoned);
+  - no pre-push row drives a Q53 case through `.githooks/pre-push` (Codex, round 3): pre-push row for F6: Q55;
+  - Hangul jamo that U+180E or a selector parts (U+1100, U+180E, U+1161) do not compose: the jamo are letters, not
+    combining marks (the adversary, measured);
+  - the extra texts without a run before a combining mark are read only by the denylist pass, not by the check of
+    a pattern hit's text (no pattern rule matches U+180E, a selector or a combining mark, so that text holds no
+    such run; reasoned);
+  - a dots-only name followed by a character not in the list above (a letter outside ASCII, `<`, `=`) is still a
+    hit, as before (it can only refuse, never pass).
+
 ## 0.2.10 - 2026-11-22
 
 - **A pattern hit's printed text never ends where a name may go on** (F2, the 0.2.9 line on a match that stops

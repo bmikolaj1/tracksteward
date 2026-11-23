@@ -12,7 +12,9 @@
 #     \Projects\ (either slash, also JSON-escaped as C:\\Users\\), or the
 #     Git-Bash / WSL spellings /c/Users/, /c/Projects/, /mnt/c/Users/ (any
 #     case)
-#   - /Users/<word> or /home/<word>, except /home/me
+#   - /Users/<word> or /home/<word>, except /home/me, and except a <word> made
+#     only of dots, then any run of the prose punctuation ) ] } > " ' ` , ; :
+#     ! ? * and dots, then the end of the line or white space: no name follows
 #   - the prefix of a desktop session id followed by 8 or more hex digits
 #   - a 40-hex commit sha in a .md file
 #   - an internal follow-up number (FU- and digits)
@@ -24,8 +26,16 @@
 #     to the next word, so it only adds hits): the words of a
 #     multi-word entry may be parted by any run of white space (a line break
 #     too), comment markers (# > * / ;) and the joiners - . _ , (not by nothing:
-#     CamelCase is not matched). The denylist is private and lives outside this
-#     repo.
+#     CamelCase is not matched). Extra loose matchers add hits for U+180E and
+#     the variation selectors U+FE00-FE0F: of an entry, the selectors are
+#     removed and a U+180E inside a word may stand for nothing or a separator;
+#     in the text, U+180E and selectors may sit inside a word, and U+180E
+#     parts two words as a separator does (Get-ScrubLooseRegex); where
+#     U+180E or a selector sits right before a combining mark, it is removed
+#     from the entry, and two extra texts without it are read too, so the
+#     letter and the mark compose (in the folded reading also when folding
+#     removed an invisible character between them, or made the mark). The
+#     denylist is private and lives outside this repo.
 #     If the variable is unset, the file is missing, or the file holds no
 #     entry, the denylist is absent. The denylist rows then FAIL when the
 #     variable is set (to anything: a broken setup, not a skip) and in a
@@ -173,7 +183,7 @@ function Write-ScrubUnchecked([string]$Label, [string]$Reason) {
 $idPrefix = 'local' + '_'
 $scrubRules = @(
     [pscustomobject]@{ Name = 'absolute user or project path'; Pattern = '(?i)(?:[A-Za-z]:[\\/]{1,4}|(?<![A-Za-z0-9_.-])/(?:mnt/)?[A-Za-z]/)(?:Users|Projects)[\\/]'; MdOnly = $false },
-    [pscustomobject]@{ Name = 'user home path (/Users/<word>, /home/<word>)'; Pattern = '/(Users|home)/([A-Za-z0-9._-]+)'; MdOnly = $false },
+    [pscustomobject]@{ Name = 'user home path (/Users/<word>, /home/<word>)'; Pattern = '/(Users|home)/(?!\.(?>[)\]}>"''`,;:!?*.]*)(?:$|\s))([A-Za-z0-9._-]+)'; MdOnly = $false },
     [pscustomobject]@{ Name = 'desktop session id'; Pattern = ($idPrefix + '[0-9A-Fa-f]{8,}'); MdOnly = $false },
     [pscustomobject]@{ Name = '40-hex commit sha in a .md file'; Pattern = '(?i)(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])'; MdOnly = $true },
     [pscustomobject]@{ Name = 'internal follow-up number'; Pattern = ('\bFU' + '-\d+'); MdOnly = $false }
@@ -243,6 +253,114 @@ function Get-ScrubDenyRegex([string]$Entry, [switch]$Plain) {
     $form = if ($Plain) { $Entry.Normalize([System.Text.NormalizationForm]::FormC) } else { Get-ScrubDenyText $Entry }
     return Get-ScrubWordsRegex $form
 }
+# The loose matchers (Q53, F6): U+180E (Mongolian vowel separator, a format
+# character that \s does not match and NFKC keeps) and the variation selectors
+# U+FE00-FE0F. They are extra matchers: Find-ScrubHits joins their hits to
+# those of the matchers above, which are unchanged, so they only ever add hits.
+# Of an entry, the selectors are removed and each U+180E inside a word may
+# match nothing or a separator run (a U+180E at a word's edge, or a word made
+# only of U+180E, is a separator; a U+180E or selector right before a
+# combining mark is removed first, see $scrubLooseBeforeMark). Of the text,
+# nothing is removed (but see the extra texts of Find-ScrubHits): between two
+# characters of a word any run of U+180E and selectors may sit, and between
+# words the separator class also holds U+180E, with selectors around the
+# separators (a selector alone parts no two words, as before). The lookarounds
+# are those of Get-ScrubWordsRegex. Built from text already in one reading's
+# form; $null when the entry has no word left.
+# No two neighbouring quantifiers of a matcher share a character (a U+180E
+# run that could be split between them made a line of 25 of them take over a
+# minute, measured): between two characters of a word, a run of U+180E and
+# selectors; between words, selectors, then one or more separator characters
+# (U+180E among them) each followed by selectors; at an entry's U+180E inside
+# a word, one run of separators, U+180E and selectors, possibly empty (the
+# separator characters next to that U+180E are part of it, see
+# $scrubLooseMvsRun, so no literal next to it is one it can take; at a
+# word's edge no gap is left, see Remove-ScrubLooseEdgeMvs).
+$scrubLooseMvs = [char]0x180E
+$scrubLooseSelChars = [string][char]0xFE00 + '-' + [string][char]0xFE0F
+$scrubLooseSel = [regex]::new('[' + $scrubLooseSelChars + ']')
+$scrubLooseRun = '[' + [string][char]0x180E + $scrubLooseSelChars + ']*'
+$scrubLooseSep = '[' + $scrubLooseSelChars + ']*(?:[\s#>*/;,._' + [string][char]0x180E + '-][' + $scrubLooseSelChars + ']*)+'
+$scrubLooseGap = '[\s#>*/;,._' + [string][char]0x180E + $scrubLooseSelChars + '-]*'
+# A whole run of U+180E and selectors (it starts where the run starts, and it
+# is taken whole: a line of 20000 U+180E took 14 seconds when every position
+# inside a run was tried, measured) right before a combining mark that is not
+# itself a selector (the selectors are category Mn too; U+180E is Cf, so no
+# shorter part of a run ends before a mark). Get-ScrubMatchers removes it from
+# an entry, Find-ScrubHits from extra readings of the text.
+$scrubLooseBeforeMark = [regex]::new('(?<![' + [string][char]0x180E + $scrubLooseSelChars + '])(?>[' + [string][char]0x180E + $scrubLooseSelChars + ']+)(?=(?![' + $scrubLooseSelChars + '])\p{M})')
+# The folded reading (Get-ScrubDenyText) of a text with such runs removed,
+# again after folding as long as folding leaves one before a mark (folding
+# removes an invisible character that sat between a run and its mark, and NFKC
+# turns a halfwidth voiced sound mark into a combining one), at most three
+# times more.
+function Get-ScrubBareFold([string]$Text) {
+    $f = Get-ScrubDenyText ($scrubLooseBeforeMark.Replace($Text, ''))
+    for ($k = 0; $k -lt 3 -and $scrubLooseBeforeMark.IsMatch($f); $k++) { $f = Get-ScrubDenyText ($scrubLooseBeforeMark.Replace($f, '')) }
+    return $f
+}
+# A run of U+180E and separator characters inside an entry's word (with a
+# character that is neither on both sides of it) is one gap: so no literal
+# next to a gap is a character the gap can take, and several gaps cannot share
+# out a run of dots between them (ten U+180E beside dots against 30 dots took
+# seconds, growing without bound, measured). The separator characters there
+# become optional. Not at a word's edge: there the separators stay as written
+# and the U+180E are removed (Remove-ScrubLooseEdgeMvs; panel round 3:
+# collapsed there, the separator was trimmed with the U+180E, and a name
+# written next to that separator, an underscore, was missed).
+$scrubLooseMvsRun = [regex]::new('(?<=[^#>*/;,._' + [string][char]0x180E + '-])(?>[#>*/;,._-]*)' + [string][char]0x180E + '(?>[#>*/;,._' + [string][char]0x180E + '-]*)(?=[^#>*/;,._' + [string][char]0x180E + '-])')
+# A word made only of separator characters and U+180E (a standalone dot).
+$scrubLooseSepWord = [regex]::new('^[#>*/;,._' + [string][char]0x180E + '-]+$')
+# The run of separator characters and U+180E at a word's start or end. Its
+# U+180E are removed and its separators kept as written (panel round 4: left
+# in, each U+180E there became a gap with literal separators between the
+# gaps, and a near miss tried every way to share a run of dots out among
+# them, measured), so no gap sits at a word's edge.
+$scrubLooseEdgeHead = [regex]::new('^[#>*/;,._' + [string][char]0x180E + '-]+')
+$scrubLooseEdgeTail = [regex]::new('[#>*/;,._' + [string][char]0x180E + '-]+$')
+function Remove-ScrubLooseEdgeMvs([string]$Word) {
+    foreach ($rx in @($scrubLooseEdgeHead, $scrubLooseEdgeTail)) {
+        $m = $rx.Match($Word)
+        if ($m.Success) { $Word = $Word.Substring(0, $m.Index) + $m.Value.Replace([string]$scrubLooseMvs, '') + $Word.Substring($m.Index + $m.Length) }
+    }
+    return $Word
+}
+# The words of an entry as the loose matcher reads them (selectors removed,
+# each U+180E run inside a word with its separators made one U+180E, U+180E at
+# a word's edge trimmed; words left empty, and words made only of separator
+# characters, dropped). A dropped separator word only widens the loose
+# matcher (the old matcher still has it); kept, it shared the separator runs
+# on both sides of it, and a near miss tried every way to share them out
+# (panel round 3, measured).
+function Get-ScrubLooseWords([string]$Form) {
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($w in @($scrubLooseSel.Replace($Form, '') -split '\s+')) {
+        $w = Remove-ScrubLooseEdgeMvs ($scrubLooseMvsRun.Replace($w, [string]$scrubLooseMvs))
+        if ($w -and -not $scrubLooseSepWord.IsMatch($w)) { $out.Add($w) }
+    }
+    return , $out.ToArray()
+}
+function Get-ScrubLooseRegex([string[]]$Words) {
+    if (@($Words).Count -eq 0) { return $null }
+    $srcs = foreach ($w in $Words) {
+        # A word starts and ends with a character that is not U+180E
+        # (Get-ScrubLooseWords trims it), so a gap sits between two of them.
+        $sb = New-Object System.Text.StringBuilder
+        $prevChar = $false
+        foreach ($ch in $w.ToCharArray()) {
+            if ([int]$ch -eq 0x180E) {
+                if ($prevChar) { [void]$sb.Append($scrubLooseGap) }
+                $prevChar = $false
+                continue
+            }
+            if ($prevChar) { [void]$sb.Append($scrubLooseRun) }
+            [void]$sb.Append([regex]::Escape([string]$ch))
+            $prevChar = $true
+        }
+        $sb.ToString()
+    }
+    return [regex]::new('(?i)(?<![A-Za-z0-9_])' + (@($srcs) -join $scrubLooseSep) + '(?![A-Za-z0-9_])')
+}
 # The allowed identities of a file (one "Name <email>" per line, # comments
 # and blank lines ignored), or $null when there is none (path empty, file
 # missing, no entry).
@@ -266,7 +384,8 @@ function Get-ScrubMatchKey([string]$S) {
 
 # The denylist matchers of Find-ScrubHits for $Denylist: { Deny, DenyPlain
 # (the whole-entry matchers, folded and plain); Words, WordsPlain (the word
-# matchers) }. Built on the first call for a list and kept in
+# matchers, the loose ones among them); DenyLoose, DenyPlainLoose (the loose
+# whole-entry matchers, one per entry, $null where none) }. Built on the first call for a list and kept in
 # $script:scrubMatcherCache, keyed by each entry's length and text, so no two
 # different lists share a key (an entry may hold any character, a line break
 # included); later calls with the same entries get the same objects. No row
@@ -301,7 +420,37 @@ function Get-ScrubMatchers([string[]]$Denylist) {
             }
         }
     }
-    $built = [pscustomobject]@{ Deny = $deny; DenyPlain = $denyPlain; Words = $words; WordsPlain = $wordsPlain }
+    # Q53: the loose matchers (Get-ScrubLooseRegex), one per entry and reading
+    # ($null when no word is left), and loose word matchers, added to the
+    # lists above (they only blank more). Of the entry, U+180E and selectors
+    # right before a combining mark are removed first and the rest is
+    # normalised again in its reading (NFC, or Get-ScrubBareFold, which removes
+    # such a run again where folding made one), so a letter and its mark that
+    # one of them parted compose (both are starters, so normalising alone
+    # keeps them apart); then the selectors are removed.
+    # Word matchers: for each of two splits of the entry, U+180E kept inside a
+    # word (where it may stand for nothing, as in the whole-entry matcher) and
+    # U+180E read as a space, one per word when that split has two or more.
+    $denyLoose = New-Object System.Collections.Generic.List[object]
+    $denyPlainLoose = New-Object System.Collections.Generic.List[object]
+    foreach ($e in $Denylist) {
+        $ePlain = $scrubLooseBeforeMark.Replace($e, '').Normalize([System.Text.NormalizationForm]::FormC)
+        foreach ($rd in @(@($ePlain, $denyPlainLoose, $wordsPlain, $true), @((Get-ScrubBareFold $e), $denyLoose, $words, $false))) {
+            $rd[1].Add((Get-ScrubLooseRegex (Get-ScrubLooseWords $rd[0])))
+            $splits = @($rd[0])
+            $spaced = $rd[0].Replace([string]$scrubLooseMvs, ' ')
+            if (-not [string]::Equals($spaced, $rd[0], [System.StringComparison]::Ordinal)) { $splits += $spaced }
+            foreach ($split in $splits) {
+                $ws = Get-ScrubLooseWords $split
+                if ($ws.Count -lt 2) { continue }
+                foreach ($w in $ws) {
+                    if (-not $rd[3]) { $w = [regex]::Replace($w, '^\p{Mn}+', '').Trim($scrubLooseMvs) }
+                    if ($w) { $rd[2].Add((Get-ScrubLooseRegex @($w))) }
+                }
+            }
+        }
+    }
+    $built = [pscustomobject]@{ Deny = $deny; DenyPlain = $denyPlain; Words = $words; WordsPlain = $wordsPlain; DenyLoose = $denyLoose.ToArray(); DenyPlainLoose = $denyPlainLoose.ToArray() }
     $script:scrubMatcherCache[$key] = $built
     return $built
 }
@@ -315,7 +464,9 @@ function Get-ScrubMatchers([string[]]$Denylist) {
 # $true when a whole denylist entry matches the full match, the cut text or
 # the text that would print. Text is '' when HoldsEntry is $true, and also when
 # one of them holds, as a whole word, one word of an entry that has two or more
-# words in that reading (HoldsEntry stays $false then).
+# words in that reading, or in a loose split of it (Get-ScrubMatchers: U+180E
+# kept, or read as a space) (HoldsEntry stays $false then). The loose matchers
+# count as the entry's matchers for HoldsEntry.
 # A denylist hit has Text '', MatchKey '' and HoldsEntry $false. -SkipPatterns
 # leaves the pattern rules out (the denylist still applies). The pattern rules
 # run line by line; the denylist runs over the whole text (Get-ScrubDenyText),
@@ -328,12 +479,16 @@ function Find-ScrubHits {
     $denyPlain = @()
     $words = @()
     $wordsPlain = @()
+    $denyLoose = @()
+    $denyPlainLoose = @()
     if ($Denylist) {
         $mx = Get-ScrubMatchers $Denylist
         $deny = $mx.Deny
         $denyPlain = $mx.DenyPlain
         $words = $mx.Words
         $wordsPlain = $mx.WordsPlain
+        $denyLoose = $mx.DenyLoose
+        $denyPlainLoose = $mx.DenyPlainLoose
     }
     $hits = New-Object System.Collections.Generic.List[object]
     for ($i = 0; $i -lt $Lines.Count; $i++) {
@@ -362,7 +517,7 @@ function Find-ScrubHits {
                     $holds = $false
                     $partial = $false
                     # A matched text that holds a denylist entry (a /home/<name> path), or
-                    # one word of an entry of two or more words, is not printed: the hit is reported
+                    # one word of an entry of two or more words (in a reading or a loose split), is not printed: the hit is reported
                     # without its text. The full match, the cut text and the text that would
                     # print are checked (a cut can end a longer word on a private one; the
                     # trimmed text, which ends at a space, tab, / or \, adds a hit only for an
@@ -380,6 +535,8 @@ function Find-ScrubHits {
                         for ($d = 0; $d -lt $deny.Count -and -not $holds; $d++) {
                             foreach ($p in $plains) { if ($denyPlain[$d].IsMatch($p)) { $holds = $true; break } }
                             if (-not $holds) { foreach ($f in $folds) { if ($deny[$d].IsMatch($f)) { $holds = $true; break } } }
+                            if (-not $holds -and $null -ne $denyPlainLoose[$d]) { foreach ($p in $plains) { if ($denyPlainLoose[$d].IsMatch($p)) { $holds = $true; break } } }
+                            if (-not $holds -and $null -ne $denyLoose[$d]) { foreach ($f in $folds) { if ($denyLoose[$d].IsMatch($f)) { $holds = $true; break } } }
                         }
                         if (-not $holds) {
                             foreach ($wr in $wordsPlain) { foreach ($p in $plains) { if ($wr.IsMatch($p)) { $partial = $true; break } }; if ($partial) { break } }
@@ -400,9 +557,22 @@ function Find-ScrubHits {
         # superscript two becomes 2), so it never replaces the plain reading.
         $joined = $Lines -join "`n"
         $texts = @($joined.Normalize([System.Text.NormalizationForm]::FormC), (Get-ScrubDenyText $joined))
+        # Q53: when U+180E or a selector sits right before a combining mark in
+        # the text or in its folded reading, two extra texts: the text with
+        # that run removed in NFC, and Get-ScrubBareFold of the text, so the
+        # letter and the mark compose; every matcher runs on them too. They
+        # only add hits (no line break is removed).
+        $extra = @()
+        if ($scrubLooseBeforeMark.IsMatch($joined) -or $scrubLooseBeforeMark.IsMatch($texts[1])) {
+            $extra = @($scrubLooseBeforeMark.Replace($joined, '').Normalize([System.Text.NormalizationForm]::FormC), (Get-ScrubBareFold $joined))
+        }
         for ($d = 0; $d -lt $deny.Count; $d++) {
             $lineSet = New-Object System.Collections.Generic.SortedSet[int]
-            foreach ($pair in @(@($texts[0], $denyPlain[$d]), @($texts[1], $deny[$d]))) {
+            # Q53: the loose matchers of the entry, on the same two texts.
+            $pairs = @(@($texts[0], $denyPlain[$d]), @($texts[1], $deny[$d]), @($texts[0], $denyPlainLoose[$d]), @($texts[1], $denyLoose[$d]))
+            if ($extra.Count -eq 2) { $pairs += @(@($extra[0], $denyPlain[$d]), @($extra[1], $deny[$d]), @($extra[0], $denyPlainLoose[$d]), @($extra[1], $denyLoose[$d])) }
+            foreach ($pair in $pairs) {
+                if ($null -eq $pair[1]) { continue }
                 foreach ($m in $pair[1].Matches($pair[0])) {
                     [void]$lineSet.Add(1 + ([regex]::Matches($pair[0].Substring(0, $m.Index), "`n")).Count)
                 }
@@ -2561,6 +2731,176 @@ Assert-ScrubQ51Print 'SG2 guard: a home-path hit followed by a space prints whol
 # a slash can match the trimmed text and not the whole match (panel round 2).
 $q51H = Get-ScrubQ51HomeHit ('see ' + $q51Hp + 'zzx' + [string][char]0x27 + 'y') @('home/')
 Assert-Coord 'SG2 a home-path hit whose trimmed text, and only that, holds an entry ending in a slash prints no text and holds the entry (panel round 2)' ($null -ne $q51H -and -not $q51H.Text -and $q51H.HoldsEntry) "hit found: $($null -ne $q51H); text length: $(if ($null -ne $q51H) { ([string]$q51H.Text).Length }); holds entry: $(if ($null -ne $q51H) { $q51H.HoldsEntry })"
+
+# ---- Q53: U+180E and the variation selectors in the denylist (F6), /home/. in prose (F8)
+Write-Host "(SG2) Q53: U+180E and variation selectors in an entry or a text; /home/. in prose"
+$q53M = [string][char]0x180E
+$q53V = [string][char]0xFE0F
+$q53V0 = [string][char]0xFE00
+# The fullwidth form of an ASCII word (each letter + U+FEE0).
+function New-ScrubQ53Fullwidth([string]$Word) {
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $Word.ToCharArray()) { [void]$sb.Append([char]([int]$ch + 0xFEE0)) }
+    return $sb.ToString()
+}
+$q53Fw1 = New-ScrubQ53Fullwidth 'zzone'
+$q53Fw2 = New-ScrubQ53Fullwidth 'zztwo'
+$q53FwN = New-ScrubQ53Fullwidth 'zzname'
+# Rows: label, entry, text, a denylist hit wanted. Red on bab8737 first, then
+# the guards (green on bab8737: the Q51 round-3 hits among them), then the
+# texts that must stay no hit.
+$q53Rows = @(
+    @('an entry with U+180E between its words is found written with a space', ('zzone' + $q53M + 'zztwo'), 'see zzone zztwo here', $true),
+    @('an entry with U+FE0F after its first word is found written without it', ('zzone' + $q53V + ' zztwo'), 'see zzone zztwo here', $true),
+    @('a one-word entry ending in U+FE0F is found written without it', ('zzabc' + $q53V), 'see zzabc here', $true),
+    @('an entry with U+FE0F and U+180E between its words is found written with a space', ('zzone' + $q53V + $q53M + 'zztwo'), 'see zzone zztwo here', $true),
+    @('an entry with U+180E inside a word is found written without it', ('zz' + $q53M + 'alpha'), 'see zzalpha here', $true),
+    @('a text with U+180E between the words of an entry hits', 'zzone zztwo', ('see zzone' + $q53M + 'zztwo here'), $true),
+    @('a text with U+180E inside an entry hits', 'zzalpha', ('see zz' + $q53M + 'alpha here'), $true),
+    @('a text with U+FE0F inside an entry hits', 'zzalpha', ('see zz' + $q53V + 'alpha here'), $true),
+    @('a text with U+FE00 inside an entry hits', 'zzalpha', ('see zz' + $q53V0 + 'alpha here'), $true),
+    @('a text with fullwidth words parted by U+180E hits', 'zzone zztwo', ('see ' + $q53Fw1 + $q53M + $q53Fw2 + ' here'), $true),
+    @('a text with U+FE0F before U+180E between the words hits', 'zzone zztwo', ('see zzone' + $q53V + $q53M + 'zztwo here'), $true),
+    @('a text with U+180E inside a word and between the words hits', 'zzone zztwo', ('see zz' + $q53M + 'one' + $q53M + 'zztwo here'), $true),
+    @('a text with U+FE0F after the space between the words hits', 'zzone zztwo', ('see zzone ' + $q53V + 'zztwo here'), $true),
+    @('guard: an entry with U+FE0F and U+180E between its words is found as written', ('zzone' + $q53V + $q53M + 'zztwo'), ('see zzone' + $q53V + $q53M + 'zztwo here'), $true),
+    @('guard: a fullwidth name then U+FE0F and a letter hits (Q51 round 3)', 'zzname', ('see ' + $q53FwN + $q53V + 'x'), $true),
+    @('guard: a fullwidth name then U+FE00 and a letter hits (Q51 round 3)', 'zzname', ('see ' + $q53FwN + $q53V0 + 'x'), $true),
+    @('guard: a letter and U+FE0F before a fullwidth name hits (Q51 round 3)', 'zzname', ('see x' + $q53V + $q53FwN), $true),
+    @('guard: a fullwidth name then U+FE0F and a digit hits (Q51 round 3)', 'zzname', ('see ' + $q53FwN + $q53V + '2'), $true),
+    @('guard: a name then U+FE0F and a letter hits', 'zzname', ('see zzname' + $q53V + 'x'), $true),
+    @('guard: words run together (CamelCase) are no hit', 'zzone zztwo', 'see zzoneZztwo here', $false),
+    @('guard: words glued together are no hit', 'zzone zztwo', 'see zzonezztwo here', $false),
+    @('guard: words parted only by U+FE0F are no hit', 'zzone zztwo', ('see zzone' + $q53V + 'zztwo here'), $false),
+    @('guard: a longer word is no hit', 'zzname', 'see zznamex here', $false)
+)
+foreach ($q53R in $q53Rows) {
+    $q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q53R[2]) -Denylist @($q53R[1]) | Where-Object { $_.Rule -like 'denylist entry*' })
+    Assert-Coord ('SG2 ' + $q53R[0]) (($q53H.Count -gt 0) -eq $q53R[3]) "denylist hits: $($q53H.Count)"
+}
+$q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @('see zz alpha here') -Denylist @(('zz' + $q53M + 'alpha')) | Where-Object { $_.Rule -like 'denylist entry*' })
+Assert-Coord 'SG2 an entry with U+180E inside a word is found written with a space there' ($q53H.Count -gt 0) "denylist hits: $($q53H.Count)"
+# No backtracking blow-up: a line with a long run of U+180E, U+FE0F and spaces
+# after the first word of an entry (25 U+180E took over a minute in the first
+# form of the loose matchers, measured) is scanned in under 5 seconds (it
+# takes milliseconds).
+# The last line is a positive control: the loose matchers ran (U+180E parts
+# its two words), so a faster run cannot be one that skipped them.
+$q53Sw = [System.Diagnostics.Stopwatch]::StartNew()
+$q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @(('zzone' + ($q53M * 2000) + 'x'), ('zz' + ($q53M * 2000) + 'onex'), ('zzone' + (($q53M + $q53V + ' ') * 700) + 'x'), ('zzone' + ($q53M * 2000) + 'zztwo')) -Denylist @('zzone zztwo', ('zz' + $q53M + 'one zztwo')))
+$q53Sw.Stop()
+$q53Hs = @($q53H | ForEach-Object { "$($_.Line):$($_.Rule)" })
+Assert-Coord 'SG2 two lines of 2000 U+180E, one of 700 U+180E, U+FE0F and space triples, after or inside a word of an entry, are scanned in under 5 seconds (no backtracking blow-up), and a fourth line of 2000 U+180E between the words hits' ($q53Sw.ElapsedMilliseconds -lt 5000 -and ($q53Hs -join ',') -ceq '4:denylist entry 1,4:denylist entry 2') "took $($q53Sw.ElapsedMilliseconds) ms; hits: $($q53Hs -join ', ')"
+# A letter, U+180E or a selector, then a combining mark: the two do not compose
+# across it (both are starters), so the name with the precomposed letter is
+# matched only once the character before the mark is removed (panel round 1).
+$q53Ac = [string][char]0x0301
+$q53Ea = [string][char]0x00E9
+foreach ($q53R in @(
+        @('an entry with U+FE0F between a letter and its combining mark is found with the precomposed letter', ('zzjose' + $q53V + $q53Ac), ('see zzjos' + $q53Ea + ' here')),
+        @('an entry with U+180E between a letter and its combining mark is found with the precomposed letter', ('zzjose' + $q53M + $q53Ac), ('see zzjos' + $q53Ea + ' here')),
+        @('a text with U+FE0F between a letter and its combining mark hits the entry with the precomposed letter', ('zzjos' + $q53Ea), ('see zzjose' + $q53V + $q53Ac + ' here')),
+        @('a text with U+180E between a letter and its combining mark hits the entry with the precomposed letter', ('zzjos' + $q53Ea), ('see zzjose' + $q53M + $q53Ac + ' here')),
+        @('a text with U+180E between a letter and its combining mark, written in fullwidth, hits', ('zzjos' + $q53Ea), ('see ' + (New-ScrubQ53Fullwidth 'zzjose') + $q53M + $q53Ac + ' here')))) {
+    $q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q53R[2]) -Denylist @($q53R[1]) | Where-Object { $_.Rule -like 'denylist entry*' })
+    Assert-Coord ('SG2 ' + $q53R[0]) ($q53H.Count -gt 0) "denylist hits: $($q53H.Count)"
+}
+# Panel round 2: an invisible character between the run and the mark (the
+# folded reading removes it, and only then do the run and the mark meet), and a
+# mark that only NFKC makes (a halfwidth voiced sound mark).
+$q53Zw = [string][char]0x200B
+$q53Shy = [string][char]0x00AD
+$q53Ga = [string][char]0x30AC
+$q53HwKa = [string][char]0xFF76
+$q53HwV = [string][char]0xFF9E
+foreach ($q53R in @(
+        @('a text with U+FE0F, a zero-width space, then a combining mark hits the entry with the precomposed letter (panel round 2)', ('zzjos' + $q53Ea), ('see zzjose' + $q53V + $q53Zw + $q53Ac + ' here')),
+        @('a text with U+180E, a soft hyphen, then a combining mark hits the entry with the precomposed letter (panel round 2)', ('zzjos' + $q53Ea), ('see zzjose' + $q53M + $q53Shy + $q53Ac + ' here')),
+        @('an entry with U+FE0F, a zero-width space, then a combining mark is found with the precomposed letter (panel round 2)', ('zzjose' + $q53V + $q53Zw + $q53Ac), ('see zzjos' + $q53Ea + ' here')),
+        @('an entry with U+180E, a zero-width space, then a combining mark is found with the precomposed letter (panel round 2)', ('zzjose' + $q53M + $q53Zw + $q53Ac), ('see zzjos' + $q53Ea + ' here')),
+        @('a text with a halfwidth kana, U+180E and a halfwidth voiced mark hits the entry with the composed kana (panel round 2)', ('zz' + $q53Ga), ('see zz' + $q53HwKa + $q53M + $q53HwV + ' here')),
+        @('an entry with a halfwidth kana, U+FE0F and a halfwidth voiced mark is found with the composed kana (panel round 2)', ('zz' + $q53HwKa + $q53V + $q53HwV), ('see zz' + $q53Ga + ' here')))) {
+    $q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q53R[2]) -Denylist @($q53R[1]) | Where-Object { $_.Rule -like 'denylist entry*' })
+    Assert-Coord ('SG2 ' + $q53R[0]) ($q53H.Count -gt 0) "denylist hits: $($q53H.Count)"
+}
+# A loose hit wrapped across lines is reported on the line it starts on.
+$q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @('x', ('see zzone' + $q53M), ('zz' + $q53M + 'two here')) -Denylist @('zzone zztwo') | ForEach-Object { "$($_.Line):$($_.Rule):$($_.Text)" })
+Assert-Coord 'SG2 an entry whose words U+180E and a line break part, with U+180E inside the second word, hits on the line it starts on and prints no text (panel round 2)' (($q53H -join ',') -ceq '2:denylist entry 1:') "hits: $($q53H -join ', ')"
+# Panel round 2, cost: each of these took seconds or grew without bound in the
+# round-1 form (measured): a long run of U+180E with a denylist set (the scan
+# for a run before a mark), a long run of dots after /home/ (the F8
+# lookahead, with no denylist), and an entry with several U+180E beside dots
+# inside a word against a run of dots (the gaps, exponential). Each row also
+# checks a positive control.
+$q53Sw = [System.Diagnostics.Stopwatch]::StartNew()
+$q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @(('see ' + ($q53M * 20000) + ' end'), ('zzone' + $q53M + 'zztwo')) -Denylist @('zzone zztwo') | ForEach-Object { "$($_.Line):$($_.Rule)" })
+$q53Sw.Stop()
+Assert-Coord 'SG2 a line of 20000 U+180E is scanned for the denylist in under 5 seconds, and the next line hits (panel round 2)' ($q53Sw.ElapsedMilliseconds -lt 5000 -and ($q53H -join ',') -ceq '2:denylist entry 1') "took $($q53Sw.ElapsedMilliseconds) ms; hits: $($q53H -join ', ')"
+$q53Sw = [System.Diagnostics.Stopwatch]::StartNew()
+$q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @(('see ' + $q51Hp + ('.' * 20000) + 'x')) | Where-Object { $_.Rule -like $q51HomeRule })
+$q53Sw.Stop()
+Assert-Coord 'SG2 /home/ and 20000 dots then a letter is scanned in under 5 seconds and is a home-path hit (panel round 2)' ($q53Sw.ElapsedMilliseconds -lt 5000 -and $q53H.Count -eq 1) "took $($q53Sw.ElapsedMilliseconds) ms; home-path hits: $($q53H.Count)"
+$q53Sw = [System.Diagnostics.Stopwatch]::StartNew()
+$q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @(('zz' + ('.' * 30) + 'x'), ('zz' + ('.' * 10) + 'end')) -Denylist @(('zz' + (($q53M + '.') * 10) + $q53M + 'end')) | ForEach-Object { "$($_.Line):$($_.Rule)" })
+$q53Sw.Stop()
+Assert-Coord 'SG2 an entry with ten U+180E beside dots inside a word, against 30 dots, is scanned in under 5 seconds, and the entry written with dots hits (panel round 2)' ($q53Sw.ElapsedMilliseconds -lt 5000 -and ($q53H -join ',') -ceq '2:denylist entry 1') "took $($q53Sw.ElapsedMilliseconds) ms; hits: $($q53H -join ', ')"
+# Panel round 3: words made only of separator characters (a standalone dot)
+# shared the separator runs of the loose matcher, and a near miss tried every
+# way to share them out (12 such words against 24 dots each followed by
+# U+180E: 8.6 seconds in the round-2 form, 0 ms on bab8737, measured; Codex).
+# The positive control is the entry's letter words.
+$q53Sw = [System.Diagnostics.Stopwatch]::StartNew()
+$q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @(('zza ' + (('.' + $q53M) * 24) + ' x'), 'zza zzb') -Denylist @(('zza' + (' .' * 12) + ' zzb')) | ForEach-Object { "$($_.Line):$($_.Rule)" })
+$q53Sw.Stop()
+Assert-Coord 'SG2 an entry with twelve standalone dots between its words, against dots and U+180E, is scanned in under 5 seconds, and its letter words hit (panel round 3)' ($q53Sw.ElapsedMilliseconds -lt 5000 -and ($q53H -join ',') -ceq '2:denylist entry 1') "took $($q53Sw.ElapsedMilliseconds) ms; hits: $($q53H -join ', ')"
+# Panel round 4: U+180E beside separators at a word's edge made one gap per
+# U+180E there, with literal separators between the gaps (ten of them against
+# 30 dots: 14.5 seconds, 64 ms on bab8737, measured by the reviewer). The
+# positive control is the entry written with its separators.
+$q53Sw = [System.Diagnostics.Stopwatch]::StartNew()
+$q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @(('zzname' + ('.' * 30) + '_x'), ('zzname' + ('.' * 10) + '_')) -Denylist @(('zzname' + (($q53M + '.') * 10) + $q53M + '_')) | ForEach-Object { "$($_.Line):$($_.Rule)" })
+$q53Sw.Stop()
+Assert-Coord 'SG2 an entry ending in ten U+180E beside dots and an underscore, against 30 dots, is scanned in under 5 seconds, and the entry written with its dots hits (panel round 4)' ($q53Sw.ElapsedMilliseconds -lt 5000 -and ($q53H -join ',') -ceq '2:denylist entry 1') "took $($q53Sw.ElapsedMilliseconds) ms; hits: $($q53H -join ', ')"
+# Panel round 3: a separator at a word's edge stays as written (the gap
+# collapse is for a word's inside; at the edge the U+180E is removed), so the
+# name next to that separator still hits.
+foreach ($q53R in @(
+        @('an entry ending in U+180E and an underscore is found written with the underscore (panel round 3)', ('zzname' + $q53M + '_'), 'see zzname_ here'),
+        @('an entry starting with an underscore and U+180E is found written with the underscore (panel round 3)', ('_' + $q53M + 'zzname'), 'see _zzname here'))) {
+    $q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q53R[2]) -Denylist @($q53R[1]) | Where-Object { $_.Rule -like 'denylist entry*' })
+    Assert-Coord ('SG2 ' + $q53R[0]) ($q53H.Count -gt 0) "denylist hits: $($q53H.Count)"
+}
+# A home path holding such an entry, or one word of it, prints no text;
+# HoldsEntry is set for a whole entry only.
+function Assert-ScrubQ53Holds([string]$Label, [string]$Line, [string[]]$Denylist, [bool]$Want) {
+    $h = Get-ScrubQ51HomeHit $Line $Denylist
+    Assert-Coord $Label ($null -ne $h -and -not $h.Text -and $h.HoldsEntry -eq $Want) "hit found: $($null -ne $h); text length: $(if ($null -ne $h) { ([string]$h.Text).Length }); holds entry: $(if ($null -ne $h) { $h.HoldsEntry })"
+}
+Assert-ScrubQ51Print 'SG2 a home-path hit holding a one-word entry that ends in U+FE0F prints no text' ('see ' + $q51Hp + 'zzabc x') '' @('zzabc') @(('zzabc' + $q53V))
+Assert-ScrubQ53Holds 'SG2 a home-path hit holding a one-word entry that ends in U+FE0F holds the entry' ('see ' + $q51Hp + 'zzabc x') @(('zzabc' + $q53V)) $true
+Assert-ScrubQ53Holds 'SG2 a home-path hit holding a fullwidth one-word entry that ends in U+FE0F, in ASCII, prints no text and holds the entry (the folded loose matcher)' ('see ' + $q51Hp + 'zzabc x') @(((New-ScrubQ53Fullwidth 'zzabc') + $q53V)) $true
+Assert-ScrubQ51Print 'SG2 a home-path hit holding one word of an entry with U+180E between its words prints no text' ('see ' + $q51Hp + 'zzone x') '' @('zzone') @(('zzone' + $q53M + 'zztwo'))
+Assert-ScrubQ53Holds 'SG2 a home-path hit holding one word of an entry with U+180E between its words does not hold the entry' ('see ' + $q51Hp + 'zzone x') @(('zzone' + $q53M + 'zztwo')) $false
+Assert-ScrubQ53Holds 'SG2 a home-path hit holding the first word of an entry whose first word holds U+180E, written without it, prints no text and does not hold the entry (panel round 1)' ('see ' + $q51Hp + 'zzone x') @(('zz' + $q53M + 'one zztwo')) $false
+# F8: a dots-only name, then any run of prose punctuation and dots, then the
+# end of the line or white space, is no home-path hit; anything that may be a
+# path still is (a name right after the punctuation included: panel round 1).
+foreach ($q53P in @(
+        @('SG2 /home/. at the end of a sentence is no home-path hit', ('files live in ' + $q51Hp + '.'), $false),
+        @('SG2 /home/. before a space is no home-path hit', ('files in ' + $q51Hp + '. Next'), $false),
+        @('SG2 /home/.. before a closing parenthesis is no home-path hit', ('(see ' + $q51Hp + '..)'), $false),
+        @('SG2 /Users/. before a comma is no home-path hit', ('in /Use' + 'rs/., then'), $false),
+        @('SG2 guard: /home/./<name> is a home-path hit', ('see ' + $q51Hp + './zzname'), $true),
+        @('SG2 guard: /home/.<name> is a home-path hit', ('see ' + $q51Hp + '.zzhidden'), $true),
+        @('SG2 guard: /home/<name>. is a home-path hit', ('see ' + $q51Hp + 'zzpub.'), $true),
+        @('SG2 guard: /home/. before an accented letter is a home-path hit', ('see ' + $q51Hp + '.' + $q51E + 'x'), $true),
+        @('SG2 guard: /home/.\<name> is a home-path hit', ('see ' + $q51Hp + '.\zzname'), $true),
+        @('SG2 guard: /home/., and a name with no space is a home-path hit (panel round 1)', ('see ' + $q51Hp + '.,zzname'), $true),
+        @('SG2 guard: /home/.) and a name with no space is a home-path hit (panel round 1)', ('see ' + $q51Hp + '.)zzname'), $true),
+        @('SG2 /home/..). at the end of a sentence is no home-path hit (panel round 1)', ('(in ' + $q51Hp + '..).'), $false))) {
+    $q53H = @(Find-ScrubHits -Path 'n.txt' -Lines @($q53P[1]) | Where-Object { $_.Rule -like $q51HomeRule })
+    Assert-Coord $q53P[0] (($q53H.Count -gt 0) -eq $q53P[2]) "home-path hits: $($q53H.Count)"
+}
 # the real range, when the run names one
 if ($History) {
     # Allowed identities: exact "Name <email>" author, committer and tagger
