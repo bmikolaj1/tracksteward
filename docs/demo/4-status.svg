@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="848" height="296" viewBox="0 0 848 296">
+<rect width="100%" height="100%" rx="8" fill="#1e1f24"/>
+<text x="12" y="20" fill="#8b8f99" font-family="Consolas, Menlo, monospace" font-size="12">The status board</text>
+<text x="12" y="44" fill="#7fd1b9" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">&gt; coord-status.ps1</text>
+<text x="12" y="62" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">STATUS BOARD 2026-11-23 12:52 (ledger &lt;demo&gt;\acme-notes\launch\.claude\coordination\2026-11-23.md; not</text>
+<text x="12" y="80" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  verified)</text>
+<text x="12" y="98" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">RUNNING (2)</text>
+<text x="12" y="116" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  search                             RUNNING 12:52; ACK received  sonnet high  no PR  L42</text>
+<text x="12" y="134" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  export                             PR-OPEN 12:32; final head reported  sonnet high  PR #42  L43</text>
+<text x="12" y="152" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">WAITING (1)</text>
+<text x="12" y="170" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  F1 export: src/search.txt does not trim the query, so an exp...   PENDING since 12:52  L81</text>
+<text x="12" y="188" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">QUEUED (1)</text>
+<text x="12" y="206" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  tidy                               QUEUED 11:22; after #42 merges  haiku low  no PR  L44</text>
+<text x="12" y="224" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">BLOCKED (0)</text>
+<text x="12" y="242" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">DONE today (0)</text>
+<text x="12" y="260" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">STATUS 2026-11-23 12:52: 2 running, 1 waiting, 1 queued (0 gates open, 0 unknown), 0 blocked, 0 done; 0</text>
+<text x="12" y="278" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  rows unclassified; 1 findings pending</text>
+</svg>

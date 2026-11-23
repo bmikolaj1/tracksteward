@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="188" viewBox="0 0 680 188">
+<rect width="100%" height="100%" rx="8" fill="#1e1f24"/>
+<text x="12" y="20" fill="#8b8f99" font-family="Consolas, Menlo, monospace" font-size="12">A PR that left its scope</text>
+<text x="12" y="44" fill="#7fd1b9" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">&gt; slot-check.ps1 -Pr 42</text>
+<text x="12" y="62" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">PR #42 OPEN base=main head=claude/export @ &lt;sha40 of #42&gt; (origin: &lt;sha40 of #42&gt;)</text>
+<text x="12" y="80" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">scope (ledger row 'export'): src/export*, docs/**</text>
+<text x="12" y="98" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">files: 2 changed, 1 out of scope</text>
+<text x="12" y="116" fill="#f0a35e" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  OUT: README.md</text>
+<text x="12" y="134" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">checks: 2 passed, 0 pending, 0 failing</text>
+<text x="12" y="152" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">mergeable: MERGEABLE; mergeStateStatus: CLEAN</text>
+<text x="12" y="170" fill="#f0a35e" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">SLOT-CHECK #42 @&lt;sha40 of #42&gt;: HOLD - 1 file(s) out of scope: README.md</text>
+</svg>

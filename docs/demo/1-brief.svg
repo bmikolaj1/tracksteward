@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="848" height="206" viewBox="0 0 848 206">
+<rect width="100%" height="100%" rx="8" fill="#1e1f24"/>
+<text x="12" y="20" fill="#8b8f99" font-family="Consolas, Menlo, monospace" font-size="12">Brief a track</text>
+<text x="12" y="44" fill="#7fd1b9" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">&gt; coord-brief.ps1 -Track search</text>
+<text x="12" y="62" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">COORD-BRIEF WROTE</text>
+<text x="12" y="80" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  &lt;demo&gt;\acme-notes\launch\.claude\coordination\briefs\2026-11-23-launch-search-c8decea3.md</text>
+<text x="12" y="98" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">COORD-BRIEF: fill 11 slot(s) by hand: {#PR, one line each, or none}, {HH:MM}, {its merge command},</text>
+<text x="12" y="116" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  {location}, {method: squash, merge or rebase, as this repo does}, {old brief path, and what was</text>
+<text x="12" y="134" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  carried from the previous day - after midnight only; otherwise delete this line}, {target repo},</text>
+<text x="12" y="152" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  {their words}, {this repo's current gotchas: how to run the suites, CI quirks, commit conventions},</text>
+<text x="12" y="170" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  {which session}, {who goes first and why}; delete the SUPERSEDES line and the CROSS-REPO block unless</text>
+<text x="12" y="188" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">  they apply; then run with -Check and send its BRIEF: line</text>
+</svg>

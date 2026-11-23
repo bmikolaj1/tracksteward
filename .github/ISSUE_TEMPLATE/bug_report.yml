@@ -32,7 +32,7 @@ body:
     attributes:
       label: tracksteward version
       description: The `version` in `.claude-plugin/plugin.json`, or a commit of this repo.
-      placeholder: 0.2.2
+      placeholder: 0.2.11
     validations:
       required: true
   - type: textarea

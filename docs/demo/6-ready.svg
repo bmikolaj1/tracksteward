@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="170" viewBox="0 0 680 170">
+<rect width="100%" height="100%" rx="8" fill="#1e1f24"/>
+<text x="12" y="20" fill="#8b8f99" font-family="Consolas, Menlo, monospace" font-size="12">A PR ready for its merge slot</text>
+<text x="12" y="44" fill="#7fd1b9" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">&gt; slot-check.ps1 -Pr 41</text>
+<text x="12" y="62" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">PR #41 OPEN base=main head=claude/search @ &lt;sha40 of #41&gt; (origin: &lt;sha40 of #41&gt;)</text>
+<text x="12" y="80" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">scope (ledger row 'search'): src/search*</text>
+<text x="12" y="98" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">files: 1 changed, 0 out of scope</text>
+<text x="12" y="116" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">checks: 2 passed, 0 pending, 0 failing</text>
+<text x="12" y="134" fill="#d8dae0" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">mergeable: MERGEABLE; mergeStateStatus: CLEAN</text>
+<text x="12" y="152" fill="#8fd18f" font-family="Consolas, Menlo, monospace" font-size="13" xml:space="preserve">SLOT-CHECK #41 @&lt;sha40 of #41&gt;: READY - 1 file(s) in scope; 2 check(s) passed</text>
+</svg>

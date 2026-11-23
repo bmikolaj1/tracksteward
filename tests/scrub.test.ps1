@@ -52,7 +52,9 @@
 #     as the platform compares paths); every other entry (a mistyped path, a
 #     plain folder inside a repo) is reported UNCHECKED by its position in the
 #     list, so -Strict fails on it. Unset (or no listed path is a repo top level):
-#     the row is UNCHECKED, not an error.
+#     the row is UNCHECKED, not an error. In a -History run only, a hit listed in
+#     $scrubKnownHistoryHits (one blob version, line and token, already public
+#     and accepted by the maintainer) is let through; the shipped files never.
 # This file is scanned too, but for the denylist and the commit-sha rule only:
 # the pattern rules are skipped for it, because it holds their patterns.
 # Each hit prints file:line and the rule; for a pattern rule also the matched
@@ -109,7 +111,8 @@
 #      untracked and ignored files, UTF-16 and UTF-32, NUL files, the index
 #      version and a failed index read, skipped entries (submodule, skip-worktree,
 #      symlinks), an unreadable file, the accounting, the skipped self file, the
-#      commit-sha rule with good, mistyped, blank and unset repo entries
+#      commit-sha rule with good, mistyped, blank and unset repo entries, and
+#      the known-history-hit check (one file label, line and token only)
 # SG5  the shipped files: the scan covers them, one row per rule: no hit
 # SG6  the history scan on synthetic repos (a blob added and removed, modified, a
 #      type change, a merge's message and a blob only a merge brings in, bad, empty
@@ -1092,7 +1095,7 @@ function Add-ScrubRepoShaHits {
         }
         if (-not $found) { continue }
         foreach ($loc in $Res.HexTokens[$tok]) {
-            $Res.Hits.Add([pscustomobject]@{ File = $loc.File; Line = $loc.Line; Rule = $hexRuleName; Text = ''; MatchKey = ''; HoldsEntry = $false })
+            $Res.Hits.Add([pscustomobject]@{ File = $loc.File; Line = $loc.Line; Rule = $hexRuleName; Text = ''; MatchKey = ''; HoldsEntry = $false; Token = [string]$tok })
         }
     }
     return $usable.Count
@@ -1395,6 +1398,33 @@ $placeholderKeys = @($placeholderIds | ForEach-Object { Get-ScrubMatchKey $_ })
 # explains it.
 function Test-ScrubPlaceholderHit($Hit) {
     return [bool](($Hit.Rule -ceq 'desktop session id') -and -not $Hit.HoldsEntry -and ($placeholderKeys -ccontains [string]$Hit.MatchKey) -and (([string]$Hit.File -clike 'scripts/coord-handoff.ps1 (blob *') -or ([string]$Hit.File -ceq 'commit message 2c3b5fc')))
+}
+
+# Known history hits (Q55): commit-sha hits already published in this repo's
+# history, accepted by the maintainer rather than rewritten again. Each entry is
+# one blob version and line, and the SHA-256 of the token (lower case), so the
+# token itself is not written here. Only the SG6 history check (a -History run)
+# lets them through; the SG5 check of the shipped files never does, and any
+# other token, line or blob is still a hit.
+$scrubKnownHistoryHits = @(
+    # docs/plans/2026-10-30-tracksteward-0.2.1.md as 0.2.1 added it; the tip
+    # dropped the token in 0.2.3.
+    [pscustomobject]@{ File = 'docs/plans/2026-10-30-tracksteward-0.2.1.md (blob 269eba7)'; Line = 3; TokenSha256 = '91093582af299481e2bd602e71dc04444c138e1d24de94e0885d76e80749f365' }
+)
+function Get-ScrubTokenSha256([string]$Token) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $b = $sha.ComputeHash([System.Text.Encoding]::ASCII.GetBytes($Token.ToLowerInvariant())) } finally { $sha.Dispose() }
+    return (($b | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+function Test-ScrubKnownHistoryHit($Hit, [object[]]$Known = $scrubKnownHistoryHits) {
+    if ([string]$Hit.Rule -cne $hexRuleName -or -not [string]$Hit.Token) { return $false }
+    $h = Get-ScrubTokenSha256 ([string]$Hit.Token)
+    foreach ($k in $Known) {
+        # Ordinal: -ceq compares by culture, which ignores a soft hyphen, so a
+        # path with one inside it read as the same file (Codex, Q55 round 1).
+        if ([string]::Equals([string]$Hit.File, [string]$k.File, [System.StringComparison]::Ordinal) -and ([int]$Hit.Line -eq [int]$k.Line) -and [string]::Equals($h, [string]$k.TokenSha256, [System.StringComparison]::Ordinal)) { return $true }
+    }
+    return $false
 }
 
 # ---- SG1: each rule against synthetic lines -----------------------------------
@@ -1883,6 +1913,27 @@ Assert-Coord 'SG4 the repo rule with a good and a mistyped entry: RAN, 2 listed,
 $res = Invoke-ScrubScan -Repo $shipRepo
 $rr = Invoke-ScrubRepoRule $res $noRepo
 Assert-Coord 'SG4 the repo rule with only a mistyped entry: UNCHECKED, 1 listed, 0 usable, entry 1 unchecked' ($rr.Verdict -ceq 'UNCHECKED' -and $rr.Listed -eq 1 -and $rr.Usable -eq 0 -and (@($rr.Unchecked) -join ',') -ceq '1') "verdict=$($rr.Verdict) listed=$($rr.Listed) usable=$($rr.Usable) unchecked=$(@($rr.Unchecked) -join ',')"
+# Q55: a known history hit is one file label, one line and one token (by its
+# SHA-256); every other token of a listed repo stays a hit.
+$res = Invoke-ScrubScan -Repo $shipRepo
+[void](Add-ScrubRepoShaHits $res @($privRepo))
+$kHits = @(Get-ScrubHitsOf $res 'ref.txt' $hexRuleName | Sort-Object Line)
+$kSeven = Get-ScrubTokenSha256 $privSha.Substring(0, 7)
+$kList = @([pscustomobject]@{ File = 'ref.txt'; Line = 3; TokenSha256 = $kSeven })
+$kLet = @($kHits | Where-Object { Test-ScrubKnownHistoryHit $_ $kList })
+Assert-Coord 'SG4 Q55 a known history hit lets through exactly its own line and token: the same commit as 10 and 40 digits on lines 1 and 2 stays a hit' ($kHits.Count -eq 3 -and $kLet.Count -eq 1 -and $kLet[0].Line -eq 3) "hits=$($kHits.Count) let=$(($kLet | ForEach-Object { $_.Line }) -join ',')"
+$kOther = @([pscustomobject]@{ File = 'ref.txt'; Line = 3; TokenSha256 = (Get-ScrubTokenSha256 'abcdef1') })
+Assert-Coord 'SG4 Q55 another token at the known file and line is still a hit (any other listed sha fails)' (@($kHits | Where-Object { Test-ScrubKnownHistoryHit $_ $kOther }).Count -eq 0)
+$kWrongLine = @([pscustomobject]@{ File = 'ref.txt'; Line = 2; TokenSha256 = $kSeven })
+$kWrongFile = @([pscustomobject]@{ File = 'ref.txt (blob 1234567)'; Line = 3; TokenSha256 = $kSeven })
+Assert-Coord 'SG4 Q55 the known token on another line, or in another file label, is still a hit' (@($kHits | Where-Object { (Test-ScrubKnownHistoryHit $_ $kWrongLine) -or (Test-ScrubKnownHistoryHit $_ $kWrongFile) }).Count -eq 0)
+$kShy = @([pscustomobject]@{ File = ('re' + [string][char]0x00AD + 'f.txt'); Line = 3; TokenSha256 = $kSeven })
+Assert-Coord 'SG4 Q55 a file label that differs only by a soft hyphen is another file (compared ordinal)' (@($kHits | Where-Object { Test-ScrubKnownHistoryHit $_ $kShy }).Count -eq 0)
+$kSession = [pscustomobject]@{ File = 'ref.txt'; Line = 3; Rule = 'desktop session id'; Token = $privSha.Substring(0, 7) }
+$kNoToken = [pscustomobject]@{ File = 'ref.txt'; Line = 3; Rule = $hexRuleName }
+Assert-Coord 'SG4 Q55 a hit of another rule, or one with no token, is never a known history hit' (-not (Test-ScrubKnownHistoryHit $kSession $kList) -and -not (Test-ScrubKnownHistoryHit $kNoToken $kList))
+Assert-Coord 'SG4 Q55 the token hash ignores letter case' ((Get-ScrubTokenSha256 'ABCDEF1') -ceq (Get-ScrubTokenSha256 'abcdef1'))
+Assert-Coord 'SG4 Q55 every known history hit names one blob version, a line and a 64-digit hash (no token written)' ($scrubKnownHistoryHits.Count -ge 1 -and @($scrubKnownHistoryHits | Where-Object { -not (([string]$_.File -cmatch ' \(blob [0-9a-f]{7}\)$') -and ([int]$_.Line -gt 0) -and ([string]$_.TokenSha256 -cmatch '^[0-9a-f]{64}$')) }).Count -eq 0)
 
 # ---- SG5: the shipped files ----------------------------------------------------
 Write-Host "(SG5) the files git would ship"
@@ -2935,7 +2986,9 @@ if ($History) {
         else { Write-ScrubDenylistAbsent 'SG6 history denylist rows' }
         $histRepoRule = Invoke-ScrubRepoRule $real ([string]$env:TRACKSTEWARD_SCRUB_REPOS)
         if ($histRepoRule.Verdict -ceq 'RAN') {
-            $hs = @($real.Hits | Where-Object { $_.Rule -ceq $hexRuleName } | ForEach-Object { Format-ScrubHit $_ })
+            $known = @($real.Hits | Where-Object { Test-ScrubKnownHistoryHit $_ })
+            if ($known.Count -gt 0) { Write-Host "(SG6) $($known.Count) known history hit(s) let through (accepted, see `$scrubKnownHistoryHits)" }
+            $hs = @($real.Hits | Where-Object { $_.Rule -ceq $hexRuleName -and -not (Test-ScrubKnownHistoryHit $_) } | ForEach-Object { Format-ScrubHit $_ })
             Assert-Coord "SG6 no hex token that is a commit of the $($histRepoRule.Usable) listed repo(s) in the history" ($hs.Count -eq 0) ($hs -join "`n")
         }
         else { Write-ScrubUnchecked 'SG6 history commit-sha rows' 'TRACKSTEWARD_SCRUB_REPOS is unset, or none of its entries is the top level of a git repo' }
