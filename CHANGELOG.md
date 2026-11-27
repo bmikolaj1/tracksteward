@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Search before a new helper** (`templates/brief-template.md`, `skills/coordinate/SKILL.md`). The brief now
+  tells every track that, before it writes a new helper, its researcher (or the track itself, if it uses none)
+  searches the repo for an existing one and reuses it if it does the job. `coord-brief.ps1 -Check` does not
+  require the sentence: it starts with no label.
+
 ## 0.2.11 - 2026-11-23
 
 The release review before the public announcement (Q55), and the Q53 scrub fixes below it.
