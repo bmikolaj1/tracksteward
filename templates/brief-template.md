@@ -52,6 +52,9 @@ your merge, send me the merge commit sha.
 CROSS-REPO (only if you edit a second repo): in {target repo}, work in a worktree at {location}
 and merge with {its merge command}, in a slot like any other merge.
 
+Before you write a new helper, your researcher (or you, if you use none) searches the repo for an
+existing one; if one does the job, reuse it instead of writing another.
+
 Never start side work (new sessions, tickets, background tasks) and never silently drop something
 you noticed: anything outside your task comes to me as a FINDING (shape below). The user decides
 what it becomes, and I tell you the outcome. A finding of severity "live exposure" (a security

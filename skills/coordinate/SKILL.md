@@ -366,6 +366,9 @@ still sent in full in a message, never as a file.
 - **Two things every brief carries:** what landed on main *after* the track's task was written
   (a plan written in the morning is stale by noon), and each sibling's session name and owned
   files, so tracks that share a boundary can talk directly.
+- **Search before a new helper.** The template tells every track: "Before you write a new helper,
+  your researcher (or you, if you use none) searches the repo for an existing one; if one does the
+  job, reuse it instead of writing another."
 - **Assert only what you verified** about shared state (shas, PRs, siblings). Facts the track owns
   (its model, its plan, its approach) are asked for, not stated.
 - **Every relay carries the current sha and state** ("#12 merged as 1a2b3c4; main is now
