@@ -7,6 +7,10 @@ ledger, scoped briefs, a findings protocol, and one verified merge at a time.
 > for 10 coordination days: 57 merges verified, 127 findings with recorded outcomes, up to 16 tracks in
 > a day. The scripts and the scope guard came to this plugin in 0.2.0, after those days.
 >
+> **Support mode:** since its announcement, the project is in support mode. No new features are
+> planned, and updates come only when they make sense. Feedback is welcome through
+> [issues](https://github.com/bmikolaj1/tracksteward/issues).
+>
 > **Platform:** the scripts and the scope guard are PowerShell, verified on Windows 11 with Windows
 > PowerShell 5.1 only. macOS, Linux and PowerShell 7 are not verified, and the scope guard is
 > Windows-only (see Requirements).
